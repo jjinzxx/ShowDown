@@ -8,6 +8,7 @@
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "DrawDebugHelpers.h"
 #include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
 #include "Kismet/GameplayStatics.h"
@@ -185,11 +186,19 @@ ASDSelfShotGunActor::ASDSelfShotGunActor()
 	RecoveryHitEffectSettings.BloomThreshold = 0.3f;
 }
 
+#if WITH_EDITOR
+bool ASDSelfShotGunActor::ShouldTickIfViewportsOnly() const
+{
+	return bEnableRevolverPlacementDevMode || bRevolverPlacementDevPreviewActive;
+}
+#endif
+
 void ASDSelfShotGunActor::BeginPlay()
 {
 	Super::BeginPlay();
 
 	RestActorTransform = GetActorTransform();
+	bHasCapturedRestActorTransform = true;
 	OriginalCollisionEnabled = GunMesh->GetCollisionEnabled();
 	TriggerRestRotation = TriggerPivot->GetRelativeRotation();
 	HammerRestRotation = HammerPivot->GetRelativeRotation();
@@ -240,6 +249,11 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 
 	if (AnimState == EGunAnimState::Idle)
 	{
+		if (UpdateRevolverPlacementDevPreview())
+		{
+			return;
+		}
+
 		if (bPreviewFirstPersonPose)
 		{
 			SetActorTransform(GetFirstPersonGunTransform());
@@ -334,6 +348,7 @@ void ASDSelfShotGunActor::UseGun()
 	ForcedShotCamera = nullptr;
 	bHasForcedShotSourceLocation = false;
 	bHasForcedShotAimLocation = false;
+	bHasForcedShotRotationOffset = false;
 	bCurrentShotTargetsLocalPlayer = true;
 	StartGunUse();
 }
@@ -347,6 +362,7 @@ void ASDSelfShotGunActor::UseGunWithForcedResult(bool bLiveRound)
 	ForcedShotCamera = nullptr;
 	bHasForcedShotSourceLocation = false;
 	bHasForcedShotAimLocation = false;
+	bHasForcedShotRotationOffset = false;
 	bCurrentShotTargetsLocalPlayer = true;
 	StartGunUse();
 }
@@ -360,6 +376,7 @@ void ASDSelfShotGunActor::UseGunWithForcedResultAtTarget(bool bLiveRound, AActor
 	ForcedShotCamera = nullptr;
 	bHasForcedShotSourceLocation = false;
 	bHasForcedShotAimLocation = false;
+	bHasForcedShotRotationOffset = false;
 	bCurrentShotTargetsLocalPlayer = ShouldTreatTargetAsLocalPlayer(TargetActor);
 	StartGunUse();
 }
@@ -374,6 +391,7 @@ void ASDSelfShotGunActor::UseGunWithForcedResultAtTargetFromLocation(bool bLiveR
 	ForcedShotCamera = nullptr;
 	bHasForcedShotSourceLocation = true;
 	bHasForcedShotAimLocation = false;
+	bHasForcedShotRotationOffset = false;
 	bCurrentShotTargetsLocalPlayer = ShouldTreatTargetAsLocalPlayer(TargetActor);
 	StartGunUse();
 }
@@ -392,6 +410,7 @@ void ASDSelfShotGunActor::UseGunWithForcedResultAtTargetFromLocationAndCamera(
 	ForcedShotCamera = ShotCamera;
 	bHasForcedShotSourceLocation = true;
 	bHasForcedShotAimLocation = false;
+	bHasForcedShotRotationOffset = false;
 	bCurrentShotTargetsLocalPlayer = ShouldTreatTargetAsLocalPlayer(TargetActor);
 	StartGunUse();
 }
@@ -412,6 +431,30 @@ void ASDSelfShotGunActor::UseGunWithForcedResultAtTargetFromLocationAimAndCamera
 	ForcedShotCamera = ShotCamera;
 	bHasForcedShotSourceLocation = true;
 	bHasForcedShotAimLocation = true;
+	bHasForcedShotRotationOffset = false;
+	bCurrentShotTargetsLocalPlayer = ShouldTreatTargetAsLocalPlayer(TargetActor);
+	StartGunUse();
+}
+
+void ASDSelfShotGunActor::UseGunWithForcedResultAtTargetFromLocationAimRotationAndCamera(
+	bool bLiveRound,
+	AActor* TargetActor,
+	FVector SourceLocation,
+	FVector AimLocation,
+	FRotator RotationOffset,
+	ACameraActor* ShotCamera)
+{
+	ShotResultMode = bLiveRound
+		? ESDSelfShotRoundMode::AlwaysLive
+		: ESDSelfShotRoundMode::AlwaysEmpty;
+	ForcedShotTargetActor = TargetActor;
+	ForcedShotSourceLocation = SourceLocation;
+	ForcedShotAimLocation = AimLocation;
+	ForcedShotRotationOffset = RotationOffset;
+	ForcedShotCamera = ShotCamera;
+	bHasForcedShotSourceLocation = true;
+	bHasForcedShotAimLocation = true;
+	bHasForcedShotRotationOffset = true;
 	bCurrentShotTargetsLocalPlayer = ShouldTreatTargetAsLocalPlayer(TargetActor);
 	StartGunUse();
 }
@@ -441,7 +484,8 @@ float ASDSelfShotGunActor::GetShotResolveDelay() const
 bool ASDSelfShotGunActor::TryResolveCharacterPresentationShot(
 	const AShowDownCharacter* TargetCharacter,
 	FVector& OutSourceLocation,
-	FVector& OutAimLocation) const
+	FVector& OutAimLocation,
+	FRotator* OutRotationOffset) const
 {
 	if (!IsValid(TargetCharacter))
 	{
@@ -456,6 +500,10 @@ bool ASDSelfShotGunActor::TryResolveCharacterPresentationShot(
 
 	OutSourceLocation = RevolverAnchor->GetComponentLocation();
 	OutAimLocation = TargetCharacter->GetActorLocation() + TargetShotAimOffset;
+	if (OutRotationOffset)
+	{
+		*OutRotationOffset = RevolverAnchor->GetRelativeRotation();
+	}
 
 	const USkeletalMeshComponent* CharacterMesh = TargetCharacter->GetMesh();
 	const FName AimAttachName = TargetCharacter->ResolvePlayerCameraAttachName();
@@ -493,6 +541,7 @@ void ASDSelfShotGunActor::StartGunUse()
 	}
 
 	RestActorTransform = GetActorTransform();
+	bHasCapturedRestActorTransform = true;
 	RaiseStartTransform = RestActorTransform;
 	StateElapsedTime = 0.0f;
 	MechanismResetElapsedTime = 0.0f;
@@ -1376,13 +1425,15 @@ void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(EShowDownPlayerSlo
 
 	FVector SourceLocation = FVector::ZeroVector;
 	FVector AimLocation = FVector::ZeroVector;
-	if (TryResolveCharacterPresentationShot(Cast<AShowDownCharacter>(TargetActor), SourceLocation, AimLocation))
+	FRotator RotationOffset = FRotator::ZeroRotator;
+	if (TryResolveCharacterPresentationShot(Cast<AShowDownCharacter>(TargetActor), SourceLocation, AimLocation, &RotationOffset))
 	{
-		UseGunWithForcedResultAtTargetFromLocationAimAndCamera(
+		UseGunWithForcedResultAtTargetFromLocationAimRotationAndCamera(
 			bHit,
 			TargetActor,
 			SourceLocation,
 			AimLocation,
+			RotationOffset,
 			nullptr);
 		return;
 	}
@@ -1399,6 +1450,158 @@ bool ASDSelfShotGunActor::ShouldTreatTargetAsLocalPlayer(AActor* TargetActor) co
 
 	const AShowDownCharacter* TargetCharacter = Cast<AShowDownCharacter>(TargetActor);
 	return TargetCharacter && TargetCharacter->IsLocalPlayerCharacter();
+}
+
+bool ASDSelfShotGunActor::UpdateRevolverPlacementDevPreview()
+{
+#if WITH_EDITOR
+	if (!bEnableRevolverPlacementDevMode)
+	{
+		if (bRevolverPlacementDevPreviewActive)
+		{
+			SetActorTransform(RevolverPlacementDevPreviewRestoreTransform);
+			bRevolverPlacementDevPreviewActive = false;
+		}
+
+		return false;
+	}
+
+	if (!bRevolverPlacementDevPreviewActive)
+	{
+		RevolverPlacementDevPreviewRestoreTransform = GetActorTransform();
+		bRevolverPlacementDevPreviewActive = true;
+	}
+
+	const AShowDownCharacter* PreviewTarget = FindRevolverPlacementDevPreviewTarget();
+	if (!PreviewTarget)
+	{
+		return true;
+	}
+
+	FVector SourceLocation = FVector::ZeroVector;
+	FVector AimLocation = FVector::ZeroVector;
+	FRotator RotationOffset = FRotator::ZeroRotator;
+	if (!TryResolveCharacterPresentationShot(PreviewTarget, SourceLocation, AimLocation, &RotationOffset))
+	{
+		return true;
+	}
+
+	const FTransform PreviewTransform = MakeTargetShotTransform(SourceLocation, AimLocation, RotationOffset);
+	SetActorTransform(PreviewTransform);
+	DrawRevolverPlacementDevPreview(SourceLocation, AimLocation, PreviewTransform);
+	return true;
+#else
+	return false;
+#endif
+}
+
+AShowDownCharacter* ASDSelfShotGunActor::FindRevolverPlacementDevPreviewTarget() const
+{
+	if (IsValid(DevPreviewTargetCharacter))
+	{
+		return DevPreviewTargetCharacter;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	AShowDownCharacter* PlayerOneFallback = nullptr;
+	AShowDownCharacter* PlayerRoleFallback = nullptr;
+	AShowDownCharacter* AnyCharacterFallback = nullptr;
+	for (TActorIterator<AShowDownCharacter> It(World); It; ++It)
+	{
+		AShowDownCharacter* CandidateCharacter = *It;
+		if (!IsValid(CandidateCharacter))
+		{
+			continue;
+		}
+
+		if (CandidateCharacter->IsAssignedToSlot(DevPreviewTargetSlot))
+		{
+			return CandidateCharacter;
+		}
+
+		if (!AnyCharacterFallback)
+		{
+			AnyCharacterFallback = CandidateCharacter;
+		}
+
+		if (!PlayerRoleFallback && CandidateCharacter->GetCharacterRole() == EShowDownCharacterRole::Player)
+		{
+			PlayerRoleFallback = CandidateCharacter;
+		}
+
+		if (!PlayerOneFallback && CandidateCharacter->IsAssignedToSlot(EShowDownPlayerSlot::Player1))
+		{
+			PlayerOneFallback = CandidateCharacter;
+		}
+	}
+
+	if (!bDevPreviewFallbackToAnyPlayerCharacter)
+	{
+		return nullptr;
+	}
+
+	if (PlayerOneFallback)
+	{
+		return PlayerOneFallback;
+	}
+
+	return PlayerRoleFallback ? PlayerRoleFallback : AnyCharacterFallback;
+}
+
+FTransform ASDSelfShotGunActor::MakeTargetShotTransform(
+	const FVector& SourceLocation,
+	const FVector& AimLocation,
+	FRotator RotationOffset) const
+{
+	FVector AimDirection = (AimLocation - SourceLocation).GetSafeNormal();
+	if (AimDirection.IsNearlyZero())
+	{
+		AimDirection = GetActorForwardVector().GetSafeNormal();
+	}
+	if (AimDirection.IsNearlyZero())
+	{
+		AimDirection = FVector::ForwardVector;
+	}
+
+	return FTransform(
+		AimDirection.Rotation() + TargetShotRotationOffset + RotationOffset,
+		SourceLocation,
+		GetPresentationScale3D());
+}
+
+FVector ASDSelfShotGunActor::GetPresentationScale3D() const
+{
+	return bHasCapturedRestActorTransform
+		? RestActorTransform.GetScale3D()
+		: GetActorScale3D();
+}
+
+void ASDSelfShotGunActor::DrawRevolverPlacementDevPreview(
+	const FVector& SourceLocation,
+	const FVector& AimLocation,
+	const FTransform& GunTransform) const
+{
+	if (!bDrawRevolverPlacementDevDebug)
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	const float DebugSize = FMath::Max(1.0f, RevolverPlacementDevDebugSize);
+	DrawDebugSphere(World, SourceLocation, DebugSize * 0.35f, 12, FColor::Cyan, false, 0.0f, 0, 1.5f);
+	DrawDebugSphere(World, AimLocation, DebugSize * 0.25f, 12, FColor::Red, false, 0.0f, 0, 1.5f);
+	DrawDebugLine(World, SourceLocation, AimLocation, FColor::Yellow, false, 0.0f, 0, 1.0f);
+	DrawDebugCoordinateSystem(World, SourceLocation, GunTransform.Rotator(), DebugSize, false, 0.0f, 0, 0.75f);
 }
 
 FTransform ASDSelfShotGunActor::GetFirstPersonGunTransform() const
@@ -1423,16 +1626,16 @@ FTransform ASDSelfShotGunActor::GetFirstPersonGunTransform() const
 			const FVector AimLocation = bHasForcedShotAimLocation
 				? ForcedShotAimLocation
 				: ForcedShotTargetActor->GetActorLocation() + TargetShotAimOffset;
-			return FTransform(
-				(AimLocation - TargetLocation).Rotation() + TargetShotRotationOffset,
+			return MakeTargetShotTransform(
 				TargetLocation,
-				RestActorTransform.GetScale3D());
+				AimLocation,
+				bHasForcedShotRotationOffset ? ForcedShotRotationOffset : FRotator::ZeroRotator);
 		}
 
 		return FTransform(
 			CachedFirstPersonCameraRotation + FirstPersonRotationOffset,
 			TargetLocation,
-			RestActorTransform.GetScale3D());
+			GetPresentationScale3D());
 	}
 
 	if (const APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0))
@@ -1454,13 +1657,13 @@ FTransform ASDSelfShotGunActor::GetFirstPersonGunTransform() const
 				const FVector AimLocation = bHasForcedShotAimLocation
 					? ForcedShotAimLocation
 					: ForcedShotTargetActor->GetActorLocation() + TargetShotAimOffset;
-				return FTransform(
-					(AimLocation - TargetLocation).Rotation() + TargetShotRotationOffset,
+				return MakeTargetShotTransform(
 					TargetLocation,
-					RestActorTransform.GetScale3D());
+					AimLocation,
+					bHasForcedShotRotationOffset ? ForcedShotRotationOffset : FRotator::ZeroRotator);
 			}
 
-			return FTransform(CameraRotation + FirstPersonRotationOffset, TargetLocation, RestActorTransform.GetScale3D());
+			return FTransform(CameraRotation + FirstPersonRotationOffset, TargetLocation, GetPresentationScale3D());
 		}
 	}
 

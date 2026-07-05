@@ -46,6 +46,10 @@ public:
 
 	virtual void Tick(float DeltaSeconds) override;
 
+#if WITH_EDITOR
+	virtual bool ShouldTickIfViewportsOnly() const override;
+#endif
+
 	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun")
 	void UseGun();
 
@@ -73,6 +77,15 @@ public:
 		FVector AimLocation,
 		ACameraActor* ShotCamera);
 
+	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun")
+	void UseGunWithForcedResultAtTargetFromLocationAimRotationAndCamera(
+		bool bLiveRound,
+		AActor* TargetActor,
+		FVector SourceLocation,
+		FVector AimLocation,
+		FRotator RotationOffset,
+		ACameraActor* ShotCamera);
+
 	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Target Shot")
 	ACameraActor* GetEnemyShotCinematicCamera() const;
 
@@ -85,7 +98,8 @@ public:
 	bool TryResolveCharacterPresentationShot(
 		const AShowDownCharacter* TargetCharacter,
 		FVector& OutSourceLocation,
-		FVector& OutAimLocation) const;
+		FVector& OutAimLocation,
+		FRotator* OutRotationOffset = nullptr) const;
 
 	virtual bool CanInteract_Implementation(AActor* Interactor) const override;
 	virtual void Interact_Implementation(AActor* Interactor) override;
@@ -192,6 +206,24 @@ protected:
 
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Self Shot Gun|Target Shot", meta = (DisplayName = "Enemy Shot Cinematic Camera"))
 	TObjectPtr<ACameraActor> EnemyShotCinematicCamera;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Developer Preview", meta = (DisplayName = "Enable Revolver Placement Dev Mode"))
+	bool bEnableRevolverPlacementDevMode = false;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Self Shot Gun|Developer Preview", meta = (EditCondition = "bEnableRevolverPlacementDevMode", DisplayName = "Preview Target Character"))
+	TObjectPtr<AShowDownCharacter> DevPreviewTargetCharacter;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Developer Preview", meta = (EditCondition = "bEnableRevolverPlacementDevMode", DisplayName = "Preview Target Slot"))
+	EShowDownPlayerSlot DevPreviewTargetSlot = EShowDownPlayerSlot::Player1;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Developer Preview", meta = (EditCondition = "bEnableRevolverPlacementDevMode", DisplayName = "Fallback To Any Player Character"))
+	bool bDevPreviewFallbackToAnyPlayerCharacter = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Developer Preview", meta = (EditCondition = "bEnableRevolverPlacementDevMode", DisplayName = "Draw Source And Aim Debug"))
+	bool bDrawRevolverPlacementDevDebug = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Developer Preview", meta = (EditCondition = "bEnableRevolverPlacementDevMode && bDrawRevolverPlacementDevDebug", ClampMin = "1.0", DisplayName = "Debug Size"))
+	float RevolverPlacementDevDebugSize = 16.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|First Person|Held Jitter")
 	bool bEnableHeldGunJitter = true;
@@ -489,6 +521,14 @@ private:
 	AActor* FindMultiplayerShotTarget(EShowDownPlayerSlot TargetSlot) const;
 	void PlayMultiplayerRoulettePresentation(EShowDownPlayerSlot TargetSlot, bool bHit);
 	bool ShouldTreatTargetAsLocalPlayer(AActor* TargetActor) const;
+	bool UpdateRevolverPlacementDevPreview();
+	AShowDownCharacter* FindRevolverPlacementDevPreviewTarget() const;
+	FTransform MakeTargetShotTransform(
+		const FVector& SourceLocation,
+		const FVector& AimLocation,
+		FRotator RotationOffset = FRotator::ZeroRotator) const;
+	FVector GetPresentationScale3D() const;
+	void DrawRevolverPlacementDevPreview(const FVector& SourceLocation, const FVector& AimLocation, const FTransform& GunTransform) const;
 
 	static FRotator LerpRotation(const FRotator& From, const FRotator& To, float Alpha);
 	void StartHitSequence();
@@ -512,6 +552,7 @@ private:
 	void SetActorTransformAlpha(const FTransform& FromTransform, const FTransform& ToTransform, float Alpha);
 
 	FTransform RestActorTransform;
+	FTransform RevolverPlacementDevPreviewRestoreTransform;
 	FTransform RaiseStartTransform;
 	FTransform ReturnStartTransform;
 	FRotator TriggerRestRotation = FRotator::ZeroRotator;
@@ -548,10 +589,13 @@ private:
 	bool bSelfShotCinematicCameraStartPending = false;
 	bool bSelfShotCinematicCameraHoldStarted = false;
 	bool bPresentationFinishPending = false;
+	bool bHasCapturedRestActorTransform = false;
+	bool bRevolverPlacementDevPreviewActive = false;
 	bool bCurrentShotTargetsLocalPlayer = true;
 	bool bCurrentShotWasEmpty = false;
 	bool bHasForcedShotSourceLocation = false;
 	bool bHasForcedShotAimLocation = false;
+	bool bHasForcedShotRotationOffset = false;
 	bool bHasCachedFirstPersonPoseCamera = false;
 	bool bCinematicCameraShakeActive = false;
 	bool bTinnitusFadeOutStarted = false;
@@ -560,6 +604,7 @@ private:
 	TWeakObjectPtr<AActor> ForcedShotTargetActor;
 	FVector ForcedShotSourceLocation = FVector::ZeroVector;
 	FVector ForcedShotAimLocation = FVector::ZeroVector;
+	FRotator ForcedShotRotationOffset = FRotator::ZeroRotator;
 	FRotator CinematicCameraShakeRotationAmplitude = FRotator::ZeroRotator;
 	FVector CinematicCameraShakeLocationAmplitude = FVector::ZeroVector;
 	FTransform CinematicCameraShakeBaseTransform;

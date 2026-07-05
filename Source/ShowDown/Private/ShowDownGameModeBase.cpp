@@ -823,11 +823,17 @@ void AShowDownGameModeBase::PlaySelfShotGunPresentationThen(
 	ACameraActor* EnemyShotCamera = nullptr;
 	bool bHasShotSourceLocation = false;
 	bool bHasShotAimLocation = false;
+	bool bHasShotRotationOffset = false;
 	FVector ShotSourceLocation = FVector::ZeroVector;
 	FVector ShotAimLocation = FVector::ZeroVector;
+	FRotator ShotRotationOffset = FRotator::ZeroRotator;
 	if (AShowDownCharacter* TargetCharacter = FindSingleRouletteCharacter(TargetSide))
 	{
-		if (GunActor->TryResolveCharacterPresentationShot(TargetCharacter, ShotSourceLocation, ShotAimLocation))
+		if (GunActor->TryResolveCharacterPresentationShot(
+			TargetCharacter,
+			ShotSourceLocation,
+			ShotAimLocation,
+			&ShotRotationOffset))
 		{
 			ShotTargetActor = TargetSide == EShowDownSide::Player ? nullptr : TargetCharacter;
 			EnemyShotCamera = TargetSide == EShowDownSide::Collector
@@ -835,6 +841,7 @@ void AShowDownGameModeBase::PlaySelfShotGunPresentationThen(
 				: nullptr;
 			bHasShotSourceLocation = true;
 			bHasShotAimLocation = true;
+			bHasShotRotationOffset = true;
 		}
 	}
 
@@ -882,12 +889,25 @@ void AShowDownGameModeBase::PlaySelfShotGunPresentationThen(
 
 	if (bHasShotSourceLocation && bHasShotAimLocation)
 	{
-		GunActor->UseGunWithForcedResultAtTargetFromLocationAimAndCamera(
-			bLiveRound,
-			ShotTargetActor,
-			ShotSourceLocation,
-			ShotAimLocation,
-			EnemyShotCamera);
+		if (bHasShotRotationOffset)
+		{
+			GunActor->UseGunWithForcedResultAtTargetFromLocationAimRotationAndCamera(
+				bLiveRound,
+				ShotTargetActor,
+				ShotSourceLocation,
+				ShotAimLocation,
+				ShotRotationOffset,
+				EnemyShotCamera);
+		}
+		else
+		{
+			GunActor->UseGunWithForcedResultAtTargetFromLocationAimAndCamera(
+				bLiveRound,
+				ShotTargetActor,
+				ShotSourceLocation,
+				ShotAimLocation,
+				EnemyShotCamera);
+		}
 	}
 	else if (bHasShotSourceLocation)
 	{
@@ -1003,7 +1023,12 @@ AShowDownCharacter* AShowDownGameModeBase::FindSingleRouletteCharacter(EShowDown
 		}
 	}
 
-	return LocalPlayerFallback ? LocalPlayerFallback : PlayerRoleFallback;
+	if (TargetSide == EShowDownSide::Player)
+	{
+		return LocalPlayerFallback ? LocalPlayerFallback : PlayerRoleFallback;
+	}
+
+	return nullptr;
 }
 
 float AShowDownGameModeBase::ResolveMultiplayerRouletteResultDelay() const
