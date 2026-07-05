@@ -375,6 +375,7 @@ private:
 	void UpdateCharacterPlayerCamera(float DeltaTime);
 	void UpdateFixedCameraMouseLook(float DeltaTime);
 	void SubmitDebugCameraLookRotation(const FRotator& LookRotation, float DeltaTime);
+	void SubmitCharacterHeadLookRotation(const FRotator& LookRotation, float DeltaTime);
 	void RestoreFixedCameraBaseTransform();
 	FRotator GetBreathingSwayRotationOffset(float Strength) const;
 	FVector GetBreathingSwayLocationOffset(const FRotator& CameraRotation, float Strength) const;

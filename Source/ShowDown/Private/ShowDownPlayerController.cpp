@@ -1789,31 +1789,7 @@ void AShowDownPlayerController::UpdateCharacterPlayerCamera(float DeltaTime)
 		SetInputMode(InputMode);
 	}
 
-	const FRotator LookRotation = GetControlRotation();
-	LocalPlayerCameraCharacterTarget->SetPlayerViewRotation(LookRotation);
-
-	if (!bReplicateCharacterHeadLook)
-	{
-		return;
-	}
-
-	CharacterHeadLookReplicationElapsedTime += DeltaTime;
-	const float PitchDelta = FMath::Abs(FRotator::NormalizeAxis(LookRotation.Pitch - LastSubmittedCharacterHeadLookRotation.Pitch));
-	const float YawDelta = FMath::Abs(FRotator::NormalizeAxis(LookRotation.Yaw - LastSubmittedCharacterHeadLookRotation.Yaw));
-	if (CharacterHeadLookReplicationElapsedTime < 0.05f && PitchDelta < 0.5f && YawDelta < 0.5f)
-	{
-		return;
-	}
-
-	CharacterHeadLookReplicationElapsedTime = 0.0f;
-	LastSubmittedCharacterHeadLookRotation = LookRotation;
-	if (HasAuthority())
-	{
-		LocalPlayerCameraCharacterTarget->SetPlayerViewRotation(LookRotation);
-		return;
-	}
-
-	ServerUpdateCharacterHeadLookRotation(LookRotation);
+	SubmitCharacterHeadLookRotation(GetControlRotation(), DeltaTime);
 }
 
 void AShowDownPlayerController::UpdateFixedCameraMouseLook(float DeltaTime)
@@ -1865,6 +1841,7 @@ void AShowDownPlayerController::UpdateFixedCameraMouseLook(float DeltaTime)
 		FixedCameraBaseLocation + SwayLocation + SteppedShakeLocation,
 		FixedCameraLookRotation + SwayRotation + SteppedShakeRotation);
 	SubmitDebugCameraLookRotation(FixedCameraLookRotation, DeltaTime);
+	SubmitCharacterHeadLookRotation(FixedCameraLookRotation, DeltaTime);
 }
 
 void AShowDownPlayerController::SubmitDebugCameraLookRotation(const FRotator& LookRotation, float DeltaTime)
@@ -1895,6 +1872,49 @@ void AShowDownPlayerController::SubmitDebugCameraLookRotation(const FRotator& Lo
 	}
 
 	ServerUpdateDebugCameraLookRotation(LookRotation);
+}
+
+void AShowDownPlayerController::SubmitCharacterHeadLookRotation(const FRotator& LookRotation, float DeltaTime)
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	if (!IsValid(LocalPlayerCameraCharacterTarget))
+	{
+		LocalPlayerCameraCharacterTarget = FindLocalCharacterForPlayerCamera();
+	}
+
+	if (!IsValid(LocalPlayerCameraCharacterTarget))
+	{
+		return;
+	}
+
+	LocalPlayerCameraCharacterTarget->SetPlayerViewRotation(LookRotation);
+
+	if (!bReplicateCharacterHeadLook)
+	{
+		return;
+	}
+
+	CharacterHeadLookReplicationElapsedTime += DeltaTime;
+	const float PitchDelta = FMath::Abs(FRotator::NormalizeAxis(LookRotation.Pitch - LastSubmittedCharacterHeadLookRotation.Pitch));
+	const float YawDelta = FMath::Abs(FRotator::NormalizeAxis(LookRotation.Yaw - LastSubmittedCharacterHeadLookRotation.Yaw));
+	if (CharacterHeadLookReplicationElapsedTime < 0.05f && PitchDelta < 0.5f && YawDelta < 0.5f)
+	{
+		return;
+	}
+
+	CharacterHeadLookReplicationElapsedTime = 0.0f;
+	LastSubmittedCharacterHeadLookRotation = LookRotation;
+	if (HasAuthority())
+	{
+		LocalPlayerCameraCharacterTarget->SetPlayerViewRotation(LookRotation);
+		return;
+	}
+
+	ServerUpdateCharacterHeadLookRotation(LookRotation);
 }
 
 void AShowDownPlayerController::RestoreFixedCameraBaseTransform()

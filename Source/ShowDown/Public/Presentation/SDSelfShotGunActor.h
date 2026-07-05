@@ -4,6 +4,7 @@
 #include "GameFramework/Actor.h"
 #include "Interaction/SDInteractable.h"
 #include "Presentation/SDArtToneController.h"
+#include "ShowDownTypes.h"
 #include "SDSelfShotGunActor.generated.h"
 
 class UBoxComponent;
@@ -97,6 +98,7 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<USceneComponent> SceneRoot;
@@ -467,6 +469,17 @@ private:
 		FVector LocationAmplitude,
 		float StepInterval);
 	void UpdateCinematicCameraSteppedShake(float DeltaSeconds);
+
+	UFUNCTION()
+	void HandleMultiplayerRoulettePresentation(
+		EShowDownPlayerSlot TargetSlot,
+		const FString& TargetName,
+		int32 BulletCount,
+		bool bHit);
+
+	AActor* FindMultiplayerShotTarget(EShowDownPlayerSlot TargetSlot) const;
+	void PlayMultiplayerRoulettePresentation(EShowDownPlayerSlot TargetSlot, bool bHit);
+
 	static FRotator LerpRotation(const FRotator& From, const FRotator& To, float Alpha);
 	void StartHitSequence();
 	void UpdateHitSequence(float DeltaSeconds);

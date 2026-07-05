@@ -242,6 +242,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation", meta = (ClampMin = "0.0"))
 	float RevealAutoAdvanceSeconds = 0.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Multiplayer", meta = (ClampMin = "0.0"))
+	float MultiplayerRouletteResultDelay = 1.15f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Debug")
 	bool bShowGameFlowDebugMessages = true;
 
@@ -437,7 +440,7 @@ private:
 	void HandleMultiplayerBetAction(ASDPlayerState* SubmittingPlayer, EShowDownBetAction Action, int32 TargetBet);
 	void FinishMultiplayerRoundByReveal();
 	void FinishMultiplayerRoundByFold(ASDPlayerState* FoldedPlayer);
-	void ApplyMultiplayerRoulette(ASDPlayerState* TargetPlayer, int32 BulletCount);
+	float ApplyMultiplayerRoulette(ASDPlayerState* TargetPlayer, int32 BulletCount);
 	void EndMultiplayerRound();
 	void ShowMultiplayerFinalRanking(ASDPlayerState* Winner);
 	void SetMultiplayerSelectableHand(ASDPlayerState* Player);

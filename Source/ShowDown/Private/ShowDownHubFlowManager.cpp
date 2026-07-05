@@ -388,7 +388,11 @@ void AShowDownHubFlowManager::ShowSinglePlayPreviewInternal(bool bAllowOnlineRew
 	const bool bPlayedGameCamera = bUseCharacterPlayerCameraForSinglePlay ? false : PlayCamera(GameCamera);
 	if (!bPlayedGameCamera && PlayerController && PlayerController->GetPawn())
 	{
-		PlayerController->SetViewTargetWithBlend(PlayerController->GetPawn(), CameraBlendTime);
+		PlayerController->SetViewTargetWithBlend(
+			PlayerController->GetPawn(),
+			CameraBlendTime,
+			VTBlend_EaseInOut,
+			CameraBlendEaseExponent);
 	}
 
 	// 카드 커서 트레이스·카메라 조작·베팅 핫키가 모두 폰에 전달되도록 게임 입력 모드로 전환합니다.
@@ -572,7 +576,11 @@ bool AShowDownHubFlowManager::PlayViewTarget(AActor* ViewTarget, bool bCut)
 		}
 		else
 		{
-			PlayerController->SetViewTargetWithBlend(ViewTarget, CameraBlendTime);
+			PlayerController->SetViewTargetWithBlend(
+				ViewTarget,
+				CameraBlendTime,
+				VTBlend_EaseInOut,
+				CameraBlendEaseExponent);
 		}
 		return true;
 	}

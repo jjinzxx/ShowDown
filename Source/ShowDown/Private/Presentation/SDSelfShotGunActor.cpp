@@ -8,7 +8,10 @@
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
+#include "EngineUtils.h"
 #include "Kismet/GameplayStatics.h"
+#include "ShowDownCharacter.h"
+#include "ShowDownGameStateBase.h"
 #include "ShowDownPlayerController.h"
 #include "Sound/SoundBase.h"
 #include "UObject/ConstructorHelpers.h"
@@ -197,6 +200,25 @@ void ASDSelfShotGunActor::BeginPlay()
 	ChamberTargetRotation = ChamberCurrentRotation;
 	MuzzleFlashLight->SetAttenuationRadius(FMath::Max(0.0f, MuzzleFlashAttenuationRadius));
 	MuzzleFlashLight->SetLightColor(MuzzleFlashColor);
+
+	if (AShowDownGameStateBase* ShowDownGameState = GetWorld() ? GetWorld()->GetGameState<AShowDownGameStateBase>() : nullptr)
+	{
+		ShowDownGameState->OnMultiplayerRoulettePresentation.AddUniqueDynamic(
+			this,
+			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
+	}
+}
+
+void ASDSelfShotGunActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (AShowDownGameStateBase* ShowDownGameState = GetWorld() ? GetWorld()->GetGameState<AShowDownGameStateBase>() : nullptr)
+	{
+		ShowDownGameState->OnMultiplayerRoulettePresentation.RemoveDynamic(
+			this,
+			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
+	}
+
+	Super::EndPlay(EndPlayReason);
 }
 
 void ASDSelfShotGunActor::Tick(float DeltaSeconds)
@@ -1247,6 +1269,69 @@ void ASDSelfShotGunActor::PlayConfiguredSound(USoundBase* Sound, bool bPlay2D, c
 	{
 		UGameplayStatics::PlaySoundAtLocation(this, Sound, Location);
 	}
+}
+
+void ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation(
+	EShowDownPlayerSlot TargetSlot,
+	const FString& TargetName,
+	int32 BulletCount,
+	bool bHit)
+{
+	PlayMultiplayerRoulettePresentation(TargetSlot, bHit);
+}
+
+AActor* ASDSelfShotGunActor::FindMultiplayerShotTarget(EShowDownPlayerSlot TargetSlot) const
+{
+	if (TargetSlot == EShowDownPlayerSlot::None)
+	{
+		return nullptr;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	for (TActorIterator<AShowDownCharacter> It(World); It; ++It)
+	{
+		AShowDownCharacter* CandidateCharacter = *It;
+		if (IsValid(CandidateCharacter) && CandidateCharacter->IsAssignedToSlot(TargetSlot))
+		{
+			return CandidateCharacter;
+		}
+	}
+
+	return nullptr;
+}
+
+void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(EShowDownPlayerSlot TargetSlot, bool bHit)
+{
+	AActor* TargetActor = FindMultiplayerShotTarget(TargetSlot);
+	if (!IsValid(TargetActor))
+	{
+		UseGunWithForcedResult(bHit);
+		return;
+	}
+
+	const FVector AimLocation = TargetActor->GetActorLocation() + TargetShotAimOffset;
+	FVector SourcePullDirection = TargetActor->GetActorForwardVector().GetSafeNormal();
+	if (SourcePullDirection.IsNearlyZero())
+	{
+		SourcePullDirection = (AimLocation - GetActorLocation()).GetSafeNormal();
+	}
+	if (SourcePullDirection.IsNearlyZero())
+	{
+		SourcePullDirection = FVector::ForwardVector;
+	}
+
+	const FVector SourceLocation = AimLocation - SourcePullDirection * TargetShotSourcePullDistance;
+	UseGunWithForcedResultAtTargetFromLocationAimAndCamera(
+		bHit,
+		TargetActor,
+		SourceLocation,
+		AimLocation,
+		nullptr);
 }
 
 FTransform ASDSelfShotGunActor::GetFirstPersonGunTransform() const

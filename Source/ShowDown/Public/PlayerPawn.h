@@ -121,7 +121,7 @@ public:
 	bool bEnableDebugWinCommand = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Debug")
-	bool bShowDebugCameraLookMarker = true;
+	bool bShowDebugCameraLookMarker = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Debug")
 	float DebugCameraLookMarkerForwardOffset = 24.0f;

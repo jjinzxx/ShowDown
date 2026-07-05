@@ -135,6 +135,9 @@ private:
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera", meta = (ClampMin = "0.0"))
 	float CameraBlendTime = 0.75f;
 
+	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera", meta = (ClampMin = "0.1", UIMin = "1.0", UIMax = "6.0"))
+	float CameraBlendEaseExponent = 3.0f;
+
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera|Game Camera")
 	bool bEnableGameCameraMouseLook = true;
 

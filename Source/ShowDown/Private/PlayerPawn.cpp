@@ -86,6 +86,7 @@ void APlayerPawn::PreInitializeComponents()
 	if (GetNetMode() != NM_Standalone)
 	{
 		AutoPossessPlayer = EAutoReceiveInput::Disabled;
+		bShowDebugCameraLookMarker = false;
 
 		// The multiplayer map does not depend on authored pawn instances. Keep the
 		// player's own hand directly in front of the camera so center-screen card

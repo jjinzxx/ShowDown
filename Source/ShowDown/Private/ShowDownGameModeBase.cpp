@@ -3268,14 +3268,28 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 		const int32 LoadCount = RoundResolver
 			? RoundResolver->GetFoldLoadCount(FoldedRank, SubmittingPlayer->CurrentBet, bSevenFoldLoadsSix)
 			: SubmittingPlayer->CurrentBet;
-		ApplyMultiplayerRoulette(SubmittingPlayer, LoadCount);
-
-		MultiplayerNextFirstPlayer = SubmittingPlayer;
-		MultiplayerPlayersActed.Add(SubmittingPlayer);
-		MultiplayerCurrentBetter = FindNextActivePlayer(SubmittingPlayer);
-		if (!MultiplayerCurrentBetter || AreAllActiveMultiplayerPlayersDoneBetting(CurrentBet))
+		const float RouletteDelay = ApplyMultiplayerRoulette(SubmittingPlayer, LoadCount);
+		const auto ContinueAfterRoulette = [this, SubmittingPlayer, CurrentBet, FindNextActivePlayer]()
 		{
-			FinishMultiplayerRoundByReveal();
+			MultiplayerNextFirstPlayer = SubmittingPlayer;
+			MultiplayerPlayersActed.Add(SubmittingPlayer);
+			MultiplayerCurrentBetter = FindNextActivePlayer(SubmittingPlayer);
+			if (!MultiplayerCurrentBetter || AreAllActiveMultiplayerPlayersDoneBetting(CurrentBet))
+			{
+				FinishMultiplayerRoundByReveal();
+			}
+		};
+
+		if (RouletteDelay > KINDA_SMALL_NUMBER)
+		{
+			FTimerDelegate ContinueDelegate;
+			ContinueDelegate.BindWeakLambda(this, ContinueAfterRoulette);
+			FTimerHandle ContinueTimerHandle;
+			GetWorldTimerManager().SetTimer(ContinueTimerHandle, ContinueDelegate, RouletteDelay + 0.05f, false);
+		}
+		else
+		{
+			ContinueAfterRoulette();
 		}
 		return;
 	}
@@ -3371,6 +3385,7 @@ void AShowDownGameModeBase::FinishMultiplayerRoundByReveal()
 
 		ASDPlayerState* NextFirstCandidate = nullptr;
 		int32 NextFirstRank = TNumericLimits<int32>::Min();
+		float MaxRouletteDelay = 0.0f;
 		for (ASDPlayerState* Player : RouletteTargets)
 		{
 			if (!Player || !Player->ForeheadCard)
@@ -3385,12 +3400,24 @@ void AShowDownGameModeBase::FinishMultiplayerRoundByReveal()
 				NextFirstRank = Rank;
 			}
 
-			ApplyMultiplayerRoulette(Player, Player->CurrentBet);
+			MaxRouletteDelay = FMath::Max(MaxRouletteDelay, ApplyMultiplayerRoulette(Player, Player->CurrentBet));
 		}
 
 		if (NextFirstCandidate)
 		{
 			MultiplayerNextFirstPlayer = NextFirstCandidate;
+		}
+
+		if (MaxRouletteDelay > KINDA_SMALL_NUMBER)
+		{
+			FTimerDelegate EndRoundDelegate;
+			EndRoundDelegate.BindWeakLambda(this, [this]()
+			{
+				EndMultiplayerRound();
+			});
+			FTimerHandle EndRoundTimerHandle;
+			GetWorldTimerManager().SetTimer(EndRoundTimerHandle, EndRoundDelegate, MaxRouletteDelay + 0.05f, false);
+			return;
 		}
 	}
 
@@ -3423,23 +3450,36 @@ void AShowDownGameModeBase::FinishMultiplayerRoundByFold(ASDPlayerState* FoldedP
 		? RoundResolver->GetFoldLoadCount(FoldedRank, FoldedPlayer->CurrentBet, bSevenFoldLoadsSix)
 		: FoldedPlayer->CurrentBet;
 
-	ApplyMultiplayerRoulette(FoldedPlayer, LoadCount);
+	const float RouletteDelay = ApplyMultiplayerRoulette(FoldedPlayer, LoadCount);
+	if (RouletteDelay > KINDA_SMALL_NUMBER)
+	{
+		FTimerDelegate EndRoundDelegate;
+		EndRoundDelegate.BindWeakLambda(this, [this]()
+		{
+			EndMultiplayerRound();
+		});
+		FTimerHandle EndRoundTimerHandle;
+		GetWorldTimerManager().SetTimer(EndRoundTimerHandle, EndRoundDelegate, RouletteDelay + 0.05f, false);
+		return;
+	}
+
 	EndMultiplayerRound();
 }
 
-void AShowDownGameModeBase::ApplyMultiplayerRoulette(ASDPlayerState* TargetPlayer, int32 BulletCount)
+float AShowDownGameModeBase::ApplyMultiplayerRoulette(ASDPlayerState* TargetPlayer, int32 BulletCount)
 {
 	if (!TargetPlayer || !RouletteSystem)
 	{
-		return;
+		return 0.0f;
 	}
 
 	const int32 ClampedBulletCount = FMath::Clamp(BulletCount, 1, 6);
 	const int32 PreviousLives = TargetPlayer->Lives;
 	const FString TargetName = TargetPlayer->GetPlayerName();
+	const EShowDownPlayerSlot TargetSlot = TargetPlayer->ShowDownSlot;
 	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 	{
-		ShowDownGameState->BroadcastMultiplayerRouletteStarted(TargetPlayer->ShowDownSlot, TargetName, ClampedBulletCount);
+		ShowDownGameState->BroadcastMultiplayerRouletteStarted(TargetSlot, TargetName, ClampedBulletCount);
 	}
 
 	const bool bHit = RouletteSystem->RollRoulette(ClampedBulletCount);
@@ -3463,15 +3503,44 @@ void AShowDownGameModeBase::ApplyMultiplayerRoulette(ASDPlayerState* TargetPlaye
 	}
 
 	TargetPlayer->ForceNetUpdate();
+	const int32 RemainingLives = TargetPlayer->Lives;
 	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 	{
-		ShowDownGameState->BroadcastMultiplayerRouletteResult(
-			TargetPlayer->ShowDownSlot,
-			TargetName,
-			ClampedBulletCount,
-			bHit,
-			TargetPlayer->Lives);
+		ShowDownGameState->BroadcastMultiplayerRoulettePresentation(TargetSlot, TargetName, ClampedBulletCount, bHit);
 	}
+
+	const float ResultDelay = FMath::Max(0.0f, MultiplayerRouletteResultDelay);
+	if (ResultDelay <= KINDA_SMALL_NUMBER)
+	{
+		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+		{
+			ShowDownGameState->BroadcastMultiplayerRouletteResult(
+				TargetSlot,
+				TargetName,
+				ClampedBulletCount,
+				bHit,
+				RemainingLives);
+		}
+		return 0.0f;
+	}
+
+	FTimerDelegate ResultDelegate;
+	ResultDelegate.BindWeakLambda(this, [this, TargetSlot, TargetName, ClampedBulletCount, bHit, RemainingLives]()
+	{
+		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+		{
+			ShowDownGameState->BroadcastMultiplayerRouletteResult(
+				TargetSlot,
+				TargetName,
+				ClampedBulletCount,
+				bHit,
+				RemainingLives);
+		}
+	});
+
+	FTimerHandle ResultTimerHandle;
+	GetWorldTimerManager().SetTimer(ResultTimerHandle, ResultDelegate, ResultDelay, false);
+	return ResultDelay;
 }
 
 void AShowDownGameModeBase::EndMultiplayerRound()

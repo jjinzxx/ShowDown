@@ -26,6 +26,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FShowDownChatMessageSignature, cons
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FShowDownMultiplayerCardSelectedSignature, EShowDownPlayerSlot, PlayerSlot);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FShowDownMultiplayerBetActionCommittedSignature, EShowDownPlayerSlot, PlayerSlot, EShowDownBetAction, Action, int32, TargetBet);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FShowDownMultiplayerRouletteStartedSignature, EShowDownPlayerSlot, TargetSlot, const FString&, TargetName, int32, BulletCount);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FShowDownMultiplayerRoulettePresentationSignature, EShowDownPlayerSlot, TargetSlot, const FString&, TargetName, int32, BulletCount, bool, bHit);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FiveParams(FShowDownMultiplayerRouletteResultSignature, EShowDownPlayerSlot, TargetSlot, const FString&, TargetName, int32, BulletCount, bool, bHit, int32, RemainingLives);
 
 UCLASS()
@@ -104,6 +105,9 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Events|Multiplayer")
 	FShowDownMultiplayerRouletteStartedSignature OnMultiplayerRouletteStarted;
+
+	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Events|Multiplayer")
+	FShowDownMultiplayerRoulettePresentationSignature OnMultiplayerRoulettePresentation;
 
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Events|Multiplayer")
 	FShowDownMultiplayerRouletteResultSignature OnMultiplayerRouletteResult;
@@ -185,6 +189,9 @@ public:
 	void BroadcastMultiplayerRouletteStarted(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount);
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Multiplayer|Presentation")
+	void BroadcastMultiplayerRoulettePresentation(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount, bool bHit);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Multiplayer|Presentation")
 	void BroadcastMultiplayerRouletteResult(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount, bool bHit, int32 RemainingLives);
 
 	UFUNCTION(NetMulticast, Reliable)
@@ -198,6 +205,9 @@ public:
 
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastMultiplayerRouletteStarted(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount);
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastMultiplayerRoulettePresentation(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount, bool bHit);
 
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastMultiplayerRouletteResult(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount, bool bHit, int32 RemainingLives);

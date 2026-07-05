@@ -227,6 +227,21 @@ void AShowDownGameStateBase::BroadcastMultiplayerRouletteStarted(
 	OnMultiplayerRouletteStarted.Broadcast(TargetSlot, TargetName, BulletCount);
 }
 
+void AShowDownGameStateBase::BroadcastMultiplayerRoulettePresentation(
+	EShowDownPlayerSlot TargetSlot,
+	const FString& TargetName,
+	int32 BulletCount,
+	bool bHit)
+{
+	if (HasAuthority())
+	{
+		MulticastMultiplayerRoulettePresentation(TargetSlot, TargetName, BulletCount, bHit);
+		return;
+	}
+
+	OnMultiplayerRoulettePresentation.Broadcast(TargetSlot, TargetName, BulletCount, bHit);
+}
+
 void AShowDownGameStateBase::BroadcastMultiplayerRouletteResult(
 	EShowDownPlayerSlot TargetSlot,
 	const FString& TargetName,
@@ -266,6 +281,15 @@ void AShowDownGameStateBase::MulticastMultiplayerRouletteStarted_Implementation(
 	int32 BulletCount)
 {
 	OnMultiplayerRouletteStarted.Broadcast(TargetSlot, TargetName, BulletCount);
+}
+
+void AShowDownGameStateBase::MulticastMultiplayerRoulettePresentation_Implementation(
+	EShowDownPlayerSlot TargetSlot,
+	const FString& TargetName,
+	int32 BulletCount,
+	bool bHit)
+{
+	OnMultiplayerRoulettePresentation.Broadcast(TargetSlot, TargetName, BulletCount, bHit);
 }
 
 void AShowDownGameStateBase::MulticastMultiplayerRouletteResult_Implementation(
