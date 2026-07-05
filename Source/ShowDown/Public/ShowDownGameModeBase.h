@@ -24,6 +24,7 @@ class URoundResolver;
 class URouletteSystem;
 struct FCollectorBetDecision;
 struct FSDLLMBossContext;
+class AShowDownCharacter;
 class AShowDownGameStateBase;
 class AController;
 class APlayerController;
@@ -242,9 +243,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation", meta = (ClampMin = "0.0"))
 	float RevealAutoAdvanceSeconds = 0.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Multiplayer", meta = (ClampMin = "0.0"))
-	float MultiplayerRouletteResultDelay = 1.15f;
-
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Debug")
 	bool bShowGameFlowDebugMessages = true;
 
@@ -412,6 +410,8 @@ private:
 	void FinishSelfShotGunPresentation();
 	void BroadcastPendingSelfShotRouletteResult();
 	ASDSelfShotGunActor* FindSelfShotGunActor() const;
+	AShowDownCharacter* FindSingleRouletteCharacter(EShowDownSide TargetSide) const;
+	float ResolveMultiplayerRouletteResultDelay() const;
 	FSDCardHandLayoutSettings GetDefaultHandLayoutSettings() const;
 	FSDCardHandLayoutSettings ResolveHandLayoutSettings(EShowDownSide Side) const;
 	void ApplyCardMotionForSide(EShowDownSide Side, const TArray<ACard*>& Cards) const;

@@ -21,6 +21,7 @@
 #include "Presentation/SDSelfShotGunActor.h"
 #include "SDPlayerSeat.h"
 #include "SDPlayerState.h"
+#include "ShowDownCharacter.h"
 #include "ShowDownEosSubsystem.h"
 #include "ShowDownGameStateBase.h"
 #include "ShowDownHubFlowManager.h"
@@ -824,7 +825,20 @@ void AShowDownGameModeBase::PlaySelfShotGunPresentationThen(
 	bool bHasShotAimLocation = false;
 	FVector ShotSourceLocation = FVector::ZeroVector;
 	FVector ShotAimLocation = FVector::ZeroVector;
-	if (TargetSide == EShowDownSide::Collector)
+	if (AShowDownCharacter* TargetCharacter = FindSingleRouletteCharacter(TargetSide))
+	{
+		if (GunActor->TryResolveCharacterPresentationShot(TargetCharacter, ShotSourceLocation, ShotAimLocation))
+		{
+			ShotTargetActor = TargetSide == EShowDownSide::Player ? nullptr : TargetCharacter;
+			EnemyShotCamera = TargetSide == EShowDownSide::Collector
+				? GunActor->GetEnemyShotCinematicCamera()
+				: nullptr;
+			bHasShotSourceLocation = true;
+			bHasShotAimLocation = true;
+		}
+	}
+
+	if (!bHasShotSourceLocation && TargetSide == EShowDownSide::Collector)
 	{
 		ShotTargetActor = Collector
 			? Collector
@@ -943,6 +957,59 @@ void AShowDownGameModeBase::BroadcastPendingSelfShotRouletteResult()
 ASDSelfShotGunActor* AShowDownGameModeBase::FindSelfShotGunActor() const
 {
 	return Cast<ASDSelfShotGunActor>(UGameplayStatics::GetActorOfClass(this, ASDSelfShotGunActor::StaticClass()));
+}
+
+AShowDownCharacter* AShowDownGameModeBase::FindSingleRouletteCharacter(EShowDownSide TargetSide) const
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	AShowDownCharacter* LocalPlayerFallback = nullptr;
+	AShowDownCharacter* PlayerRoleFallback = nullptr;
+	for (TActorIterator<AShowDownCharacter> It(World); It; ++It)
+	{
+		AShowDownCharacter* CandidateCharacter = *It;
+		if (!IsValid(CandidateCharacter))
+		{
+			continue;
+		}
+
+		if (TargetSide == EShowDownSide::Player)
+		{
+			if (CandidateCharacter->IsLocalPlayerCharacter())
+			{
+				LocalPlayerFallback = CandidateCharacter;
+			}
+
+			if (CandidateCharacter->GetCharacterRole() == EShowDownCharacterRole::Player)
+			{
+				if (CandidateCharacter->GetPlayerSlot() == EShowDownPlayerSlot::Player1)
+				{
+					return CandidateCharacter;
+				}
+				if (!PlayerRoleFallback)
+				{
+					PlayerRoleFallback = CandidateCharacter;
+				}
+			}
+		}
+		else if (TargetSide == EShowDownSide::Collector
+			&& CandidateCharacter->GetCharacterRole() == EShowDownCharacterRole::Opponent)
+		{
+			return CandidateCharacter;
+		}
+	}
+
+	return LocalPlayerFallback ? LocalPlayerFallback : PlayerRoleFallback;
+}
+
+float AShowDownGameModeBase::ResolveMultiplayerRouletteResultDelay() const
+{
+	const ASDSelfShotGunActor* GunActor = FindSelfShotGunActor();
+	return GunActor ? GunActor->GetShotResolveDelay() : 0.0f;
 }
 
 void AShowDownGameModeBase::CollectorGiveCardToPlayer()
@@ -3509,7 +3576,7 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(ASDPlayerState* TargetPlay
 		ShowDownGameState->BroadcastMultiplayerRoulettePresentation(TargetSlot, TargetName, ClampedBulletCount, bHit);
 	}
 
-	const float ResultDelay = FMath::Max(0.0f, MultiplayerRouletteResultDelay);
+	const float ResultDelay = FMath::Max(0.0f, ResolveMultiplayerRouletteResultDelay());
 	if (ResultDelay <= KINDA_SMALL_NUMBER)
 	{
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())

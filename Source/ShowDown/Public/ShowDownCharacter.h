@@ -11,6 +11,7 @@ class ASDPlayerState;
 class UAnimationAsset;
 class UAnimMontage;
 class UAnimInstance;
+class USceneComponent;
 class UShowDownCharacterAnimInstance;
 
 UCLASS(Blueprintable)
@@ -73,6 +74,12 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Player Camera")
 	float GetPlayerCameraFOV() const { return PlayerCameraFOV; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Presentation")
+	USceneComponent* GetRevolverPresentationAnchor() const { return RevolverPresentationAnchor; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Presentation")
+	FTransform GetRevolverPresentationTransform() const;
 
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Character Camera")
 	float GetHeadLookPitch() const { return HeadLookPitch; }
@@ -170,6 +177,9 @@ protected:
 
 	UPROPERTY(ReplicatedUsing = OnRep_AnimState, BlueprintReadOnly, Category = "ShowDown|Character Animation")
 	EShowDownCharacterAnimState ReplicatedAnimState = EShowDownCharacterAnimState::Idle;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Presentation")
+	TObjectPtr<USceneComponent> RevolverPresentationAnchor;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Player Camera")
 	FName PlayerCameraAttachName = TEXT("Head");

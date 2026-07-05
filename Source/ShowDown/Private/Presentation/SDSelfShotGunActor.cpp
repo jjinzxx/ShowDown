@@ -6,6 +6,7 @@
 #include "Components/BoxComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
@@ -359,7 +360,7 @@ void ASDSelfShotGunActor::UseGunWithForcedResultAtTarget(bool bLiveRound, AActor
 	ForcedShotCamera = nullptr;
 	bHasForcedShotSourceLocation = false;
 	bHasForcedShotAimLocation = false;
-	bCurrentShotTargetsLocalPlayer = !IsValid(TargetActor);
+	bCurrentShotTargetsLocalPlayer = ShouldTreatTargetAsLocalPlayer(TargetActor);
 	StartGunUse();
 }
 
@@ -373,7 +374,7 @@ void ASDSelfShotGunActor::UseGunWithForcedResultAtTargetFromLocation(bool bLiveR
 	ForcedShotCamera = nullptr;
 	bHasForcedShotSourceLocation = true;
 	bHasForcedShotAimLocation = false;
-	bCurrentShotTargetsLocalPlayer = !IsValid(TargetActor);
+	bCurrentShotTargetsLocalPlayer = ShouldTreatTargetAsLocalPlayer(TargetActor);
 	StartGunUse();
 }
 
@@ -391,7 +392,7 @@ void ASDSelfShotGunActor::UseGunWithForcedResultAtTargetFromLocationAndCamera(
 	ForcedShotCamera = ShotCamera;
 	bHasForcedShotSourceLocation = true;
 	bHasForcedShotAimLocation = false;
-	bCurrentShotTargetsLocalPlayer = !IsValid(TargetActor);
+	bCurrentShotTargetsLocalPlayer = ShouldTreatTargetAsLocalPlayer(TargetActor);
 	StartGunUse();
 }
 
@@ -411,7 +412,7 @@ void ASDSelfShotGunActor::UseGunWithForcedResultAtTargetFromLocationAimAndCamera
 	ForcedShotCamera = ShotCamera;
 	bHasForcedShotSourceLocation = true;
 	bHasForcedShotAimLocation = true;
-	bCurrentShotTargetsLocalPlayer = !IsValid(TargetActor);
+	bCurrentShotTargetsLocalPlayer = ShouldTreatTargetAsLocalPlayer(TargetActor);
 	StartGunUse();
 }
 
@@ -423,6 +424,65 @@ ACameraActor* ASDSelfShotGunActor::GetEnemyShotCinematicCamera() const
 float ASDSelfShotGunActor::GetTargetShotSourcePullDistance() const
 {
 	return TargetShotSourcePullDistance;
+}
+
+float ASDSelfShotGunActor::GetShotResolveDelay() const
+{
+	float ResolveDelay = FMath::Max(0.0f, RaiseTime) + FMath::Max(0.0f, AimHoldTime);
+	if (bEnableMechanismAnimation)
+	{
+		ResolveDelay += FMath::Max(0.0f, MechanismCockTime);
+		ResolveDelay += FMath::Max(0.0f, HammerReleaseTime);
+	}
+
+	return ResolveDelay;
+}
+
+bool ASDSelfShotGunActor::TryResolveCharacterPresentationShot(
+	const AShowDownCharacter* TargetCharacter,
+	FVector& OutSourceLocation,
+	FVector& OutAimLocation) const
+{
+	if (!IsValid(TargetCharacter))
+	{
+		return false;
+	}
+
+	const USceneComponent* RevolverAnchor = TargetCharacter->GetRevolverPresentationAnchor();
+	if (!IsValid(RevolverAnchor))
+	{
+		return false;
+	}
+
+	OutSourceLocation = RevolverAnchor->GetComponentLocation();
+	OutAimLocation = TargetCharacter->GetActorLocation() + TargetShotAimOffset;
+
+	const USkeletalMeshComponent* CharacterMesh = TargetCharacter->GetMesh();
+	const FName AimAttachName = TargetCharacter->ResolvePlayerCameraAttachName();
+	if (CharacterMesh
+		&& AimAttachName != NAME_None
+		&& (CharacterMesh->DoesSocketExist(AimAttachName)
+			|| CharacterMesh->GetBoneIndex(AimAttachName) != INDEX_NONE))
+	{
+		OutAimLocation = CharacterMesh->GetSocketLocation(AimAttachName);
+	}
+
+	if ((OutAimLocation - OutSourceLocation).IsNearlyZero())
+	{
+		FVector AimDirection = TargetCharacter->GetActorForwardVector().GetSafeNormal();
+		if (AimDirection.IsNearlyZero())
+		{
+			AimDirection = RevolverAnchor->GetForwardVector().GetSafeNormal();
+		}
+		if (AimDirection.IsNearlyZero())
+		{
+			AimDirection = FVector::ForwardVector;
+		}
+
+		OutAimLocation = OutSourceLocation + AimDirection * 100.0f;
+	}
+
+	return true;
 }
 
 void ASDSelfShotGunActor::StartGunUse()
@@ -1314,24 +1374,31 @@ void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(EShowDownPlayerSlo
 		return;
 	}
 
-	const FVector AimLocation = TargetActor->GetActorLocation() + TargetShotAimOffset;
-	FVector SourcePullDirection = TargetActor->GetActorForwardVector().GetSafeNormal();
-	if (SourcePullDirection.IsNearlyZero())
+	FVector SourceLocation = FVector::ZeroVector;
+	FVector AimLocation = FVector::ZeroVector;
+	if (TryResolveCharacterPresentationShot(Cast<AShowDownCharacter>(TargetActor), SourceLocation, AimLocation))
 	{
-		SourcePullDirection = (AimLocation - GetActorLocation()).GetSafeNormal();
-	}
-	if (SourcePullDirection.IsNearlyZero())
-	{
-		SourcePullDirection = FVector::ForwardVector;
+		UseGunWithForcedResultAtTargetFromLocationAimAndCamera(
+			bHit,
+			TargetActor,
+			SourceLocation,
+			AimLocation,
+			nullptr);
+		return;
 	}
 
-	const FVector SourceLocation = AimLocation - SourcePullDirection * TargetShotSourcePullDistance;
-	UseGunWithForcedResultAtTargetFromLocationAimAndCamera(
-		bHit,
-		TargetActor,
-		SourceLocation,
-		AimLocation,
-		nullptr);
+	UseGunWithForcedResultAtTarget(bHit, TargetActor);
+}
+
+bool ASDSelfShotGunActor::ShouldTreatTargetAsLocalPlayer(AActor* TargetActor) const
+{
+	if (!IsValid(TargetActor))
+	{
+		return true;
+	}
+
+	const AShowDownCharacter* TargetCharacter = Cast<AShowDownCharacter>(TargetActor);
+	return TargetCharacter && TargetCharacter->IsLocalPlayerCharacter();
 }
 
 FTransform ASDSelfShotGunActor::GetFirstPersonGunTransform() const
@@ -1351,11 +1418,11 @@ FTransform ASDSelfShotGunActor::GetFirstPersonGunTransform() const
 				+ CameraMatrix.GetScaledAxis(EAxis::Y) * FirstPersonCameraOffset.Y
 				+ CameraMatrix.GetScaledAxis(EAxis::Z) * FirstPersonCameraOffset.Z;
 
-		if (AActor* ForcedTarget = ForcedShotTargetActor.Get())
+		if (bHasForcedShotAimLocation || ForcedShotTargetActor.IsValid())
 		{
 			const FVector AimLocation = bHasForcedShotAimLocation
 				? ForcedShotAimLocation
-				: ForcedTarget->GetActorLocation() + TargetShotAimOffset;
+				: ForcedShotTargetActor->GetActorLocation() + TargetShotAimOffset;
 			return FTransform(
 				(AimLocation - TargetLocation).Rotation() + TargetShotRotationOffset,
 				TargetLocation,
@@ -1382,11 +1449,11 @@ FTransform ASDSelfShotGunActor::GetFirstPersonGunTransform() const
 					+ CameraMatrix.GetScaledAxis(EAxis::Y) * FirstPersonCameraOffset.Y
 					+ CameraMatrix.GetScaledAxis(EAxis::Z) * FirstPersonCameraOffset.Z;
 
-			if (AActor* ForcedTarget = ForcedShotTargetActor.Get())
+			if (bHasForcedShotAimLocation || ForcedShotTargetActor.IsValid())
 			{
 				const FVector AimLocation = bHasForcedShotAimLocation
 					? ForcedShotAimLocation
-					: ForcedTarget->GetActorLocation() + TargetShotAimOffset;
+					: ForcedShotTargetActor->GetActorLocation() + TargetShotAimOffset;
 				return FTransform(
 					(AimLocation - TargetLocation).Rotation() + TargetShotRotationOffset,
 					TargetLocation,

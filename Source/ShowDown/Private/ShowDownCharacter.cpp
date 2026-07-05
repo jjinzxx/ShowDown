@@ -6,6 +6,7 @@
 #include "Animation/AnimSequenceBase.h"
 #include "Animation/Skeleton.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -53,6 +54,11 @@ AShowDownCharacter::AShowDownCharacter()
 	CharacterMesh->SetRelativeLocation(FVector(0.0f, 0.0f, -96.0f));
 	CharacterMesh->SetRelativeRotation(FRotator(0.0f, -90.0f, 0.0f));
 	CharacterMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+	RevolverPresentationAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("RevolverPresentationAnchor"));
+	RevolverPresentationAnchor->SetupAttachment(CharacterMesh, TEXT("Head"));
+	RevolverPresentationAnchor->SetRelativeLocation(FVector(34.0f, 26.0f, -18.0f));
+	RevolverPresentationAnchor->SetRelativeRotation(FRotator::ZeroRotator);
 
 	static ConstructorHelpers::FObjectFinder<USkeletalMesh> DefaultMesh(
 		TEXT("/Game/Assets/asd/Idle.Idle"));
@@ -187,6 +193,13 @@ void AShowDownCharacter::SetPlayerViewRotation(FRotator ViewRotation)
 		ReplicatedPlayerViewRotation = ViewRotation;
 		ForceNetUpdate();
 	}
+}
+
+FTransform AShowDownCharacter::GetRevolverPresentationTransform() const
+{
+	return RevolverPresentationAnchor
+		? RevolverPresentationAnchor->GetComponentTransform()
+		: GetActorTransform();
 }
 
 void AShowDownCharacter::StartHitRagdoll()

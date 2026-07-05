@@ -9,6 +9,7 @@
 
 class UBoxComponent;
 class ACameraActor;
+class AShowDownCharacter;
 class UAudioComponent;
 class UPointLightComponent;
 class USceneComponent;
@@ -77,6 +78,14 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Target Shot")
 	float GetTargetShotSourcePullDistance() const;
+
+	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Timing")
+	float GetShotResolveDelay() const;
+
+	bool TryResolveCharacterPresentationShot(
+		const AShowDownCharacter* TargetCharacter,
+		FVector& OutSourceLocation,
+		FVector& OutAimLocation) const;
 
 	virtual bool CanInteract_Implementation(AActor* Interactor) const override;
 	virtual void Interact_Implementation(AActor* Interactor) override;
@@ -479,6 +488,7 @@ private:
 
 	AActor* FindMultiplayerShotTarget(EShowDownPlayerSlot TargetSlot) const;
 	void PlayMultiplayerRoulettePresentation(EShowDownPlayerSlot TargetSlot, bool bHit);
+	bool ShouldTreatTargetAsLocalPlayer(AActor* TargetActor) const;
 
 	static FRotator LerpRotation(const FRotator& From, const FRotator& To, float Alpha);
 	void StartHitSequence();
