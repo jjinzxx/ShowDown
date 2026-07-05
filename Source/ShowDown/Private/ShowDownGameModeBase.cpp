@@ -1289,6 +1289,14 @@ float AShowDownGameModeBase::ResolveMultiplayerRouletteResultDelay() const
 	return GunActor ? GunActor->GetShotResolveDelay() : 0.0f;
 }
 
+float AShowDownGameModeBase::ResolveMultiplayerRoulettePresentationDelay(bool bLiveRound) const
+{
+	const ASDSelfShotGunActor* GunActor = FindSelfShotGunActor();
+	return GunActor
+		? GunActor->GetPresentationFinishDelay(bLiveRound)
+		: ResolveMultiplayerRouletteResultDelay();
+}
+
 void AShowDownGameModeBase::CollectorGiveCardToPlayer()
 {
 	if (!CardSystem){
@@ -3168,16 +3176,7 @@ void AShowDownGameModeBase::EnsureMultiplayerSeatAnchors()
 			continue;
 		}
 
-		if (true)
-		{
-			SeatAnchor->ConfigureFromCameraTransform(GetMultiplayerPawnSpawnTransform(nullptr, SeatIndex));
-		}
-		else
-		{
-			SeatAnchor->ConfigureFromCameraTransform(GetMultiplayerPawnSpawnTransform(nullptr, SeatIndex));
-			UE_LOG(LogTemp, Warning, TEXT("%d번 좌석 카메라를 찾지 못해 기본 좌석 위치를 사용합니다."), SeatIndex + 1);
-		}
-
+		SeatAnchor->ConfigureFromCameraTransform(GetMultiplayerPawnSpawnTransform(nullptr, SeatIndex));
 		MultiplayerSeatAnchors.Add(SeatAnchor);
 	}
 }
@@ -3749,6 +3748,7 @@ void AShowDownGameModeBase::FinishMultiplayerRoundByReveal()
 		ASDPlayerState* NextFirstCandidate = nullptr;
 		int32 NextFirstRank = TNumericLimits<int32>::Min();
 		float MaxRouletteDelay = 0.0f;
+		float RouletteSequenceStartDelay = 0.0f;
 		for (ASDPlayerState* Player : RouletteTargets)
 		{
 			if (!Player || !Player->ForeheadCard)
@@ -3763,7 +3763,15 @@ void AShowDownGameModeBase::FinishMultiplayerRoundByReveal()
 				NextFirstRank = Rank;
 			}
 
-			MaxRouletteDelay = FMath::Max(MaxRouletteDelay, ApplyMultiplayerRoulette(Player, Player->CurrentBet));
+			const float ShotFinishDelay = ApplyMultiplayerRoulette(
+				Player,
+				Player->CurrentBet,
+				RouletteSequenceStartDelay);
+			MaxRouletteDelay = FMath::Max(MaxRouletteDelay, ShotFinishDelay);
+			if (ShotFinishDelay > RouletteSequenceStartDelay)
+			{
+				RouletteSequenceStartDelay = ShotFinishDelay + 0.05f;
+			}
 		}
 
 		if (NextFirstCandidate)
@@ -3829,7 +3837,7 @@ void AShowDownGameModeBase::FinishMultiplayerRoundByFold(ASDPlayerState* FoldedP
 	EndMultiplayerRound();
 }
 
-float AShowDownGameModeBase::ApplyMultiplayerRoulette(ASDPlayerState* TargetPlayer, int32 BulletCount)
+float AShowDownGameModeBase::ApplyMultiplayerRoulette(ASDPlayerState* TargetPlayer, int32 BulletCount, float StartDelay)
 {
 	if (!TargetPlayer || !RouletteSystem)
 	{
@@ -3837,44 +3845,41 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(ASDPlayerState* TargetPlay
 	}
 
 	const int32 ClampedBulletCount = FMath::Clamp(BulletCount, 1, 6);
-	const int32 PreviousLives = TargetPlayer->Lives;
-	const FString TargetName = TargetPlayer->GetPlayerName();
-	const EShowDownPlayerSlot TargetSlot = TargetPlayer->ShowDownSlot;
-	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
-	{
-		ShowDownGameState->BroadcastMultiplayerRouletteStarted(TargetSlot, TargetName, ClampedBulletCount);
-	}
-
 	const bool bHit = RouletteSystem->RollRoulette(ClampedBulletCount);
-	NotifyMultiplayerStatus(FString::Printf(
-		TEXT("%s 룰렛 %d/6: %s"),
-		*TargetName,
-		ClampedBulletCount,
-		bHit ? TEXT("명중") : TEXT("빗나감")));
-
-	if (bHit)
-	{
-		TargetPlayer->Lives = FMath::Max(0, TargetPlayer->Lives - 1);
-		if (PreviousLives > 0 && TargetPlayer->Lives <= 0)
-		{
-			MultiplayerEliminationOrder.AddUnique(TargetPlayer);
-		}
-		NotifyMultiplayerStatus(FString::Printf(
-			TEXT("%s 남은 목숨: %d"),
-			*TargetName,
-			TargetPlayer->Lives));
-	}
-
-	TargetPlayer->ForceNetUpdate();
-	const int32 RemainingLives = TargetPlayer->Lives;
-	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
-	{
-		ShowDownGameState->BroadcastMultiplayerRoulettePresentation(TargetSlot, TargetName, ClampedBulletCount, bHit);
-	}
-
+	const EShowDownPlayerSlot TargetSlot = TargetPlayer->ShowDownSlot;
+	const FString TargetName = TargetPlayer->GetPlayerName();
+	const float SafeStartDelay = FMath::Max(0.0f, StartDelay);
 	const float ResultDelay = FMath::Max(0.0f, ResolveMultiplayerRouletteResultDelay());
-	if (ResultDelay <= KINDA_SMALL_NUMBER)
+	const float FinishDelay = FMath::Max(ResultDelay, ResolveMultiplayerRoulettePresentationDelay(bHit));
+	const TWeakObjectPtr<ASDPlayerState> WeakTargetPlayer(TargetPlayer);
+
+	auto BroadcastResult = [this, WeakTargetPlayer, TargetSlot, TargetName, ClampedBulletCount, bHit]()
 	{
+		ASDPlayerState* ResolvedTargetPlayer = WeakTargetPlayer.Get();
+		if (!ResolvedTargetPlayer)
+		{
+			return;
+		}
+
+		const int32 PreviousLives = ResolvedTargetPlayer->Lives;
+		if (bHit)
+		{
+			ResolvedTargetPlayer->Lives = FMath::Max(0, ResolvedTargetPlayer->Lives - 1);
+			if (PreviousLives > 0 && ResolvedTargetPlayer->Lives <= 0)
+			{
+				MultiplayerEliminationOrder.AddUnique(ResolvedTargetPlayer);
+			}
+		}
+
+		ResolvedTargetPlayer->ForceNetUpdate();
+		const int32 RemainingLives = ResolvedTargetPlayer->Lives;
+		NotifyMultiplayerStatus(FString::Printf(
+			TEXT("%s roulette %d/6: %s (lives: %d)"),
+			*TargetName,
+			ClampedBulletCount,
+			bHit ? TEXT("hit") : TEXT("miss"),
+			RemainingLives));
+
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 		{
 			ShowDownGameState->BroadcastMultiplayerRouletteResult(
@@ -3884,26 +3889,46 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(ASDPlayerState* TargetPlay
 				bHit,
 				RemainingLives);
 		}
-		return 0.0f;
+	};
+
+	auto StartPresentation = [this, WeakTargetPlayer, TargetSlot, TargetName, ClampedBulletCount, bHit, ResultDelay, BroadcastResult]()
+	{
+		if (!WeakTargetPlayer.IsValid())
+		{
+			return;
+		}
+
+		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+		{
+			ShowDownGameState->BroadcastMultiplayerRouletteStarted(TargetSlot, TargetName, ClampedBulletCount);
+			ShowDownGameState->BroadcastMultiplayerRoulettePresentation(TargetSlot, TargetName, ClampedBulletCount, bHit);
+		}
+
+		if (ResultDelay <= KINDA_SMALL_NUMBER)
+		{
+			BroadcastResult();
+			return;
+		}
+
+		FTimerDelegate ResultDelegate;
+		ResultDelegate.BindWeakLambda(this, BroadcastResult);
+		FTimerHandle ResultTimerHandle;
+		GetWorldTimerManager().SetTimer(ResultTimerHandle, ResultDelegate, ResultDelay, false);
+	};
+
+	if (SafeStartDelay <= KINDA_SMALL_NUMBER)
+	{
+		StartPresentation();
+	}
+	else
+	{
+		FTimerDelegate StartDelegate;
+		StartDelegate.BindWeakLambda(this, StartPresentation);
+		FTimerHandle StartTimerHandle;
+		GetWorldTimerManager().SetTimer(StartTimerHandle, StartDelegate, SafeStartDelay, false);
 	}
 
-	FTimerDelegate ResultDelegate;
-	ResultDelegate.BindWeakLambda(this, [this, TargetSlot, TargetName, ClampedBulletCount, bHit, RemainingLives]()
-	{
-		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
-		{
-			ShowDownGameState->BroadcastMultiplayerRouletteResult(
-				TargetSlot,
-				TargetName,
-				ClampedBulletCount,
-				bHit,
-				RemainingLives);
-		}
-	});
-
-	FTimerHandle ResultTimerHandle;
-	GetWorldTimerManager().SetTimer(ResultTimerHandle, ResultDelegate, ResultDelay, false);
-	return ResultDelay;
+	return SafeStartDelay + FinishDelay;
 }
 
 void AShowDownGameModeBase::EndMultiplayerRound()

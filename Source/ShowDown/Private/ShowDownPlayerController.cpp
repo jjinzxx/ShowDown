@@ -19,7 +19,6 @@
 #include "Materials/MaterialInterface.h"
 #include "PlayerPawn.h"
 #include "SDPlayerState.h"
-#include "SDCardPlacementAnchor.h"
 #include "ShowDownCharacter.h"
 #include "ShowDownChatWidget.h"
 #include "ShowDownEosSubsystem.h"
@@ -138,52 +137,6 @@ namespace
 	bool IsMultiplayerGameMap(const UWorld* World)
 	{
 		return World && World->GetNetMode() != NM_Standalone;
-	}
-
-	bool TryGetSharedTableLocation(UWorld* World, FVector& OutLocation)
-	{
-		if (!World)
-		{
-			return false;
-		}
-
-		FVector HandAnchorSum = FVector::ZeroVector;
-		int32 HandAnchorCount = 0;
-		FVector AnyAnchorSum = FVector::ZeroVector;
-		int32 AnyAnchorCount = 0;
-		for (TActorIterator<ASDCardPlacementAnchor> It(World); It; ++It)
-		{
-			const ASDCardPlacementAnchor* Anchor = *It;
-			if (!Anchor)
-			{
-				continue;
-			}
-
-			const FVector AnchorLocation = Anchor->GetActorLocation();
-			AnyAnchorSum += AnchorLocation;
-			++AnyAnchorCount;
-			if (Anchor->IsHandAnchor())
-			{
-				HandAnchorSum += AnchorLocation;
-				++HandAnchorCount;
-			}
-		}
-
-		if (HandAnchorCount > 0)
-		{
-			OutLocation = HandAnchorSum / static_cast<float>(HandAnchorCount);
-			return true;
-		}
-
-		if (AnyAnchorCount > 0)
-		{
-			OutLocation = AnyAnchorSum / static_cast<float>(AnyAnchorCount);
-			OutLocation.Z -= 30.0f;
-			return true;
-		}
-
-		OutLocation = FVector(-5457.0f, -670.0f, 324.0f);
-		return true;
 	}
 }
 
@@ -333,8 +286,8 @@ void AShowDownPlayerController::ClientUseMultiplayerSeatCamera_Implementation(
 		ShowDownPlayerState ? *ShowDownPlayerState->GetPlayerName() : TEXT("None"));
 
 	// A client can receive this RPC while its seamless level transition is still
-	// loading. Keep the seat number and retry from PlayerTick once the target
-	// map's CameraActors actually exist locally.
+	// loading. Keep the seat number and retry from PlayerTick once the matching
+	// replicated ShowDownCharacter is available locally.
 	PendingMultiplayerSeatIndex = SeatIndex;
 	PendingMultiplayerSeatCameraLookSensitivity = SeatCameraLookSensitivity;
 	PendingMultiplayerCameraMinPitch = MinPitchDegrees;
@@ -402,80 +355,6 @@ bool AShowDownPlayerController::TryApplyPendingMultiplayerSeatCamera()
 	}
 
 	return TryApplyPendingMultiplayerCharacterCamera();
-
-	FVector TableLocation = FVector::ZeroVector;
-	if (!TryGetSharedTableLocation(GetWorld(), TableLocation))
-	{
-		UE_LOG(LogTemp, Verbose, TEXT("멀티플레이 테이블 대기 중: SeatIndex=%d"), PendingMultiplayerSeatIndex);
-		return false;
-	}
-
-	return IsMultiplayerGameMap(GetWorld())
-		&& UseFallbackMultiplayerSeatCamera(PendingMultiplayerSeatIndex);
-
-	const FName SeatCameraTag(*FString::Printf(TEXT("MP_SeatCamera_%d"), PendingMultiplayerSeatIndex + 1));
-	for (TActorIterator<ACameraActor> It(GetWorld()); It; ++It)
-	{
-		ACameraActor* SeatCamera = *It;
-		if (!SeatCamera || !SeatCamera->ActorHasTag(SeatCameraTag))
-		{
-			continue;
-		}
-
-		const float DistanceFromTable = FVector::Dist2D(SeatCamera->GetActorLocation(), TableLocation);
-		UE_LOG(
-			LogTemp,
-			Log,
-			TEXT("멀티플레이 좌석 카메라 후보: Tag=%s Actor=%s Location=%s Rotation=%s TableDistance2D=%.1f"),
-			*SeatCameraTag.ToString(),
-			*SeatCamera->GetName(),
-			*SeatCamera->GetActorLocation().ToCompactString(),
-			*SeatCamera->GetActorRotation().ToCompactString(),
-			DistanceFromTable);
-		if (DistanceFromTable > 2500.0f)
-		{
-			UE_LOG(
-				LogTemp,
-				Warning,
-				TEXT("%s 카메라가 테이블에서 너무 멀어 무시합니다. Actor=%s Distance=%.1f"),
-				*SeatCameraTag.ToString(),
-				*SeatCamera->GetName(),
-				DistanceFromTable);
-			continue;
-		}
-
-		SetViewTarget(SeatCamera);
-		SetFixedCameraMouseLook(
-			SeatCamera,
-			PendingMultiplayerSeatCameraLookSensitivity,
-			PendingMultiplayerCameraMinPitch,
-			PendingMultiplayerCameraMaxPitch,
-			PendingMultiplayerCameraMinYawOffset,
-			PendingMultiplayerCameraMaxYawOffset,
-			bPendingMultiplayerCameraInvertMouseY);
-		SetFixedCameraBreathingSway(
-			bPendingMultiplayerCameraBreathingSway,
-			PendingMultiplayerCameraBreathingSwaySpeed,
-			PendingMultiplayerCameraBreathingSwayRotationAmplitude,
-			PendingMultiplayerCameraBreathingSwayLocationAmplitude,
-			PendingMultiplayerCameraBreathingSwayBlendInTime);
-		EnsureChatWidget();
-		bPendingMultiplayerSeatCamera = false;
-		bHandleShowDownGameplayInput = true;
-		bShowCenterCrosshair = true;
-		RestoreMultiplayerGameplayInput();
-		CreateCenterCrosshairWidget();
-		UpdateCenterCrosshairVisibility();
-		UE_LOG(LogTemp, Log, TEXT("멀티플레이 좌석 카메라 적용: %s"), *SeatCameraTag.ToString());
-		return true;
-	}
-
-	// Some older copies of the level do not contain the named CameraActors (or
-	// do not preserve their actor tags after a map migration). Do not leave the
-	// player at a PlayerStart in that case: create the same four table views
-	// locally from the authoritative replicated table position.
-	return IsMultiplayerGameMap(GetWorld())
-		&& UseFallbackMultiplayerSeatCamera(PendingMultiplayerSeatIndex);
 }
 
 bool AShowDownPlayerController::TryApplyPendingMultiplayerCharacterCamera()
@@ -545,74 +424,6 @@ bool AShowDownPlayerController::TryApplyPendingMultiplayerCharacterCamera()
 		PendingMultiplayerSeatIndex,
 		static_cast<int32>(LocalPlayerCameraCharacterTarget->GetPlayerSlot()),
 		*LocalPlayerCameraCharacterTarget->GetName());
-	return true;
-}
-
-bool AShowDownPlayerController::UseFallbackMultiplayerSeatCamera(int32 SeatIndex)
-{
-	if (!IsLocalController() || !GetWorld() || SeatIndex < 0 || SeatIndex > 3)
-	{
-		return false;
-	}
-
-	static const FVector SeatOffsets[] = {
-		FVector(-85.0f, 0.0f, 45.0f),
-		FVector(85.0f, 0.0f, 45.0f),
-		FVector(0.0f, -200.0f, 45.0f),
-		FVector(0.0f, 200.0f, 45.0f)
-	};
-	static const float SeatYaws[] = { 0.0f, 180.0f, 90.0f, -90.0f };
-
-	FVector TableCenter = FVector::ZeroVector;
-	if (!TryGetSharedTableLocation(GetWorld(), TableCenter))
-	{
-		return false;
-	}
-
-	const FTransform CameraTransform(
-		FRotator(-20.0f, SeatYaws[SeatIndex], 0.0f),
-		TableCenter + SeatOffsets[SeatIndex]);
-	if (!IsValid(LocalFallbackSeatCamera))
-	{
-		FActorSpawnParameters SpawnParams;
-		SpawnParams.Owner = this;
-		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-		LocalFallbackSeatCamera = GetWorld()->SpawnActor<ACameraActor>(
-			ACameraActor::StaticClass(), CameraTransform, SpawnParams);
-	}
-	else
-	{
-		LocalFallbackSeatCamera->SetActorTransform(CameraTransform);
-	}
-
-	if (!IsValid(LocalFallbackSeatCamera))
-	{
-		return false;
-	}
-
-	SetViewTarget(LocalFallbackSeatCamera);
-	SetFixedCameraMouseLook(
-		LocalFallbackSeatCamera,
-		PendingMultiplayerSeatCameraLookSensitivity,
-		PendingMultiplayerCameraMinPitch,
-		PendingMultiplayerCameraMaxPitch,
-		PendingMultiplayerCameraMinYawOffset,
-		PendingMultiplayerCameraMaxYawOffset,
-		bPendingMultiplayerCameraInvertMouseY);
-	SetFixedCameraBreathingSway(
-		bPendingMultiplayerCameraBreathingSway,
-		PendingMultiplayerCameraBreathingSwaySpeed,
-		PendingMultiplayerCameraBreathingSwayRotationAmplitude,
-		PendingMultiplayerCameraBreathingSwayLocationAmplitude,
-		PendingMultiplayerCameraBreathingSwayBlendInTime);
-	EnsureChatWidget();
-	bPendingMultiplayerSeatCamera = false;
-	bHandleShowDownGameplayInput = true;
-	bShowCenterCrosshair = true;
-	RestoreMultiplayerGameplayInput();
-	CreateCenterCrosshairWidget();
-	UpdateCenterCrosshairVisibility();
-	UE_LOG(LogTemp, Warning, TEXT("Authored seat camera missing; using fallback multiplayer seat camera %d."), SeatIndex + 1);
 	return true;
 }
 
@@ -1944,38 +1755,7 @@ void AShowDownPlayerController::UpdateFixedCameraMouseLook(float DeltaTime)
 	FixedCameraMouseLookTarget->SetWorldLocationAndRotation(
 		FixedCameraBaseLocation + SwayLocation + SteppedShakeLocation,
 		FixedCameraLookRotation + SwayRotation + SteppedShakeRotation);
-	SubmitDebugCameraLookRotation(FixedCameraLookRotation, DeltaTime);
 	SubmitCharacterHeadLookRotation(FixedCameraLookRotation, DeltaTime);
-}
-
-void AShowDownPlayerController::SubmitDebugCameraLookRotation(const FRotator& LookRotation, float DeltaTime)
-{
-	if (!IsLocalController() || !IsMultiplayerGameMap(GetWorld()))
-	{
-		return;
-	}
-
-	DebugCameraLookReplicationElapsedTime += DeltaTime;
-	const float PitchDelta = FMath::Abs(FRotator::NormalizeAxis(LookRotation.Pitch - LastSubmittedDebugCameraLookRotation.Pitch));
-	const float YawDelta = FMath::Abs(FRotator::NormalizeAxis(LookRotation.Yaw - LastSubmittedDebugCameraLookRotation.Yaw));
-	if (DebugCameraLookReplicationElapsedTime < 0.05f && PitchDelta < 0.5f && YawDelta < 0.5f)
-	{
-		return;
-	}
-
-	DebugCameraLookReplicationElapsedTime = 0.0f;
-	LastSubmittedDebugCameraLookRotation = LookRotation;
-
-	if (HasAuthority())
-	{
-		if (APlayerPawn* PlayerPawn = Cast<APlayerPawn>(GetPawn()))
-		{
-			PlayerPawn->SetReplicatedCameraLookRotation(LookRotation);
-		}
-		return;
-	}
-
-	ServerUpdateDebugCameraLookRotation(LookRotation);
 }
 
 void AShowDownPlayerController::SubmitCharacterHeadLookRotation(const FRotator& LookRotation, float DeltaTime)
@@ -2530,14 +2310,6 @@ void AShowDownPlayerController::ServerRequestMultiplayerRestart_Implementation()
 	if (AShowDownGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AShowDownGameModeBase>() : nullptr)
 	{
 		GameMode->RequestMultiplayerRestartFromController(this);
-	}
-}
-
-void AShowDownPlayerController::ServerUpdateDebugCameraLookRotation_Implementation(FRotator LookRotation)
-{
-	if (APlayerPawn* PlayerPawn = Cast<APlayerPawn>(GetPawn()))
-	{
-		PlayerPawn->SetReplicatedCameraLookRotation(LookRotation);
 	}
 }
 

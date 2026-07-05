@@ -315,9 +315,6 @@ public:
 	void ServerRequestMultiplayerRestart();
 
 	UFUNCTION(Server, Unreliable)
-	void ServerUpdateDebugCameraLookRotation(FRotator LookRotation);
-
-	UFUNCTION(Server, Unreliable)
 	void ServerUpdateCharacterHeadLookRotation(FRotator LookRotation);
 
 	UFUNCTION(Client, Reliable)
@@ -330,7 +327,7 @@ public:
 	UFUNCTION(Client, Reliable)
 	void ClientEnterMultiplayerGameplay();
 
-	// Selects one of the level-placed multiplayer seat cameras by its zero-based index.
+	// Applies the local multiplayer player's character head camera by zero-based seat index.
 	UFUNCTION(Client, Reliable)
 	void ClientUseMultiplayerSeatCamera(
 		int32 SeatIndex,
@@ -374,7 +371,6 @@ private:
 	AShowDownCharacter* FindLocalCharacterForPlayerCamera() const;
 	void UpdateCharacterPlayerCamera(float DeltaTime);
 	void UpdateFixedCameraMouseLook(float DeltaTime);
-	void SubmitDebugCameraLookRotation(const FRotator& LookRotation, float DeltaTime);
 	void SubmitCharacterHeadLookRotation(const FRotator& LookRotation, float DeltaTime);
 	void RestoreFixedCameraBaseTransform();
 	FRotator GetBreathingSwayRotationOffset(float Strength) const;
@@ -387,7 +383,6 @@ private:
 	void EnsureLeaveConfirmWidget();
 	bool TryApplyPendingMultiplayerSeatCamera();
 	bool TryApplyPendingMultiplayerCharacterCamera();
-	bool UseFallbackMultiplayerSeatCamera(int32 SeatIndex);
 	void RestoreMultiplayerGameplayInput();
 	void ApplyChatInputMode(bool bOpen);
 	void CreateCenterCrosshairWidget();
@@ -437,10 +432,6 @@ private:
 	UPROPERTY()
 	TObjectPtr<USceneComponent> FixedCameraMouseLookTarget = nullptr;
 
-	// Created only on a local client. Every player keeps an independent,
-	// slot-specific view derived from the same single-player table anchors.
-	TObjectPtr<ACameraActor> LocalFallbackSeatCamera = nullptr;
-
 	UPROPERTY()
 	TObjectPtr<AShowDownCharacter> LocalPlayerCameraCharacterTarget = nullptr;
 
@@ -481,10 +472,8 @@ private:
 	float CameraSteppedShakeSeed = 0.0f;
 	FRotator CameraSteppedShakeRotationAmplitude = FRotator::ZeroRotator;
 	FVector CameraSteppedShakeLocationAmplitude = FVector::ZeroVector;
-	float DebugCameraLookReplicationElapsedTime = 0.0f;
 	float CharacterPlayerCameraRetryElapsedTime = 0.0f;
 	float CharacterHeadLookReplicationElapsedTime = 0.0f;
-	FRotator LastSubmittedDebugCameraLookRotation = FRotator::ZeroRotator;
 	FRotator LastSubmittedCharacterHeadLookRotation = FRotator::ZeroRotator;
 	bool bFixedCameraInvertMouseY = true;
 	bool bVoiceChatEventsBound = false;

@@ -481,6 +481,40 @@ float ASDSelfShotGunActor::GetShotResolveDelay() const
 	return ResolveDelay;
 }
 
+float ASDSelfShotGunActor::GetPresentationFinishDelay(bool bLiveRound) const
+{
+	const float ResolveDelay = GetShotResolveDelay();
+	const float GunMotionAfterResolve = bLiveRound
+		? FMath::Max(0.0f, ShotHoldTime) + FMath::Max(0.0f, ReturnTime)
+		: FMath::Max(0.0f, EmptyShotImpactTime)
+			+ FMath::Max(0.0f, EmptyShotImpactHoldTime)
+			+ FMath::Max(0.0f, ShotHoldTime)
+			+ FMath::Max(0.0f, ReturnTime);
+
+	float FinishDelay = ResolveDelay + GunMotionAfterResolve;
+	if (bUseSelfShotCinematicCamera)
+	{
+		FinishDelay = FMath::Max(FinishDelay, ResolveDelay + FMath::Max(0.0f, CinematicCameraHoldTime));
+	}
+
+	if (bLiveRound && bEnableHitSequence)
+	{
+		const float RecoveryEffectDuration =
+			FMath::Max(0.0f, RecoveryHitEffectHoldTime)
+			+ FMath::Max(0.0f, RecoveryHitEffectBlendOutTime);
+		const float RecoveryShakeDuration =
+			FMath::Max(0.0f, RecoveryHitShakeHoldTime)
+			+ FMath::Max(0.0f, RecoveryHitShakeBlendOutTime);
+		const float HitSequenceDuration =
+			FMath::Max(0.0f, InitialHitEffectDuration)
+			+ FMath::Max(0.0f, HitBlackoutDuration)
+			+ FMath::Max(RecoveryEffectDuration, RecoveryShakeDuration);
+		FinishDelay = FMath::Max(FinishDelay, ResolveDelay + HitSequenceDuration);
+	}
+
+	return FinishDelay;
+}
+
 bool ASDSelfShotGunActor::TryResolveCharacterPresentationShot(
 	const AShowDownCharacter* TargetCharacter,
 	FVector& OutSourceLocation,

@@ -30,10 +30,6 @@ public:
 	//카메라 컴포넌트 선언 
 	UPROPERTY(VisibleAnywhere, Category = Camera)
 	class UCameraComponent* cameraComp;
-
-	UPROPERTY(VisibleAnywhere, Category = "ShowDown|Debug")
-	class UStaticMeshComponent* DebugCameraLookMarker;
-	
 	//손패 카드 슬롯 위치 컴포넌트
 	UPROPERTY(VisibleAnywhere, Category = CardSlot)
 	class USceneComponent* PlayerHandCard;
@@ -119,19 +115,6 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Debug")
 	bool bEnableDebugWinCommand = false;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Debug")
-	bool bShowDebugCameraLookMarker = false;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Debug")
-	float DebugCameraLookMarkerForwardOffset = 24.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Debug")
-	float DebugCameraLookMarkerHeightOffset = 28.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Debug")
-	FVector DebugCameraLookMarkerScale = FVector(0.18f, 0.08f, 0.08f);
-	
 	/*
 	//
 	UPROPERTY(VisibleAnywhere, Category="Table")
@@ -208,16 +191,11 @@ public:
 
 	UFUNCTION(Server, Reliable)
 	void ServerPlayerFold();
-
-	void SetReplicatedCameraLookRotation(const FRotator& LookRotation);
-
 protected:
 	// Called when the game starts or when spawned
 	virtual void PreInitializeComponents() override;
 	virtual void BeginPlay() override;
 	virtual void PossessedBy(AController* NewController) override;
-	virtual void GetLifetimeReplicatedProps(TArray<class FLifetimeProperty>& OutLifetimeProps) const override;
-
 public:
 	// Called every frame
 	virtual void Tick(float DeltaTime) override;
@@ -253,11 +231,4 @@ private:
 	void EnsureChatWidget();
 	void ApplyChatInputMode(bool bOpen);
 	FString GetChatSenderName() const;
-	void UpdateDebugCameraLookMarker();
-
-	UFUNCTION()
-	void OnRep_DebugCameraLookRotation();
-
-	UPROPERTY(ReplicatedUsing = OnRep_DebugCameraLookRotation)
-	FRotator DebugCameraLookRotation = FRotator::ZeroRotator;
 };

@@ -415,6 +415,7 @@ private:
 	void ConfigureSinglePlayerCharacters();
 	void ConfigureMultiplayerCharacters(const TArray<ASDPlayerState*>& Players);
 	float ResolveMultiplayerRouletteResultDelay() const;
+	float ResolveMultiplayerRoulettePresentationDelay(bool bLiveRound) const;
 	FSDCardHandLayoutSettings GetDefaultHandLayoutSettings() const;
 	FSDCardHandLayoutSettings ResolveHandLayoutSettings(EShowDownSide Side) const;
 	void ApplyCardMotionForSide(EShowDownSide Side, const TArray<ACard*>& Cards) const;
@@ -443,7 +444,7 @@ private:
 	void HandleMultiplayerBetAction(ASDPlayerState* SubmittingPlayer, EShowDownBetAction Action, int32 TargetBet);
 	void FinishMultiplayerRoundByReveal();
 	void FinishMultiplayerRoundByFold(ASDPlayerState* FoldedPlayer);
-	float ApplyMultiplayerRoulette(ASDPlayerState* TargetPlayer, int32 BulletCount);
+	float ApplyMultiplayerRoulette(ASDPlayerState* TargetPlayer, int32 BulletCount, float StartDelay = 0.0f);
 	void EndMultiplayerRound();
 	void ShowMultiplayerFinalRanking(ASDPlayerState* Winner);
 	void SetMultiplayerSelectableHand(ASDPlayerState* Player);

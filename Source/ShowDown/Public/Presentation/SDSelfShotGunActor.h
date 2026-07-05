@@ -95,6 +95,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Timing")
 	float GetShotResolveDelay() const;
 
+	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Timing")
+	float GetPresentationFinishDelay(bool bLiveRound) const;
+
 	bool TryResolveCharacterPresentationShot(
 		const AShowDownCharacter* TargetCharacter,
 		FVector& OutSourceLocation,

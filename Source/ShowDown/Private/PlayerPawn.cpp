@@ -3,7 +3,6 @@
 #include "Camera/CameraComponent.h"
 #include "Card.h"
 #include "InputCoreTypes.h"
-#include "Components/StaticMeshComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "GameFramework/PlayerController.h"
@@ -15,7 +14,6 @@
 #include "ShowDownPlayerController.h"
 #include "ShowDownVoiceSubsystem.h"
 #include "SupabaseSubsystem.h"
-#include "Net/UnrealNetwork.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -56,20 +54,6 @@ APlayerPawn::APlayerPawn()
 	bUseControllerRotationPitch = true;
 	bUseControllerRotationYaw = true;
 
-	DebugCameraLookMarker = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("DebugCameraLookMarker"));
-	DebugCameraLookMarker->SetupAttachment(rootComp);
-	DebugCameraLookMarker->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	DebugCameraLookMarker->SetCollisionResponseToAllChannels(ECR_Ignore);
-	DebugCameraLookMarker->SetCastShadow(false);
-	DebugCameraLookMarker->SetOwnerNoSee(true);
-	DebugCameraLookMarker->SetRelativeScale3D(DebugCameraLookMarkerScale);
-	DebugCameraLookMarker->SetVisibility(false);
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> DebugMarkerMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
-	if (DebugMarkerMesh.Succeeded())
-	{
-		DebugCameraLookMarker->SetStaticMesh(DebugMarkerMesh.Object);
-	}
-
 	// 손패 카드 슬롯
 	PlayerHandCard = CreateDefaultSubobject<USceneComponent>(TEXT("PlayerHandRoot"));
 	PlayerHandCard->SetupAttachment(rootComp);
@@ -86,7 +70,6 @@ void APlayerPawn::PreInitializeComponents()
 	if (GetNetMode() != NM_Standalone)
 	{
 		AutoPossessPlayer = EAutoReceiveInput::Disabled;
-		bShowDebugCameraLookMarker = false;
 
 		// The multiplayer map does not depend on authored pawn instances. Keep the
 		// player's own hand directly in front of the camera so center-screen card
@@ -120,7 +103,6 @@ void APlayerPawn::BeginPlay()
 	{
 		AddInputMappingContext();
 	}
-	UpdateDebugCameraLookMarker();
 }
 
 void APlayerPawn::PossessedBy(AController* NewController)
@@ -131,7 +113,6 @@ void APlayerPawn::PossessedBy(AController* NewController)
 		AddInputMappingContext();
 	}
 	bHasPreviousMousePosition = false;
-	UpdateDebugCameraLookMarker();
 }
 
 void APlayerPawn::AddInputMappingContext()
@@ -169,7 +150,6 @@ void APlayerPawn::AddInputMappingContext()
 void APlayerPawn::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
-	UpdateDebugCameraLookMarker();
 
 	if (IsShowDownControllerHandlingInput(this))
 	{
@@ -315,13 +295,6 @@ void APlayerPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 	{
 		PlayerInput->BindAction(ia_RaiseTo6, ETriggerEvent::Started, this, &APlayerPawn::InputRaiseTo6);
 	}
-}
-
-void APlayerPawn::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
-{
-	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-
-	DOREPLIFETIME(APlayerPawn, DebugCameraLookRotation);
 }
 
 void APlayerPawn::SDWin()
@@ -762,53 +735,6 @@ void APlayerPawn::ServerPlayerRaiseTo_Implementation(int32 BulletCount)
 void APlayerPawn::ServerPlayerFold_Implementation()
 {
 	SubmitPlayerBetAction(EShowDownBetAction::Fold, 0);
-}
-
-void APlayerPawn::SetReplicatedCameraLookRotation(const FRotator& LookRotation)
-{
-	if (!HasAuthority())
-	{
-		return;
-	}
-
-	DebugCameraLookRotation = FRotator(
-		FRotator::NormalizeAxis(LookRotation.Pitch),
-		FRotator::NormalizeAxis(LookRotation.Yaw),
-		0.0f);
-	UpdateDebugCameraLookMarker();
-	ForceNetUpdate();
-}
-
-void APlayerPawn::OnRep_DebugCameraLookRotation()
-{
-	UpdateDebugCameraLookMarker();
-}
-
-void APlayerPawn::UpdateDebugCameraLookMarker()
-{
-	if (!DebugCameraLookMarker)
-	{
-		return;
-	}
-
-	const bool bShouldShow =
-		bShowDebugCameraLookMarker
-		&& GetNetMode() != NM_Standalone
-		&& !IsLocallyControlled();
-
-	DebugCameraLookMarker->SetVisibility(bShouldShow);
-	if (!bShouldShow)
-	{
-		return;
-	}
-
-	DebugCameraLookMarker->SetWorldScale3D(DebugCameraLookMarkerScale);
-	const FVector LookForward = DebugCameraLookRotation.Vector().GetSafeNormal();
-	const FVector MarkerLocation =
-		GetActorLocation()
-		+ LookForward * DebugCameraLookMarkerForwardOffset
-		+ FVector::UpVector * DebugCameraLookMarkerHeightOffset;
-	DebugCameraLookMarker->SetWorldLocationAndRotation(MarkerLocation, DebugCameraLookRotation);
 }
 
 void APlayerPawn::EnsureChatWidget()
