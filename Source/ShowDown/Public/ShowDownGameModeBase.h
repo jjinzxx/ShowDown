@@ -355,9 +355,15 @@ private:
 	TObjectPtr<ASDSelfShotGunActor> ActiveSelfShotGunActor = nullptr;
 
 	bool bSelfShotGunPresentationInProgress = false;
+	bool bPendingSelfShotRouletteResult = false;
+	bool bPendingSelfShotLiveRound = false;
+	EShowDownSide PendingSelfShotTargetSide = EShowDownSide::Player;
 
 	UFUNCTION()
 	void HandleSelfShotGunPresentationFinished();
+
+	UFUNCTION()
+	void HandleSelfShotGunShotResolved();
 
 	// 덱을 만들고 섞은 뒤에 플레이어와 콜렉터에게 5장 스폰
 	void DealInitialHand();
@@ -395,8 +401,13 @@ private:
 	void PlayCollectorActionPresentation();
 	void PlayCollectorActionPresentationThen(TFunction<void()>&& Continuation);
 	void FinishCollectorActionPresentation();
+	void BroadcastCardSelectedAction(EShowDownSide Side) const;
+	void BroadcastBetActionCommitted(EShowDownSide Side, EShowDownBetAction Action, int32 TargetBet) const;
+	void BroadcastMultiplayerCardSelectedAction(ASDPlayerState* Player) const;
+	void BroadcastMultiplayerBetActionCommitted(ASDPlayerState* Player, EShowDownBetAction Action, int32 TargetBet) const;
 	void PlaySelfShotGunPresentationThen(EShowDownSide TargetSide, bool bLiveRound, TFunction<void()>&& Continuation);
 	void FinishSelfShotGunPresentation();
+	void BroadcastPendingSelfShotRouletteResult();
 	ASDSelfShotGunActor* FindSelfShotGunActor() const;
 	FSDCardHandLayoutSettings GetDefaultHandLayoutSettings() const;
 	FSDCardHandLayoutSettings ResolveHandLayoutSettings(EShowDownSide Side) const;

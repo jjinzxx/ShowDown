@@ -129,6 +129,9 @@ private:
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera")
 	ACameraActor* GameCamera;
 
+	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera|Character")
+	bool bUseCharacterPlayerCameraForSinglePlay = true;
+
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera", meta = (ClampMin = "0.0"))
 	float CameraBlendTime = 0.75f;
 

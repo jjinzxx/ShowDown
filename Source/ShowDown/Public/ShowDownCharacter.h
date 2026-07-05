@@ -9,6 +9,7 @@
 
 class ASDPlayerState;
 class UAnimationAsset;
+class UAnimMontage;
 class UAnimInstance;
 class UShowDownCharacterAnimInstance;
 
@@ -37,6 +38,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Character Animation")
 	void PlayHitAnimation(float Duration = -1.0f);
 
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Character Animation")
+	void PlaySelectCardAnimation(float Duration = -1.0f);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Character Animation")
+	void PlayBettingAnimation(float Duration = -1.0f);
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Character Physics")
 	void StartHitRagdoll();
 
@@ -51,6 +58,27 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Character Animation")
 	EShowDownCharacterAnimState GetCharacterAnimState() const { return ReplicatedAnimState; }
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Player Camera")
+	void SetPlayerViewRotation(FRotator ViewRotation);
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Player Camera")
+	FName ResolvePlayerCameraAttachName() const;
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Player Camera")
+	FVector GetPlayerCameraRelativeLocation() const { return PlayerCameraRelativeLocation; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Player Camera")
+	FRotator GetPlayerCameraRotationOffset() const { return PlayerCameraRotationOffset; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Player Camera")
+	float GetPlayerCameraFOV() const { return PlayerCameraFOV; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Character Camera")
+	float GetHeadLookPitch() const { return HeadLookPitch; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Character Camera")
+	float GetHeadLookYaw() const { return HeadLookYaw; }
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Character Identity")
 	void SetCharacterIdentity(EShowDownCharacterRole NewRole, EShowDownPlayerSlot NewPlayerSlot, const FString& NewDisplayName);
@@ -101,6 +129,9 @@ protected:
 	UFUNCTION()
 	void OnRep_Identity();
 
+	UFUNCTION()
+	void OnRep_ViewRotation();
+
 	UFUNCTION(Server, Reliable)
 	void ServerSetCharacterAnimState(EShowDownCharacterAnimState NewState);
 
@@ -122,14 +153,68 @@ protected:
 	UFUNCTION()
 	void HandleMultiplayerRouletteResult(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount, bool bHit, int32 RemainingLives);
 
+	UFUNCTION()
+	void HandleCardSelected(EShowDownSide Side);
+
+	UFUNCTION()
+	void HandleBetActionCommitted(EShowDownSide Side, EShowDownBetAction Action, int32 TargetBet);
+
+	UFUNCTION()
+	void HandleMultiplayerCardSelected(EShowDownPlayerSlot Slot);
+
+	UFUNCTION()
+	void HandleMultiplayerBetActionCommitted(EShowDownPlayerSlot Slot, EShowDownBetAction Action, int32 TargetBet);
+
 	UFUNCTION(Server, Reliable)
 	void ServerSetCharacterIdentity(EShowDownCharacterRole NewRole, EShowDownPlayerSlot NewPlayerSlot, const FString& NewDisplayName);
 
 	UPROPERTY(ReplicatedUsing = OnRep_AnimState, BlueprintReadOnly, Category = "ShowDown|Character Animation")
 	EShowDownCharacterAnimState ReplicatedAnimState = EShowDownCharacterAnimState::Idle;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Player Camera")
+	FName PlayerCameraAttachName = TEXT("Head");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Player Camera")
+	FVector PlayerCameraRelativeLocation = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Player Camera")
+	FRotator PlayerCameraRotationOffset = FRotator::ZeroRotator;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Player Camera", meta = (ClampMin = "30.0", ClampMax = "140.0"))
+	float PlayerCameraFOV = 90.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Player Camera", meta = (ClampMin = "0.0", ClampMax = "89.0"))
+	float MaxHeadLookPitch = 55.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Player Camera", meta = (ClampMin = "0.0", ClampMax = "120.0"))
+	float MaxHeadLookYaw = 65.0f;
+
+	UPROPERTY(ReplicatedUsing = OnRep_ViewRotation, BlueprintReadOnly, Category = "ShowDown|Player Camera")
+	FRotator ReplicatedPlayerViewRotation = FRotator::ZeroRotator;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Player Camera")
+	float HeadLookPitch = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Player Camera")
+	float HeadLookYaw = 0.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Animation")
 	TObjectPtr<UAnimationAsset> ShootAnimationAsset = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Animation")
+	TObjectPtr<UAnimationAsset> SelectCardAnimationAsset = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Animation")
+	TObjectPtr<UAnimationAsset> BettingAnimationAsset = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Animation")
+	FName ActionMontageSlotName = TEXT("DefaultSlot");
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Animation", meta = (ClampMin = "0.0"))
+	float ActionAnimationBlendInTime = 0.2f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Animation", meta = (ClampMin = "0.0"))
+	float ActionAnimationBlendOutTime = 0.2f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Physics")
 	FName RagdollHitBoneName = TEXT("Head");
@@ -172,10 +257,13 @@ private:
 	void CacheBaseMeshTransform();
 	void StopActionVisuals();
 	void PushAnimStateToAnimInstance() const;
+	void ApplyPlayerViewRotation(FRotator ViewRotation);
 
 	FTimerHandle AnimStateResetTimerHandle;
 	UPROPERTY(Transient)
 	TSubclassOf<UAnimInstance> CachedAnimBlueprintClass;
+	UPROPERTY(Transient)
+	TObjectPtr<UAnimMontage> ActiveActionMontage = nullptr;
 	FVector BaseMeshRelativeLocation = FVector::ZeroVector;
 	FRotator BaseMeshRelativeRotation = FRotator::ZeroRotator;
 	bool bRagdollActive = false;

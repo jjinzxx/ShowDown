@@ -1,6 +1,9 @@
 #include "ShowDownCharacter.h"
 
 #include "Animation/AnimationAsset.h"
+#include "Animation/AnimInstance.h"
+#include "Animation/AnimMontage.h"
+#include "Animation/AnimSequenceBase.h"
 #include "Animation/Skeleton.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -23,6 +26,10 @@ namespace
 	{
 		switch (State)
 		{
+		case EShowDownCharacterAnimState::SelectCard:
+			return TEXT("SelectCard");
+		case EShowDownCharacterAnimState::Betting:
+			return TEXT("Betting");
 		case EShowDownCharacterAnimState::Shoot:
 			return TEXT("Shoot");
 		case EShowDownCharacterAnimState::Hit:
@@ -107,6 +114,7 @@ void AShowDownCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	DOREPLIFETIME(AShowDownCharacter, CharacterRole);
 	DOREPLIFETIME(AShowDownCharacter, PlayerSlot);
 	DOREPLIFETIME(AShowDownCharacter, CharacterDisplayName);
+	DOREPLIFETIME(AShowDownCharacter, ReplicatedPlayerViewRotation);
 }
 
 void AShowDownCharacter::SetCharacterAnimState(EShowDownCharacterAnimState NewState)
@@ -158,6 +166,27 @@ void AShowDownCharacter::PlayShootAnimation(float Duration)
 void AShowDownCharacter::PlayHitAnimation(float Duration)
 {
 	PlayCharacterActionAnim(EShowDownCharacterAnimState::Hit, Duration, false);
+}
+
+void AShowDownCharacter::PlaySelectCardAnimation(float Duration)
+{
+	PlayCharacterActionAnim(EShowDownCharacterAnimState::SelectCard, Duration, true);
+}
+
+void AShowDownCharacter::PlayBettingAnimation(float Duration)
+{
+	PlayCharacterActionAnim(EShowDownCharacterAnimState::Betting, Duration, true);
+}
+
+void AShowDownCharacter::SetPlayerViewRotation(FRotator ViewRotation)
+{
+	ViewRotation.Roll = 0.0f;
+	ApplyPlayerViewRotation(ViewRotation);
+	if (HasAuthority())
+	{
+		ReplicatedPlayerViewRotation = ViewRotation;
+		ForceNetUpdate();
+	}
 }
 
 void AShowDownCharacter::StartHitRagdoll()
@@ -305,6 +334,11 @@ void AShowDownCharacter::OnRep_Identity()
 	OnCharacterIdentityChanged();
 }
 
+void AShowDownCharacter::OnRep_ViewRotation()
+{
+	ApplyPlayerViewRotation(ReplicatedPlayerViewRotation);
+}
+
 void AShowDownCharacter::ServerSetCharacterAnimState_Implementation(EShowDownCharacterAnimState NewState)
 {
 	SetCharacterAnimState(NewState);
@@ -371,6 +405,49 @@ void AShowDownCharacter::HandleMultiplayerRouletteResult(
 	PlayHitAnimation();
 }
 
+void AShowDownCharacter::HandleCardSelected(EShowDownSide Side)
+{
+	if (!HasAuthority() || !ShouldReactToSingleRouletteTarget(Side))
+	{
+		return;
+	}
+
+	PlaySelectCardAnimation();
+}
+
+void AShowDownCharacter::HandleBetActionCommitted(EShowDownSide Side, EShowDownBetAction Action, int32 TargetBet)
+{
+	if (!HasAuthority() || !ShouldReactToSingleRouletteTarget(Side))
+	{
+		return;
+	}
+
+	PlayBettingAnimation();
+}
+
+void AShowDownCharacter::HandleMultiplayerCardSelected(EShowDownPlayerSlot Slot)
+{
+	if (!HasAuthority() || !ShouldReactToMultiplayerRouletteTarget(Slot))
+	{
+		return;
+	}
+
+	PlaySelectCardAnimation();
+}
+
+void AShowDownCharacter::HandleMultiplayerBetActionCommitted(
+	EShowDownPlayerSlot Slot,
+	EShowDownBetAction Action,
+	int32 TargetBet)
+{
+	if (!HasAuthority() || !ShouldReactToMultiplayerRouletteTarget(Slot))
+	{
+		return;
+	}
+
+	PlayBettingAnimation();
+}
+
 void AShowDownCharacter::ServerSetCharacterIdentity_Implementation(
 	EShowDownCharacterRole NewRole,
 	EShowDownPlayerSlot NewPlayerSlot,
@@ -413,8 +490,12 @@ void AShowDownCharacter::BindToRouletteEvents()
 		return;
 	}
 
+	ShowDownGameState->OnCardSelected.AddUniqueDynamic(this, &AShowDownCharacter::HandleCardSelected);
+	ShowDownGameState->OnBetActionCommitted.AddUniqueDynamic(this, &AShowDownCharacter::HandleBetActionCommitted);
 	ShowDownGameState->OnRouletteStarted.AddUniqueDynamic(this, &AShowDownCharacter::HandleRouletteStarted);
 	ShowDownGameState->OnRouletteResult.AddUniqueDynamic(this, &AShowDownCharacter::HandleRouletteResult);
+	ShowDownGameState->OnMultiplayerCardSelected.AddUniqueDynamic(this, &AShowDownCharacter::HandleMultiplayerCardSelected);
+	ShowDownGameState->OnMultiplayerBetActionCommitted.AddUniqueDynamic(this, &AShowDownCharacter::HandleMultiplayerBetActionCommitted);
 	ShowDownGameState->OnMultiplayerRouletteStarted.AddUniqueDynamic(this, &AShowDownCharacter::HandleMultiplayerRouletteStarted);
 	ShowDownGameState->OnMultiplayerRouletteResult.AddUniqueDynamic(this, &AShowDownCharacter::HandleMultiplayerRouletteResult);
 }
@@ -428,8 +509,12 @@ void AShowDownCharacter::UnbindFromRouletteEvents()
 		return;
 	}
 
+	ShowDownGameState->OnCardSelected.RemoveDynamic(this, &AShowDownCharacter::HandleCardSelected);
+	ShowDownGameState->OnBetActionCommitted.RemoveDynamic(this, &AShowDownCharacter::HandleBetActionCommitted);
 	ShowDownGameState->OnRouletteStarted.RemoveDynamic(this, &AShowDownCharacter::HandleRouletteStarted);
 	ShowDownGameState->OnRouletteResult.RemoveDynamic(this, &AShowDownCharacter::HandleRouletteResult);
+	ShowDownGameState->OnMultiplayerCardSelected.RemoveDynamic(this, &AShowDownCharacter::HandleMultiplayerCardSelected);
+	ShowDownGameState->OnMultiplayerBetActionCommitted.RemoveDynamic(this, &AShowDownCharacter::HandleMultiplayerBetActionCommitted);
 	ShowDownGameState->OnMultiplayerRouletteStarted.RemoveDynamic(this, &AShowDownCharacter::HandleMultiplayerRouletteStarted);
 	ShowDownGameState->OnMultiplayerRouletteResult.RemoveDynamic(this, &AShowDownCharacter::HandleMultiplayerRouletteResult);
 }
@@ -454,6 +539,8 @@ float AShowDownCharacter::GetDefaultAnimDuration(EShowDownCharacterAnimState Sta
 {
 	switch (State)
 	{
+	case EShowDownCharacterAnimState::SelectCard:
+	case EShowDownCharacterAnimState::Betting:
 	case EShowDownCharacterAnimState::Shoot:
 		return ActionAnimationFallbackReturnDelay;
 	case EShowDownCharacterAnimState::Hit:
@@ -486,6 +573,10 @@ UAnimationAsset* AShowDownCharacter::GetAssignedActionAnimation(EShowDownCharact
 {
 	switch (State)
 	{
+	case EShowDownCharacterAnimState::SelectCard:
+		return SelectCardAnimationAsset;
+	case EShowDownCharacterAnimState::Betting:
+		return BettingAnimationAsset;
 	case EShowDownCharacterAnimState::Shoot:
 		return ShootAnimationAsset;
 	case EShowDownCharacterAnimState::Hit:
@@ -523,6 +614,29 @@ bool AShowDownCharacter::TryPlayAssignedActionAnimation(EShowDownCharacterAnimSt
 	if (!CanPlayAssignedActionAnimation(AnimationAsset))
 	{
 		return false;
+	}
+
+	RestoreAnimBlueprintClass();
+	if (UAnimSequenceBase* SequenceAsset = Cast<UAnimSequenceBase>(AnimationAsset))
+	{
+		if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
+		{
+			if (ActiveActionMontage)
+			{
+				AnimInstance->Montage_Stop(ActionAnimationBlendOutTime, ActiveActionMontage);
+				ActiveActionMontage = nullptr;
+			}
+
+			ActiveActionMontage = AnimInstance->PlaySlotAnimationAsDynamicMontage(
+				SequenceAsset,
+				ActionMontageSlotName,
+				ActionAnimationBlendInTime,
+				ActionAnimationBlendOutTime);
+			if (ActiveActionMontage)
+			{
+				return true;
+			}
+		}
 	}
 
 	GetMesh()->SetAnimationMode(EAnimationMode::AnimationSingleNode);
@@ -723,6 +837,18 @@ void AShowDownCharacter::CacheBaseMeshTransform()
 
 void AShowDownCharacter::StopActionVisuals()
 {
+	if (GetMesh())
+	{
+		if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
+		{
+			if (ActiveActionMontage)
+			{
+				AnimInstance->Montage_Stop(ActionAnimationBlendOutTime, ActiveActionMontage);
+				ActiveActionMontage = nullptr;
+			}
+		}
+	}
+
 	StopRagdoll();
 
 	if (GetMesh())
@@ -738,4 +864,58 @@ void AShowDownCharacter::PushAnimStateToAnimInstance() const
 	{
 		AnimInstance->SetCharacterAnimState(ReplicatedAnimState);
 	}
+}
+
+FName AShowDownCharacter::ResolvePlayerCameraAttachName() const
+{
+	const USkeletalMeshComponent* CharacterMesh = GetMesh();
+	if (!CharacterMesh)
+	{
+		return PlayerCameraAttachName;
+	}
+
+	if (PlayerCameraAttachName != NAME_None
+		&& (CharacterMesh->DoesSocketExist(PlayerCameraAttachName)
+			|| CharacterMesh->GetBoneIndex(PlayerCameraAttachName) != INDEX_NONE))
+	{
+		return PlayerCameraAttachName;
+	}
+
+	static const FName FallbackAttachNames[] =
+	{
+		TEXT("Head"),
+		TEXT("head"),
+		TEXT("Neck"),
+		TEXT("neck"),
+		TEXT("Spine2"),
+		TEXT("spine2"),
+		TEXT("Spine"),
+		TEXT("spine")
+	};
+
+	for (const FName AttachName : FallbackAttachNames)
+	{
+		if (CharacterMesh->DoesSocketExist(AttachName) || CharacterMesh->GetBoneIndex(AttachName) != INDEX_NONE)
+		{
+			return AttachName;
+		}
+	}
+
+	return NAME_None;
+}
+
+void AShowDownCharacter::ApplyPlayerViewRotation(FRotator ViewRotation)
+{
+	ViewRotation.Roll = 0.0f;
+	ReplicatedPlayerViewRotation = ViewRotation;
+
+	const FRotator ActorRotation = GetActorRotation();
+	HeadLookPitch = FMath::Clamp(
+		-FRotator::NormalizeAxis(ViewRotation.Pitch - ActorRotation.Pitch),
+		-MaxHeadLookPitch,
+		MaxHeadLookPitch);
+	HeadLookYaw = FMath::Clamp(
+		FRotator::NormalizeAxis(ViewRotation.Yaw - ActorRotation.Yaw),
+		-MaxHeadLookYaw,
+		MaxHeadLookYaw);
 }

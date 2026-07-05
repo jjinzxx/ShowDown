@@ -7,6 +7,8 @@ UENUM(BlueprintType)
 enum class EShowDownCharacterAnimState : uint8
 {
 	Idle UMETA(DisplayName = "Idle"),
+	SelectCard UMETA(DisplayName = "Select Card"),
+	Betting UMETA(DisplayName = "Betting"),
 	Shoot UMETA(DisplayName = "Shoot"),
 	Hit UMETA(DisplayName = "Hit"),
 };

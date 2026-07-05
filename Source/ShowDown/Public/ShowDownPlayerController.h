@@ -9,6 +9,7 @@
 class ACard;
 class ACameraActor;
 class APostProcessVolume;
+class AShowDownCharacter;
 class AShowDownGameModeBase;
 class SWidget;
 class UMaterialInstanceDynamic;
@@ -131,6 +132,15 @@ public:
 		float BlendInTime);
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Camera")
+	void SetPawnCameraMouseLook(
+		float Sensitivity,
+		float MinPitchDegrees,
+		float MaxPitchDegrees,
+		float MinYawOffsetDegrees,
+		float MaxYawOffsetDegrees,
+		bool bInvertY);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Camera")
 	void PlayFixedCameraSteppedShake(
 		float HoldDuration,
 		float BlendOutTime,
@@ -218,6 +228,18 @@ public:
 	bool bRequireRightMouseForPawnCameraLook = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Camera")
+	bool bInvertPawnCameraMouseY = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Camera|Character")
+	bool bUseCharacterPlayerCamera = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Camera|Character")
+	bool bReplicateCharacterHeadLook = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Camera|Character", meta = (ClampMin = "0.0"))
+	float CharacterPlayerCameraRetryInterval = 0.25f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Camera")
 	float LookSensitivity = 0.08f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Camera")
@@ -295,6 +317,9 @@ public:
 	UFUNCTION(Server, Unreliable)
 	void ServerUpdateDebugCameraLookRotation(FRotator LookRotation);
 
+	UFUNCTION(Server, Unreliable)
+	void ServerUpdateCharacterHeadLookRotation(FRotator LookRotation);
+
 	UFUNCTION(Client, Reliable)
 	void ClientShowStatusMessage(const FString& Message);
 
@@ -346,6 +371,8 @@ private:
 	void SelectCard(ACard* SelectedCard);
 	void SubmitPlayerBetAction(EShowDownBetAction Action, int32 TargetBet);
 	void ApplyPawnCameraInput(float YawInput, float PitchInput);
+	AShowDownCharacter* FindLocalCharacterForPlayerCamera() const;
+	void UpdateCharacterPlayerCamera(float DeltaTime);
 	void UpdateFixedCameraMouseLook(float DeltaTime);
 	void SubmitDebugCameraLookRotation(const FRotator& LookRotation, float DeltaTime);
 	void RestoreFixedCameraBaseTransform();
@@ -412,6 +439,9 @@ private:
 	// slot-specific view derived from the same single-player table anchors.
 	TObjectPtr<ACameraActor> LocalFallbackSeatCamera = nullptr;
 
+	UPROPERTY()
+	TObjectPtr<AShowDownCharacter> LocalPlayerCameraCharacterTarget = nullptr;
+
 	TSharedPtr<SWidget> CenterCrosshairWidget;
 	TArray<FSDPrimitiveCustomDepthState> FocusedPrimitiveStates;
 
@@ -450,7 +480,10 @@ private:
 	FRotator CameraSteppedShakeRotationAmplitude = FRotator::ZeroRotator;
 	FVector CameraSteppedShakeLocationAmplitude = FVector::ZeroVector;
 	float DebugCameraLookReplicationElapsedTime = 0.0f;
+	float CharacterPlayerCameraRetryElapsedTime = 0.0f;
+	float CharacterHeadLookReplicationElapsedTime = 0.0f;
 	FRotator LastSubmittedDebugCameraLookRotation = FRotator::ZeroRotator;
+	FRotator LastSubmittedCharacterHeadLookRotation = FRotator::ZeroRotator;
 	bool bFixedCameraInvertMouseY = true;
 	bool bVoiceChatEventsBound = false;
 	bool bVoiceSubsystemEventsBound = false;

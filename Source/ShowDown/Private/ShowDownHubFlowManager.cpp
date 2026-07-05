@@ -348,8 +348,44 @@ void AShowDownHubFlowManager::ShowSinglePlayPreviewInternal(bool bAllowOnlineRew
 	SetActiveWidget(nullptr);
 
 	APlayerController* PlayerController = GetPrimaryPlayerController();
+	if (AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(PlayerController))
+	{
+		ShowDownController->bUseCharacterPlayerCamera = bUseCharacterPlayerCameraForSinglePlay;
+		if (bUseCharacterPlayerCameraForSinglePlay)
+		{
+			float LookSensitivity = GameCameraLookSensitivity;
+			float MinPitch = GameCameraMinPitch;
+			float MaxPitch = GameCameraMaxPitch;
+			float MinYawOffset = GameCameraMinYawOffset;
+			float MaxYawOffset = GameCameraMaxYawOffset;
+			bool bInvertMouseY = bInvertGameCameraMouseY;
+			if (UWorld* World = GetWorld())
+			{
+				if (const AShowDownGameModeBase* GameMode = World->GetAuthGameMode<AShowDownGameModeBase>())
+				{
+					LookSensitivity = GameMode->GameplayCameraLookSensitivity;
+					MinPitch = GameMode->GameplayCameraMinPitch;
+					MaxPitch = GameMode->GameplayCameraMaxPitch;
+					MinYawOffset = GameMode->GameplayCameraMinYawOffset;
+					MaxYawOffset = GameMode->GameplayCameraMaxYawOffset;
+					bInvertMouseY = GameMode->bInvertGameplayCameraMouseY;
+				}
+			}
 
-	const bool bPlayedGameCamera = PlayCamera(GameCamera);
+			ShowDownController->ClearFixedCameraMouseLook();
+			ShowDownController->SetPawnCameraMouseLook(
+				LookSensitivity,
+				MinPitch,
+				MaxPitch,
+				MinYawOffset,
+				MaxYawOffset,
+				bInvertMouseY);
+			ShowDownController->bEnablePawnCameraMouseLook = true;
+			ShowDownController->bRequireRightMouseForPawnCameraLook = false;
+		}
+	}
+
+	const bool bPlayedGameCamera = bUseCharacterPlayerCameraForSinglePlay ? false : PlayCamera(GameCamera);
 	if (!bPlayedGameCamera && PlayerController && PlayerController->GetPawn())
 	{
 		PlayerController->SetViewTargetWithBlend(PlayerController->GetPawn(), CameraBlendTime);

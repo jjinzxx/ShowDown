@@ -6,6 +6,7 @@
 #include "Components/MeshComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "CollisionQueryParams.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
@@ -19,6 +20,7 @@
 #include "PlayerPawn.h"
 #include "SDPlayerState.h"
 #include "SDCardPlacementAnchor.h"
+#include "ShowDownCharacter.h"
 #include "ShowDownChatWidget.h"
 #include "ShowDownEosSubsystem.h"
 #include "ShowDownGameModeBase.h"
@@ -592,17 +594,21 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 		HandleBettingHotkeys();
 	}
 
-	if (!bHasFixedCameraLook && GetPawn() && bEnablePawnCameraMouseLook && (!bRequireRightMouseForPawnCameraLook || IsInputKeyDown(EKeys::RightMouseButton)))
+	if (!bHasFixedCameraLook
+		&& GetPawn()
+		&& bEnablePawnCameraMouseLook
+		&& (!bRequireRightMouseForPawnCameraLook || IsInputKeyDown(EKeys::RightMouseButton)))
 	{
 		float MouseDeltaX = 0.0f;
 		float MouseDeltaY = 0.0f;
 		GetInputMouseDelta(MouseDeltaX, MouseDeltaY);
 		if (!FMath::IsNearlyZero(MouseDeltaX) || !FMath::IsNearlyZero(MouseDeltaY))
 		{
-			ApplyPawnCameraInput(MouseDeltaX, -MouseDeltaY);
+			ApplyPawnCameraInput(MouseDeltaX, MouseDeltaY);
 		}
 	}
 
+	UpdateCharacterPlayerCamera(DeltaTime);
 	UpdateFocusedInteractable();
 	UpdateHoveredCard();
 	UpdateCenterCrosshairVisibility();
@@ -1531,6 +1537,23 @@ void AShowDownPlayerController::SetFixedCameraComponentMouseLook(
 	UpdateCenterCrosshairVisibility();
 }
 
+void AShowDownPlayerController::SetPawnCameraMouseLook(
+	float Sensitivity,
+	float MinPitchDegrees,
+	float MaxPitchDegrees,
+	float MinYawOffsetDegrees,
+	float MaxYawOffsetDegrees,
+	bool bInvertY)
+{
+	LookSensitivity = FMath::Max(0.0f, Sensitivity);
+	MinPitch = MinPitchDegrees;
+	MaxPitch = MaxPitchDegrees;
+	MinYaw = MinYawOffsetDegrees;
+	MaxYaw = MaxYawOffsetDegrees;
+	bInvertPawnCameraMouseY = bInvertY;
+	bHasPawnCameraBaseRotation = false;
+}
+
 void AShowDownPlayerController::ClearFixedCameraMouseLook()
 {
 	RestoreFixedCameraBaseTransform();
@@ -1620,14 +1643,153 @@ void AShowDownPlayerController::ApplyPawnCameraInput(float YawInput, float Pitch
 	const float CurrentPitch = FRotator::NormalizeAxis(CurrentControlRotation.Pitch);
 	const float CurrentYawOffset = FRotator::NormalizeAxis(CurrentControlRotation.Yaw - PawnCameraBaseRotation.Yaw);
 
+	const float PitchSign = bInvertPawnCameraMouseY ? 1.0f : -1.0f;
 	const float NewPitch = FMath::Clamp(
-		CurrentPitch + PitchInput * LookSensitivity,
+		CurrentPitch + PitchInput * LookSensitivity * PitchSign,
 		PawnCameraBaseRotation.Pitch + MinPitch,
 		PawnCameraBaseRotation.Pitch + MaxPitch);
 	const float NewYawOffset = FMath::Clamp(CurrentYawOffset + YawInput * LookSensitivity, MinYaw, MaxYaw);
 	const float NewYaw = PawnCameraBaseRotation.Yaw + NewYawOffset;
 
 	SetControlRotation(FRotator(NewPitch, NewYaw, 0.0f));
+}
+
+AShowDownCharacter* AShowDownPlayerController::FindLocalCharacterForPlayerCamera() const
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	const ASDPlayerState* ShowDownPlayerState = GetPlayerState<ASDPlayerState>();
+	const EShowDownPlayerSlot LocalSlot = ShowDownPlayerState
+		? ShowDownPlayerState->ShowDownSlot
+		: EShowDownPlayerSlot::None;
+
+	AShowDownCharacter* FallbackPlayerCharacter = nullptr;
+	AShowDownCharacter* FirstCharacter = nullptr;
+	for (TActorIterator<AShowDownCharacter> It(World); It; ++It)
+	{
+		AShowDownCharacter* CandidateCharacter = *It;
+		if (!IsValid(CandidateCharacter))
+		{
+			continue;
+		}
+
+		if (!FirstCharacter)
+		{
+			FirstCharacter = CandidateCharacter;
+		}
+
+		if (LocalSlot != EShowDownPlayerSlot::None && CandidateCharacter->IsAssignedToSlot(LocalSlot))
+		{
+			return CandidateCharacter;
+		}
+
+		if (CandidateCharacter->GetCharacterRole() == EShowDownCharacterRole::Player)
+		{
+			FallbackPlayerCharacter = CandidateCharacter;
+		}
+	}
+
+	if (FallbackPlayerCharacter)
+	{
+		return FallbackPlayerCharacter;
+	}
+
+	return World->GetNetMode() == NM_Standalone ? FirstCharacter : nullptr;
+}
+
+void AShowDownPlayerController::UpdateCharacterPlayerCamera(float DeltaTime)
+{
+	APlayerPawn* PlayerPawn = Cast<APlayerPawn>(GetPawn());
+	UCameraComponent* PlayerCamera = PlayerPawn ? PlayerPawn->cameraComp : nullptr;
+	if (!IsLocalController() || !bUseCharacterPlayerCamera || FixedCameraMouseLookTarget || !PlayerPawn || !PlayerCamera)
+	{
+		if (LocalPlayerCameraCharacterTarget)
+		{
+			LocalPlayerCameraCharacterTarget = nullptr;
+		}
+		return;
+	}
+
+	CharacterPlayerCameraRetryElapsedTime += DeltaTime;
+	if (!IsValid(LocalPlayerCameraCharacterTarget)
+		&& CharacterPlayerCameraRetryElapsedTime >= CharacterPlayerCameraRetryInterval)
+	{
+		CharacterPlayerCameraRetryElapsedTime = 0.0f;
+		LocalPlayerCameraCharacterTarget = FindLocalCharacterForPlayerCamera();
+	}
+
+	if (!IsValid(LocalPlayerCameraCharacterTarget) || !LocalPlayerCameraCharacterTarget->GetMesh())
+	{
+		return;
+	}
+
+	const FName AttachName = LocalPlayerCameraCharacterTarget->ResolvePlayerCameraAttachName();
+	const bool bAlreadyAttached =
+		PlayerCamera->GetAttachParent() == LocalPlayerCameraCharacterTarget->GetMesh()
+		&& PlayerCamera->GetAttachSocketName() == AttachName;
+	const bool bNeedsCameraSetup =
+		!bAlreadyAttached
+		|| GetViewTarget() != PlayerPawn
+		|| !PlayerCamera->bUsePawnControlRotation;
+
+	if (bNeedsCameraSetup)
+	{
+		if (!bAlreadyAttached)
+		{
+			PlayerCamera->AttachToComponent(
+				LocalPlayerCameraCharacterTarget->GetMesh(),
+				FAttachmentTransformRules::SnapToTargetNotIncludingScale,
+				AttachName);
+		}
+
+		PlayerCamera->SetRelativeLocation(LocalPlayerCameraCharacterTarget->GetPlayerCameraRelativeLocation());
+		PlayerCamera->SetRelativeRotation(LocalPlayerCameraCharacterTarget->GetPlayerCameraRotationOffset());
+		PlayerCamera->SetFieldOfView(LocalPlayerCameraCharacterTarget->GetPlayerCameraFOV());
+		PlayerCamera->bUsePawnControlRotation = true;
+
+		if (GetViewTarget() != PlayerPawn)
+		{
+			SetViewTarget(PlayerPawn);
+		}
+
+		SetIgnoreLookInput(false);
+		bShowMouseCursor = false;
+		bEnableClickEvents = false;
+		bEnableMouseOverEvents = false;
+		FInputModeGameOnly InputMode;
+		InputMode.SetConsumeCaptureMouseDown(false);
+		SetInputMode(InputMode);
+	}
+
+	const FRotator LookRotation = GetControlRotation();
+	LocalPlayerCameraCharacterTarget->SetPlayerViewRotation(LookRotation);
+
+	if (!bReplicateCharacterHeadLook)
+	{
+		return;
+	}
+
+	CharacterHeadLookReplicationElapsedTime += DeltaTime;
+	const float PitchDelta = FMath::Abs(FRotator::NormalizeAxis(LookRotation.Pitch - LastSubmittedCharacterHeadLookRotation.Pitch));
+	const float YawDelta = FMath::Abs(FRotator::NormalizeAxis(LookRotation.Yaw - LastSubmittedCharacterHeadLookRotation.Yaw));
+	if (CharacterHeadLookReplicationElapsedTime < 0.05f && PitchDelta < 0.5f && YawDelta < 0.5f)
+	{
+		return;
+	}
+
+	CharacterHeadLookReplicationElapsedTime = 0.0f;
+	LastSubmittedCharacterHeadLookRotation = LookRotation;
+	if (HasAuthority())
+	{
+		LocalPlayerCameraCharacterTarget->SetPlayerViewRotation(LookRotation);
+		return;
+	}
+
+	ServerUpdateCharacterHeadLookRotation(LookRotation);
 }
 
 void AShowDownPlayerController::UpdateFixedCameraMouseLook(float DeltaTime)
@@ -2228,6 +2390,14 @@ void AShowDownPlayerController::ServerUpdateDebugCameraLookRotation_Implementati
 	if (APlayerPawn* PlayerPawn = Cast<APlayerPawn>(GetPawn()))
 	{
 		PlayerPawn->SetReplicatedCameraLookRotation(LookRotation);
+	}
+}
+
+void AShowDownPlayerController::ServerUpdateCharacterHeadLookRotation_Implementation(FRotator LookRotation)
+{
+	if (AShowDownCharacter* TargetCharacter = FindLocalCharacterForPlayerCamera())
+	{
+		TargetCharacter->SetPlayerViewRotation(LookRotation);
 	}
 }
 

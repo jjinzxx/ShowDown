@@ -30,7 +30,22 @@ public:
 	bool bIsShooting = false;
 
 	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Character Animation")
+	bool bIsSelectingCard = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Character Animation")
+	bool bIsBetting = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Character Animation")
 	bool bIsHitReacting = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Character Camera")
+	float HeadLookPitch = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Character Camera")
+	float HeadLookYaw = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Character Camera")
+	bool bHasHeadLook = false;
 
 	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Character Animation")
 	float GroundSpeed = 0.0f;

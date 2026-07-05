@@ -22,7 +22,12 @@ void UShowDownCharacterAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 		bIsLocallyControlled = false;
 		CharacterAnimState = EShowDownCharacterAnimState::Idle;
 		bIsShooting = false;
+		bIsSelectingCard = false;
+		bIsBetting = false;
 		bIsHitReacting = false;
+		HeadLookPitch = 0.0f;
+		HeadLookYaw = 0.0f;
+		bHasHeadLook = false;
 		CharacterRole = EShowDownCharacterRole::Unassigned;
 		PlayerSlot = EShowDownPlayerSlot::None;
 		bIsLocalPlayerCharacter = false;
@@ -32,7 +37,12 @@ void UShowDownCharacterAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 
 	CharacterAnimState = OwningShowDownCharacter->GetCharacterAnimState();
 	bIsShooting = CharacterAnimState == EShowDownCharacterAnimState::Shoot;
+	bIsSelectingCard = CharacterAnimState == EShowDownCharacterAnimState::SelectCard;
+	bIsBetting = CharacterAnimState == EShowDownCharacterAnimState::Betting;
 	bIsHitReacting = CharacterAnimState == EShowDownCharacterAnimState::Hit;
+	HeadLookPitch = OwningShowDownCharacter->GetHeadLookPitch();
+	HeadLookYaw = OwningShowDownCharacter->GetHeadLookYaw();
+	bHasHeadLook = !FMath::IsNearlyZero(HeadLookPitch, 0.1f) || !FMath::IsNearlyZero(HeadLookYaw, 0.1f);
 	CharacterRole = OwningShowDownCharacter->GetCharacterRole();
 	PlayerSlot = OwningShowDownCharacter->GetPlayerSlot();
 
@@ -50,6 +60,10 @@ void UShowDownCharacterAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 void UShowDownCharacterAnimInstance::SetCharacterAnimState(EShowDownCharacterAnimState NewState)
 {
 	CharacterAnimState = NewState;
+	bIsShooting = CharacterAnimState == EShowDownCharacterAnimState::Shoot;
+	bIsSelectingCard = CharacterAnimState == EShowDownCharacterAnimState::SelectCard;
+	bIsBetting = CharacterAnimState == EShowDownCharacterAnimState::Betting;
+	bIsHitReacting = CharacterAnimState == EShowDownCharacterAnimState::Hit;
 }
 
 void UShowDownCharacterAnimInstance::CacheOwningCharacter()
