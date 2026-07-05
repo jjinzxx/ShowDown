@@ -46,6 +46,18 @@ namespace
 			&& Component->IsVisible()
 			&& Component->IsA<UMeshComponent>();
 	}
+
+	EShowDownPlayerSlot GetPlayerSlotFromSeatIndex(int32 SeatIndex)
+	{
+		switch (SeatIndex)
+		{
+		case 0: return EShowDownPlayerSlot::Player1;
+		case 1: return EShowDownPlayerSlot::Player2;
+		case 2: return EShowDownPlayerSlot::Player3;
+		case 3: return EShowDownPlayerSlot::Player4;
+		default: return EShowDownPlayerSlot::None;
+		}
+	}
 }
 
 class SSDCenterCrosshairWidget : public SLeafWidget
@@ -335,6 +347,18 @@ void AShowDownPlayerController::ClientUseMultiplayerSeatCamera_Implementation(
 	PendingMultiplayerCameraBreathingSwayRotationAmplitude = InBreathingSwayRotationAmplitude;
 	PendingMultiplayerCameraBreathingSwayLocationAmplitude = InBreathingSwayLocationAmplitude;
 	PendingMultiplayerCameraBreathingSwayBlendInTime = InBreathingSwayBlendInTime;
+	ClearFixedCameraMouseLook();
+	bUseCharacterPlayerCamera = true;
+	SetPawnCameraMouseLook(
+		SeatCameraLookSensitivity,
+		MinPitchDegrees,
+		MaxPitchDegrees,
+		MinYawOffsetDegrees,
+		MaxYawOffsetDegrees,
+		bInvertY);
+	bEnablePawnCameraMouseLook = true;
+	bRequireRightMouseForPawnCameraLook = false;
+	LocalPlayerCameraCharacterTarget = nullptr;
 	bPendingMultiplayerSeatCamera = true;
 	bHandleShowDownGameplayInput = false;
 	bShowCenterCrosshair = false;
@@ -376,6 +400,8 @@ bool AShowDownPlayerController::TryApplyPendingMultiplayerSeatCamera()
 	{
 		return false;
 	}
+
+	return TryApplyPendingMultiplayerCharacterCamera();
 
 	FVector TableLocation = FVector::ZeroVector;
 	if (!TryGetSharedTableLocation(GetWorld(), TableLocation))
@@ -450,6 +476,76 @@ bool AShowDownPlayerController::TryApplyPendingMultiplayerSeatCamera()
 	// locally from the authoritative replicated table position.
 	return IsMultiplayerGameMap(GetWorld())
 		&& UseFallbackMultiplayerSeatCamera(PendingMultiplayerSeatIndex);
+}
+
+bool AShowDownPlayerController::TryApplyPendingMultiplayerCharacterCamera()
+{
+	if (!bPendingMultiplayerSeatCamera || PendingMultiplayerSeatIndex == INDEX_NONE || !IsLocalController() || !GetWorld())
+	{
+		return false;
+	}
+
+	if (!IsMultiplayerGameMap(GetWorld()))
+	{
+		return false;
+	}
+
+	APlayerPawn* PlayerPawn = Cast<APlayerPawn>(GetPawn());
+	UCameraComponent* PlayerCamera = PlayerPawn ? PlayerPawn->cameraComp : nullptr;
+	if (!PlayerPawn || !PlayerCamera)
+	{
+		return false;
+	}
+
+	if (!IsValid(LocalPlayerCameraCharacterTarget))
+	{
+		LocalPlayerCameraCharacterTarget = FindLocalCharacterForPlayerCamera();
+	}
+
+	if (!IsValid(LocalPlayerCameraCharacterTarget) || !LocalPlayerCameraCharacterTarget->GetMesh())
+	{
+		UE_LOG(LogTemp, Verbose, TEXT("Waiting for local multiplayer character camera target. SeatIndex=%d"), PendingMultiplayerSeatIndex);
+		return false;
+	}
+
+	ClearFixedCameraMouseLook();
+	bUseCharacterPlayerCamera = true;
+	bEnablePawnCameraMouseLook = true;
+	bRequireRightMouseForPawnCameraLook = false;
+
+	const FRotator InitialViewRotation(-12.0f, LocalPlayerCameraCharacterTarget->GetActorRotation().Yaw, 0.0f);
+	SetControlRotation(InitialViewRotation);
+	PawnCameraBaseRotation = InitialViewRotation;
+	bHasPawnCameraBaseRotation = true;
+
+	UpdateCharacterPlayerCamera(0.0f);
+
+	const FName AttachName = LocalPlayerCameraCharacterTarget->ResolvePlayerCameraAttachName();
+	const bool bAttachedToCharacter =
+		PlayerCamera->GetAttachParent() == LocalPlayerCameraCharacterTarget->GetMesh()
+		&& PlayerCamera->GetAttachSocketName() == AttachName
+		&& GetViewTarget() == PlayerPawn;
+	if (!bAttachedToCharacter)
+	{
+		return false;
+	}
+
+	EnsureChatWidget();
+	bPendingMultiplayerSeatCamera = false;
+	bHandleShowDownGameplayInput = true;
+	bShowCenterCrosshair = true;
+	RestoreMultiplayerGameplayInput();
+	CreateCenterCrosshairWidget();
+	UpdateCenterCrosshairVisibility();
+	ClientShowStatusMessage(TEXT("Multiplayer character head camera ready."));
+	UE_LOG(
+		LogTemp,
+		Log,
+		TEXT("Applied multiplayer character head camera. SeatIndex=%d Slot=%d Character=%s"),
+		PendingMultiplayerSeatIndex,
+		static_cast<int32>(LocalPlayerCameraCharacterTarget->GetPlayerSlot()),
+		*LocalPlayerCameraCharacterTarget->GetName());
+	return true;
 }
 
 bool AShowDownPlayerController::UseFallbackMultiplayerSeatCamera(int32 SeatIndex)
@@ -837,6 +933,10 @@ bool AShowDownPlayerController::TraceFromScreenCenter(FHitResult& OutHit) const
 	if (APawn* ControlledPawn = GetPawn())
 	{
 		QueryParams.AddIgnoredActor(ControlledPawn);
+	}
+	if (IsValid(LocalPlayerCameraCharacterTarget))
+	{
+		QueryParams.AddIgnoredActor(LocalPlayerCameraCharacterTarget);
 	}
 
 	const FVector TraceEnd = WorldLocation + WorldDirection * CenterScreenTraceDistance;
@@ -1663,9 +1763,13 @@ AShowDownCharacter* AShowDownPlayerController::FindLocalCharacterForPlayerCamera
 	}
 
 	const ASDPlayerState* ShowDownPlayerState = GetPlayerState<ASDPlayerState>();
-	const EShowDownPlayerSlot LocalSlot = ShowDownPlayerState
+	EShowDownPlayerSlot LocalSlot = ShowDownPlayerState
 		? ShowDownPlayerState->ShowDownSlot
 		: EShowDownPlayerSlot::None;
+	if (LocalSlot == EShowDownPlayerSlot::None && PendingMultiplayerSeatIndex != INDEX_NONE)
+	{
+		LocalSlot = GetPlayerSlotFromSeatIndex(PendingMultiplayerSeatIndex);
+	}
 
 	AShowDownCharacter* FirstCharacter = nullptr;
 	AShowDownCharacter* FallbackPlayerCharacter = nullptr;

@@ -386,6 +386,7 @@ private:
 	void EnsureChatWidget();
 	void EnsureLeaveConfirmWidget();
 	bool TryApplyPendingMultiplayerSeatCamera();
+	bool TryApplyPendingMultiplayerCharacterCamera();
 	bool UseFallbackMultiplayerSeatCamera(int32 SeatIndex);
 	void RestoreMultiplayerGameplayInput();
 	void ApplyChatInputMode(bool bOpen);
