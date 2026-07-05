@@ -1667,8 +1667,10 @@ AShowDownCharacter* AShowDownPlayerController::FindLocalCharacterForPlayerCamera
 		? ShowDownPlayerState->ShowDownSlot
 		: EShowDownPlayerSlot::None;
 
-	AShowDownCharacter* FallbackPlayerCharacter = nullptr;
 	AShowDownCharacter* FirstCharacter = nullptr;
+	AShowDownCharacter* FallbackPlayerCharacter = nullptr;
+	AShowDownCharacter* BestSinglePlayerCharacter = nullptr;
+	EShowDownPlayerSlot BestSinglePlayerSlot = EShowDownPlayerSlot::None;
 	for (TActorIterator<AShowDownCharacter> It(World); It; ++It)
 	{
 		AShowDownCharacter* CandidateCharacter = *It;
@@ -1689,8 +1691,30 @@ AShowDownCharacter* AShowDownPlayerController::FindLocalCharacterForPlayerCamera
 
 		if (CandidateCharacter->GetCharacterRole() == EShowDownCharacterRole::Player)
 		{
-			FallbackPlayerCharacter = CandidateCharacter;
+			if (!FallbackPlayerCharacter)
+			{
+				FallbackPlayerCharacter = CandidateCharacter;
+			}
+
+			const EShowDownPlayerSlot CandidateSlot = CandidateCharacter->GetPlayerSlot();
+			if (CandidateSlot != EShowDownPlayerSlot::None
+				&& (!BestSinglePlayerCharacter
+					|| static_cast<uint8>(CandidateSlot) < static_cast<uint8>(BestSinglePlayerSlot)))
+			{
+				BestSinglePlayerCharacter = CandidateCharacter;
+				BestSinglePlayerSlot = CandidateSlot;
+			}
 		}
+	}
+
+	if (World->GetNetMode() != NM_Standalone)
+	{
+		return nullptr;
+	}
+
+	if (BestSinglePlayerCharacter)
+	{
+		return BestSinglePlayerCharacter;
 	}
 
 	if (FallbackPlayerCharacter)
@@ -1698,7 +1722,7 @@ AShowDownCharacter* AShowDownPlayerController::FindLocalCharacterForPlayerCamera
 		return FallbackPlayerCharacter;
 	}
 
-	return World->GetNetMode() == NM_Standalone ? FirstCharacter : nullptr;
+	return FirstCharacter;
 }
 
 void AShowDownPlayerController::UpdateCharacterPlayerCamera(float DeltaTime)
