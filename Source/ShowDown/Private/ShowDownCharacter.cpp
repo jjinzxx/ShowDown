@@ -102,6 +102,7 @@ void AShowDownCharacter::BeginPlay()
 	CacheAnimBlueprintClass();
 	CacheBaseMeshTransform();
 	PushAnimStateToAnimInstance();
+	ApplyCharacterSceneActive();
 	BindToRouletteEvents();
 }
 
@@ -121,6 +122,7 @@ void AShowDownCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	DOREPLIFETIME(AShowDownCharacter, PlayerSlot);
 	DOREPLIFETIME(AShowDownCharacter, CharacterDisplayName);
 	DOREPLIFETIME(AShowDownCharacter, ReplicatedPlayerViewRotation);
+	DOREPLIFETIME(AShowDownCharacter, bCharacterSceneActive);
 }
 
 void AShowDownCharacter::SetCharacterAnimState(EShowDownCharacterAnimState NewState)
@@ -335,6 +337,35 @@ bool AShowDownCharacter::IsOpponentCharacterForLocalPlayer() const
 		&& PlayerSlot != LocalPlayerSlot;
 }
 
+void AShowDownCharacter::SetCharacterSceneActive(bool bNewActive)
+{
+	if (bCharacterSceneActive == bNewActive)
+	{
+		ApplyCharacterSceneActive();
+		return;
+	}
+
+	const EShowDownCharacterAnimState PreviousAnimState = ReplicatedAnimState;
+	bCharacterSceneActive = bNewActive;
+	if (!bCharacterSceneActive)
+	{
+		GetWorldTimerManager().ClearTimer(AnimStateResetTimerHandle);
+		ReplicatedAnimState = EShowDownCharacterAnimState::Idle;
+	}
+
+	ApplyCharacterSceneActive();
+	if (!bCharacterSceneActive && PreviousAnimState != ReplicatedAnimState)
+	{
+		PushAnimStateToAnimInstance();
+		OnCharacterAnimStateChanged(ReplicatedAnimState);
+	}
+
+	if (HasAuthority())
+	{
+		ForceNetUpdate();
+	}
+}
+
 void AShowDownCharacter::OnRep_AnimState()
 {
 	StartActionVisual(ReplicatedAnimState);
@@ -350,6 +381,11 @@ void AShowDownCharacter::OnRep_Identity()
 void AShowDownCharacter::OnRep_ViewRotation()
 {
 	ApplyPlayerViewRotation(ReplicatedPlayerViewRotation);
+}
+
+void AShowDownCharacter::OnRep_SceneActive()
+{
+	ApplyCharacterSceneActive();
 }
 
 void AShowDownCharacter::ServerSetCharacterAnimState_Implementation(EShowDownCharacterAnimState NewState)
@@ -566,6 +602,11 @@ float AShowDownCharacter::GetDefaultAnimDuration(EShowDownCharacterAnimState Sta
 
 bool AShowDownCharacter::ShouldReactToSingleRouletteTarget(EShowDownSide Target) const
 {
+	if (!bCharacterSceneActive)
+	{
+		return false;
+	}
+
 	switch (Target)
 	{
 	case EShowDownSide::Player:
@@ -579,6 +620,11 @@ bool AShowDownCharacter::ShouldReactToSingleRouletteTarget(EShowDownSide Target)
 
 bool AShowDownCharacter::ShouldReactToMultiplayerRouletteTarget(EShowDownPlayerSlot TargetSlot) const
 {
+	if (!bCharacterSceneActive)
+	{
+		return false;
+	}
+
 	return TargetSlot != EShowDownPlayerSlot::None && PlayerSlot == TargetSlot;
 }
 
@@ -787,6 +833,12 @@ void AShowDownCharacter::RestoreAnimBlueprintClass()
 
 void AShowDownCharacter::StartActionVisual(EShowDownCharacterAnimState State)
 {
+	if (!bCharacterSceneActive)
+	{
+		StopActionVisuals();
+		return;
+	}
+
 	if (State == EShowDownCharacterAnimState::Idle)
 	{
 		StopActionVisuals();
@@ -931,4 +983,51 @@ void AShowDownCharacter::ApplyPlayerViewRotation(FRotator ViewRotation)
 		FRotator::NormalizeAxis(ViewRotation.Yaw - ActorRotation.Yaw),
 		-MaxHeadLookYaw,
 		MaxHeadLookYaw);
+}
+
+void AShowDownCharacter::ApplyCharacterSceneActive()
+{
+	const bool bActive = bCharacterSceneActive;
+
+	SetActorHiddenInGame(!bActive);
+	SetActorEnableCollision(bActive);
+
+	if (!bActive)
+	{
+		StopActionVisuals();
+	}
+
+	if (UCapsuleComponent* Capsule = GetCapsuleComponent())
+	{
+		Capsule->SetCollisionEnabled(bActive ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
+	}
+
+	if (USkeletalMeshComponent* CharacterMesh = GetMesh())
+	{
+		CharacterMesh->SetHiddenInGame(!bActive, true);
+		CharacterMesh->SetVisibility(bActive, true);
+
+		if (!bActive)
+		{
+			CharacterMesh->SetAllBodiesSimulatePhysics(false);
+			CharacterMesh->SetSimulatePhysics(false);
+			CharacterMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		}
+		else if (!bRagdollActive)
+		{
+			CharacterMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		}
+	}
+
+	if (UCharacterMovementComponent* MovementComponent = GetCharacterMovement())
+	{
+		if (bActive && !bRagdollActive)
+		{
+			MovementComponent->SetMovementMode(MOVE_Walking);
+		}
+		else if (!bActive)
+		{
+			MovementComponent->DisableMovement();
+		}
+	}
 }

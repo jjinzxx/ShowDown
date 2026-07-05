@@ -280,6 +280,7 @@ void AShowDownGameModeBase::StartSinglePlayer()
 		ShowDownGameState->SetMatchMode(EShowDownMatchMode::SinglePlayer);
 	}
 
+	ConfigureSinglePlayerCharacters();
 	FindCollector();
 	StartStage(0);
 }
@@ -296,6 +297,7 @@ void AShowDownGameModeBase::StartMultiplayerGame()
 		ShowDownGameState->SetMatchMode(EShowDownMatchMode::Multiplayer);
 	}
 
+	ConfigureMultiplayerCharacters(TArray<ASDPlayerState*>());
 	FindCollector();
 	RefreshNetworkPlayerSlots();
 	GetWorldTimerManager().ClearTimer(MultiplayerStartTimerHandle);
@@ -992,7 +994,7 @@ AShowDownCharacter* AShowDownGameModeBase::FindSingleRouletteCharacter(EShowDown
 	for (TActorIterator<AShowDownCharacter> It(World); It; ++It)
 	{
 		AShowDownCharacter* CandidateCharacter = *It;
-		if (!IsValid(CandidateCharacter))
+		if (!IsValid(CandidateCharacter) || !CandidateCharacter->IsCharacterSceneActive())
 		{
 			continue;
 		}
@@ -1029,6 +1031,256 @@ AShowDownCharacter* AShowDownGameModeBase::FindSingleRouletteCharacter(EShowDown
 	}
 
 	return nullptr;
+}
+
+TArray<AShowDownCharacter*> AShowDownGameModeBase::GetShowDownCharacters() const
+{
+	TArray<AShowDownCharacter*> Characters;
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return Characters;
+	}
+
+	for (TActorIterator<AShowDownCharacter> It(World); It; ++It)
+	{
+		AShowDownCharacter* Character = *It;
+		if (IsValid(Character))
+		{
+			Characters.Add(Character);
+		}
+	}
+
+	Characters.Sort([](const AShowDownCharacter& Left, const AShowDownCharacter& Right)
+	{
+		return Left.GetName().Compare(Right.GetName()) < 0;
+	});
+
+	return Characters;
+}
+
+void AShowDownGameModeBase::ConfigureSinglePlayerCharacters()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	TArray<AShowDownCharacter*> Characters = GetShowDownCharacters();
+	if (Characters.Num() <= 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("No ShowDownCharacter actors found for single-player character setup."));
+		return;
+	}
+
+	AShowDownCharacter* PlayerCharacter = nullptr;
+	AShowDownCharacter* PlayerRoleFallback = nullptr;
+	AShowDownCharacter* AnyCharacterFallback = nullptr;
+	for (AShowDownCharacter* Character : Characters)
+	{
+		if (!IsValid(Character))
+		{
+			continue;
+		}
+
+		if (!AnyCharacterFallback)
+		{
+			AnyCharacterFallback = Character;
+		}
+
+		if (Character->GetCharacterRole() == EShowDownCharacterRole::Player)
+		{
+			if (Character->GetPlayerSlot() == EShowDownPlayerSlot::Player1)
+			{
+				PlayerCharacter = Character;
+				break;
+			}
+
+			if (!PlayerRoleFallback)
+			{
+				PlayerRoleFallback = Character;
+			}
+		}
+	}
+
+	if (!PlayerCharacter)
+	{
+		PlayerCharacter = PlayerRoleFallback ? PlayerRoleFallback : AnyCharacterFallback;
+	}
+
+	AShowDownCharacter* OpponentCharacter = nullptr;
+	AShowDownCharacter* PlayerTwoFallback = nullptr;
+	AShowDownCharacter* OtherCharacterFallback = nullptr;
+	for (AShowDownCharacter* Character : Characters)
+	{
+		if (!IsValid(Character) || Character == PlayerCharacter)
+		{
+			continue;
+		}
+
+		if (!OtherCharacterFallback)
+		{
+			OtherCharacterFallback = Character;
+		}
+
+		if (Character->GetCharacterRole() == EShowDownCharacterRole::Opponent)
+		{
+			OpponentCharacter = Character;
+			break;
+		}
+
+		if (!PlayerTwoFallback && Character->GetPlayerSlot() == EShowDownPlayerSlot::Player2)
+		{
+			PlayerTwoFallback = Character;
+		}
+	}
+
+	if (!OpponentCharacter)
+	{
+		OpponentCharacter = PlayerTwoFallback ? PlayerTwoFallback : OtherCharacterFallback;
+	}
+
+	for (AShowDownCharacter* Character : Characters)
+	{
+		if (!IsValid(Character))
+		{
+			continue;
+		}
+
+		const bool bActive = Character == PlayerCharacter || Character == OpponentCharacter;
+		Character->SetCharacterSceneActive(bActive);
+	}
+
+	if (PlayerCharacter)
+	{
+		PlayerCharacter->SetCharacterIdentity(
+			EShowDownCharacterRole::Player,
+			EShowDownPlayerSlot::Player1,
+			TEXT("Player"));
+		PlayerCharacter->SetCharacterSceneActive(true);
+	}
+
+	if (OpponentCharacter)
+	{
+		OpponentCharacter->SetCharacterIdentity(
+			EShowDownCharacterRole::Opponent,
+			EShowDownPlayerSlot::None,
+			TEXT("Opponent"));
+		OpponentCharacter->SetCharacterSceneActive(true);
+	}
+
+	UE_LOG(
+		LogTemp,
+		Log,
+		TEXT("Single-player characters configured. Player=%s Opponent=%s Hidden=%d"),
+		PlayerCharacter ? *PlayerCharacter->GetName() : TEXT("None"),
+		OpponentCharacter ? *OpponentCharacter->GetName() : TEXT("None"),
+		FMath::Max(0, Characters.Num() - (PlayerCharacter ? 1 : 0) - (OpponentCharacter ? 1 : 0)));
+}
+
+void AShowDownGameModeBase::ConfigureMultiplayerCharacters(const TArray<ASDPlayerState*>& Players)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	TArray<AShowDownCharacter*> Characters = GetShowDownCharacters();
+	if (Characters.Num() <= 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("No ShowDownCharacter actors found for multiplayer character setup."));
+		return;
+	}
+
+	TArray<ASDPlayerState*> SortedPlayers = Players;
+	SortedPlayers.RemoveAll([](const ASDPlayerState* Player)
+	{
+		return !Player || Player->ShowDownSlot == EShowDownPlayerSlot::None;
+	});
+	SortedPlayers.Sort([](const ASDPlayerState& Left, const ASDPlayerState& Right)
+	{
+		return static_cast<uint8>(Left.ShowDownSlot) < static_cast<uint8>(Right.ShowDownSlot);
+	});
+
+	TSet<AShowDownCharacter*> AssignedCharacters;
+	for (ASDPlayerState* Player : SortedPlayers)
+	{
+		if (!Player)
+		{
+			continue;
+		}
+
+		AShowDownCharacter* AssignedCharacter = nullptr;
+		for (AShowDownCharacter* Character : Characters)
+		{
+			if (IsValid(Character)
+				&& !AssignedCharacters.Contains(Character)
+				&& Character->GetPlayerSlot() == Player->ShowDownSlot)
+			{
+				AssignedCharacter = Character;
+				break;
+			}
+		}
+
+		if (!AssignedCharacter)
+		{
+			for (AShowDownCharacter* Character : Characters)
+			{
+				if (IsValid(Character)
+					&& !AssignedCharacters.Contains(Character)
+					&& Character->GetCharacterRole() == EShowDownCharacterRole::Player)
+				{
+					AssignedCharacter = Character;
+					break;
+				}
+			}
+		}
+
+		if (!AssignedCharacter)
+		{
+			for (AShowDownCharacter* Character : Characters)
+			{
+				if (IsValid(Character) && !AssignedCharacters.Contains(Character))
+				{
+					AssignedCharacter = Character;
+					break;
+				}
+			}
+		}
+
+		if (!AssignedCharacter)
+		{
+			UE_LOG(
+				LogTemp,
+				Warning,
+				TEXT("Not enough ShowDownCharacter actors for multiplayer slot %d (%s)."),
+				static_cast<int32>(Player->ShowDownSlot),
+				*Player->GetPlayerName());
+			continue;
+		}
+
+		AssignedCharacters.Add(AssignedCharacter);
+		AssignedCharacter->SetCharacterIdentity(
+			EShowDownCharacterRole::Player,
+			Player->ShowDownSlot,
+			GetNetworkPlayerDisplayName(Player));
+		AssignedCharacter->SetCharacterSceneActive(true);
+	}
+
+	for (AShowDownCharacter* Character : Characters)
+	{
+		if (IsValid(Character) && !AssignedCharacters.Contains(Character))
+		{
+			Character->SetCharacterSceneActive(false);
+		}
+	}
+
+	UE_LOG(
+		LogTemp,
+		Log,
+		TEXT("Multiplayer characters configured. Active=%d Hidden=%d"),
+		AssignedCharacters.Num(),
+		FMath::Max(0, Characters.Num() - AssignedCharacters.Num()));
 }
 
 float AShowDownGameModeBase::ResolveMultiplayerRouletteResultDelay() const
@@ -2553,6 +2805,19 @@ void AShowDownGameModeBase::RefreshNetworkPlayerSlots()
 			ShowDownGameState->ClearPlayerSlot(Slot);
 		}
 	}
+
+	if (HasAuthority()
+		&& bMultiplayerMatchStarted
+		&& GetNetMode() != NM_Standalone
+		&& MultiplayerPlayers.Num() > 0)
+	{
+		TArray<ASDPlayerState*> CurrentPlayers;
+		for (ASDPlayerState* Player : MultiplayerPlayers)
+		{
+			CurrentPlayers.Add(Player);
+		}
+		ConfigureMultiplayerCharacters(CurrentPlayers);
+	}
 }
 
 EShowDownPlayerSlot AShowDownGameModeBase::FindNextOpenPlayerSlot() const
@@ -2671,6 +2936,12 @@ void AShowDownGameModeBase::StartMultiplayerMatch(const TArray<ASDPlayerState*>&
 		MultiplayerPlayers.Add(Player);
 	}
 
+	TArray<ASDPlayerState*> CurrentPlayers;
+	for (ASDPlayerState* Player : MultiplayerPlayers)
+	{
+		CurrentPlayers.Add(Player);
+	}
+	ConfigureMultiplayerCharacters(CurrentPlayers);
 	EnsureMultiplayerSeatAnchors();
 
 	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())

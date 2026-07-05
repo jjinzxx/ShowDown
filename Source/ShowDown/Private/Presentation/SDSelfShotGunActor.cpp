@@ -1405,7 +1405,9 @@ AActor* ASDSelfShotGunActor::FindMultiplayerShotTarget(EShowDownPlayerSlot Targe
 	for (TActorIterator<AShowDownCharacter> It(World); It; ++It)
 	{
 		AShowDownCharacter* CandidateCharacter = *It;
-		if (IsValid(CandidateCharacter) && CandidateCharacter->IsAssignedToSlot(TargetSlot))
+		if (IsValid(CandidateCharacter)
+			&& CandidateCharacter->IsCharacterSceneActive()
+			&& CandidateCharacter->IsAssignedToSlot(TargetSlot))
 		{
 			return CandidateCharacter;
 		}

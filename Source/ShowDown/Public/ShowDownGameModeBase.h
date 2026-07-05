@@ -411,6 +411,9 @@ private:
 	void BroadcastPendingSelfShotRouletteResult();
 	ASDSelfShotGunActor* FindSelfShotGunActor() const;
 	AShowDownCharacter* FindSingleRouletteCharacter(EShowDownSide TargetSide) const;
+	TArray<AShowDownCharacter*> GetShowDownCharacters() const;
+	void ConfigureSinglePlayerCharacters();
+	void ConfigureMultiplayerCharacters(const TArray<ASDPlayerState*>& Players);
 	float ResolveMultiplayerRouletteResultDelay() const;
 	FSDCardHandLayoutSettings GetDefaultHandLayoutSettings() const;
 	FSDCardHandLayoutSettings ResolveHandLayoutSettings(EShowDownSide Side) const;

@@ -123,6 +123,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Character Identity")
 	bool IsOpponentCharacterForLocalPlayer() const;
 
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Character Visibility")
+	void SetCharacterSceneActive(bool bNewActive);
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Character Visibility")
+	bool IsCharacterSceneActive() const { return bCharacterSceneActive; }
+
 	UFUNCTION(BlueprintImplementableEvent, Category = "ShowDown|Character Identity")
 	void OnCharacterIdentityChanged();
 
@@ -138,6 +144,9 @@ protected:
 
 	UFUNCTION()
 	void OnRep_ViewRotation();
+
+	UFUNCTION()
+	void OnRep_SceneActive();
 
 	UFUNCTION(Server, Reliable)
 	void ServerSetCharacterAnimState(EShowDownCharacterAnimState NewState);
@@ -244,6 +253,9 @@ protected:
 	UPROPERTY(ReplicatedUsing = OnRep_Identity, EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Identity")
 	FString CharacterDisplayName;
 
+	UPROPERTY(ReplicatedUsing = OnRep_SceneActive, BlueprintReadOnly, Category = "ShowDown|Character Visibility")
+	bool bCharacterSceneActive = true;
+
 private:
 	void ApplyCharacterAnimState(EShowDownCharacterAnimState NewState);
 	void FinishCharacterActionAnimIfCurrent(EShowDownCharacterAnimState FinishedState);
@@ -268,6 +280,7 @@ private:
 	void StopActionVisuals();
 	void PushAnimStateToAnimInstance() const;
 	void ApplyPlayerViewRotation(FRotator ViewRotation);
+	void ApplyCharacterSceneActive();
 
 	FTimerHandle AnimStateResetTimerHandle;
 	UPROPERTY(Transient)

@@ -1778,7 +1778,7 @@ AShowDownCharacter* AShowDownPlayerController::FindLocalCharacterForPlayerCamera
 	for (TActorIterator<AShowDownCharacter> It(World); It; ++It)
 	{
 		AShowDownCharacter* CandidateCharacter = *It;
-		if (!IsValid(CandidateCharacter))
+		if (!IsValid(CandidateCharacter) || !CandidateCharacter->IsCharacterSceneActive())
 		{
 			continue;
 		}
