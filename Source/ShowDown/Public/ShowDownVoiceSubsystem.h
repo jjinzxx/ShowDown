@@ -45,7 +45,10 @@ public:
 	FString TTSModel = TEXT("gpt-4o-mini-tts");
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice")
-	FString TTSVoice = TEXT("ash");
+	FString TTSVoice = TEXT("echo");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice", meta = (MultiLine = "true"))
+	FString TTSInstructions = TEXT("Speak Korean in a bright, high-pitched retro robot voice. Keep it synthetic, chirpy, segmented, and slightly beepy, like short electronic beeps between phrases.");
 
 	UPROPERTY(
 		EditAnywhere,
@@ -53,7 +56,7 @@ public:
 		Config,
 		Category = "ShowDown|Voice",
 		meta = (DisplayName = "Voice Speed", ClampMin = "0.5", ClampMax = "2.0", UIMin = "0.5", UIMax = "2.0"))
-	float TTSPlaybackSpeed = 1.0f;
+	float TTSPlaybackSpeed = 1.08f;
 
 	UPROPERTY(
 		EditAnywhere,
@@ -61,7 +64,7 @@ public:
 		Config,
 		Category = "ShowDown|Voice",
 		meta = (DisplayName = "Voice Pitch", ClampMin = "0.5", ClampMax = "2.0", UIMin = "0.5", UIMax = "2.0"))
-	float TTSPlaybackPitch = 1.0f;
+	float TTSPlaybackPitch = 1.35f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice")
 	FString TranscriptionLanguage = TEXT("ko");
