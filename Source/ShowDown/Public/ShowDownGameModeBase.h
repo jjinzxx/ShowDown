@@ -341,8 +341,13 @@ private:
 	UPROPERTY()
 	TObjectPtr<ASDPlayerState> MultiplayerRoundLeader = nullptr;
 
+	UPROPERTY()
 	TSet<TObjectPtr<ASDPlayerState>> MultiplayerFoldedPlayers;
+
+	UPROPERTY()
 	TSet<TObjectPtr<ASDPlayerState>> MultiplayerPlayersActed;
+
+	UPROPERTY()
 	TSet<TObjectPtr<ASDPlayerState>> MultiplayerRestartVotes;
 
 	FTimerHandle MultiplayerStartTimerHandle;

@@ -983,7 +983,13 @@ void AShowDownCharacter::StopActionVisuals()
 
 void AShowDownCharacter::PushAnimStateToAnimInstance() const
 {
-	if (UShowDownCharacterAnimInstance* AnimInstance = Cast<UShowDownCharacterAnimInstance>(GetMesh()->GetAnimInstance()))
+	const USkeletalMeshComponent* CharacterMesh = GetMesh();
+	if (!CharacterMesh)
+	{
+		return;
+	}
+
+	if (UShowDownCharacterAnimInstance* AnimInstance = Cast<UShowDownCharacterAnimInstance>(CharacterMesh->GetAnimInstance()))
 	{
 		AnimInstance->SetCharacterAnimState(ReplicatedAnimState);
 	}

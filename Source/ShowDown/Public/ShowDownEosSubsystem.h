@@ -51,6 +51,8 @@ class SHOWDOWN_API UShowDownEosSubsystem : public UGameInstanceSubsystem
 	GENERATED_BODY()
 
 public:
+	virtual void Deinitialize() override;
+
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|EOS")
 	FOnShowDownEosResult OnEosLoginResult;
 
@@ -167,4 +169,6 @@ private:
 	void CompleteLobbyLeave(bool bSessionDestroyed);
 	bool TravelToSearchResult(const FOnlineSessionSearchResult& SearchResult, const FString& StatusMessage);
 	void HostLobbyWithVisibility(FName LobbyMapName, FName GameMapName, bool bPublicRoom);
+	void ClearOnlineDelegateHandles();
+	void ClearTransientSearchState(bool bClearPublicRooms);
 };

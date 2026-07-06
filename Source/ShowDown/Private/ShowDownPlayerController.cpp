@@ -2163,6 +2163,14 @@ void AShowDownPlayerController::TryBindVoiceChatEvents()
 	AShowDownGameStateBase* ShowDownGameState = GetWorld()
 		? GetWorld()->GetGameState<AShowDownGameStateBase>()
 		: nullptr;
+	if (ShowDownGameState
+		&& VoiceBoundGameState.Get() == ShowDownGameState
+		&& bVoiceChatEventsBound
+		&& bVoiceSubsystemEventsBound)
+	{
+		return;
+	}
+
 	if (ShowDownGameState && VoiceBoundGameState.Get() != ShowDownGameState)
 	{
 		if (AShowDownGameStateBase* PreviousGameState = VoiceBoundGameState.Get())
