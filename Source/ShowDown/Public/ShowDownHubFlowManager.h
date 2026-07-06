@@ -77,7 +77,7 @@ public:
 
 	// [연출 파트용 훅] 게임이 끝나면(승/패) 호출되는 블루프린트 이벤트입니다.
 	// 여기서 결과 카메라 연출, 승/패 결과 위젯, 사운드 등을 재생하면 됩니다.
-	// (시점은 GameCamera 슬롯/SetViewTargetWithBlend로 잡을 수 있습니다.)
+	// 연출 카메라 컷은 Level Sequence가 담당하고, 인게임 시점은 플레이어 카메라를 사용합니다.
 	// 연출이 없거나 짧으면 ReturnToHubDelay 후 자동으로 허브(메인메뉴)로 복귀합니다.
 	UFUNCTION(BlueprintImplementableEvent, Category = "ShowDown|Flow")
 	void OnGameResultPresentation(EShowDownSide Winner);
@@ -126,65 +126,23 @@ private:
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera")
 	ACameraActor* RankingCamera;
 
-	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera")
-	ACameraActor* GameCamera;
-
-	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera|Character")
-	bool bUseCharacterPlayerCameraForSinglePlay = true;
-
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera", meta = (ClampMin = "0.0"))
 	float CameraBlendTime = 0.75f;
 
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera", meta = (ClampMin = "0.1", UIMin = "1.0", UIMax = "6.0"))
 	float CameraBlendEaseExponent = 3.0f;
 
-	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera|Game Camera")
-	bool bEnableGameCameraMouseLook = true;
-
-	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera|Game Camera", meta = (ClampMin = "0.0"))
-	float GameCameraLookSensitivity = 0.2f;
-
 	UPROPERTY(
 		EditAnywhere,
-		Category = "ShowDown|Camera|Game Camera|Voice",
+		Category = "ShowDown|Single Player|Voice",
 		meta = (DisplayName = "Voice Speed", ClampMin = "0.5", ClampMax = "2.0", UIMin = "0.5", UIMax = "2.0"))
-	float GameCameraVoiceSpeed = 1.0f;
+	float SinglePlayerVoiceSpeed = 1.0f;
 
 	UPROPERTY(
 		EditAnywhere,
-		Category = "ShowDown|Camera|Game Camera|Voice",
+		Category = "ShowDown|Single Player|Voice",
 		meta = (DisplayName = "Voice Pitch", ClampMin = "0.5", ClampMax = "2.0", UIMin = "0.5", UIMax = "2.0"))
-	float GameCameraVoicePitch = 1.0f;
-
-	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera|Game Camera")
-	float GameCameraMinPitch = -35.0f;
-
-	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera|Game Camera")
-	float GameCameraMaxPitch = 35.0f;
-
-	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera|Game Camera")
-	float GameCameraMinYawOffset = -45.0f;
-
-	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera|Game Camera")
-	float GameCameraMaxYawOffset = 45.0f;
-
-	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera|Game Camera")
-	bool bInvertGameCameraMouseY = true;
-
-	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera|Game Camera|Breathing")
-	bool bEnableGameCameraBreathingSway = true;
-
-	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera|Game Camera|Breathing", meta = (ClampMin = "0.0"))
-	float GameCameraBreathingSwaySpeed = 0.38f;
-
-	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera|Game Camera|Breathing")
-	FRotator GameCameraBreathingSwayRotationAmplitude = FRotator(0.12f, 0.05f, 0.08f);
-
-	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera|Game Camera|Breathing")
-	FVector GameCameraBreathingSwayLocationAmplitude = FVector(0.0f, 0.0f, 0.8f);
-
-	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera|Game Camera|Breathing", meta = (ClampMin = "0.0"))
-	float GameCameraBreathingSwayBlendInTime = 1.0f;
+	float SinglePlayerVoicePitch = 1.0f;
 
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Developer")
 	bool bDeveloperAutoStartSinglePlayer = true;

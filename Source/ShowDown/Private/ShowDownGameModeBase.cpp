@@ -17,6 +17,9 @@
 #include "ShowDownTypes.h"
 #include "Components/SceneComponent.h"
 #include "Kismet/GameplayStatics.h"
+#include "LevelSequenceActor.h"
+#include "LevelSequencePlayer.h"
+#include "MovieSceneSequencePlaybackSettings.h"
 #include "PlayerPawn.h"
 #include "Presentation/SDSelfShotGunActor.h"
 #include "SDPlayerSeat.h"
@@ -158,6 +161,16 @@ namespace
 	{
 		switch (Slot)
 		{
+		case EShowDownPlayerSlot::Player1:
+			OutRole = bForeheadSlot
+				? ESDCardPlacementRole::PlayerForehead
+				: ESDCardPlacementRole::PlayerHand;
+			return true;
+		case EShowDownPlayerSlot::Player2:
+			OutRole = bForeheadSlot
+				? ESDCardPlacementRole::OpponentForehead
+				: ESDCardPlacementRole::OpponentHand;
+			return true;
 		case EShowDownPlayerSlot::Player3:
 			OutRole = bForeheadSlot
 				? ESDCardPlacementRole::Player3Forehead
@@ -168,8 +181,6 @@ namespace
 				? ESDCardPlacementRole::Player4Forehead
 				: ESDCardPlacementRole::Player4Hand;
 			return true;
-		case EShowDownPlayerSlot::Player1:
-		case EShowDownPlayerSlot::Player2:
 		case EShowDownPlayerSlot::None:
 		default:
 			return false;
@@ -337,7 +348,7 @@ void AShowDownGameModeBase::StartSinglePlayer()
 
 	ConfigureSinglePlayerCharacters();
 	FindCollector();
-	StartStage(0);
+	PlaySinglePlayerIntroThenStartStage();
 }
 
 void AShowDownGameModeBase::StartMultiplayerGame()
@@ -1087,6 +1098,231 @@ AShowDownCharacter* AShowDownGameModeBase::FindSingleRouletteCharacter(EShowDown
 	}
 
 	return nullptr;
+}
+
+void AShowDownGameModeBase::PlaySinglePlayerIntroThenStartStage()
+{
+	if (!bPlaySinglePlayerIntro || !HasAuthority())
+	{
+		StartStage(0);
+		return;
+	}
+
+	AShowDownCharacter* PlayerCharacter = FindSingleRouletteCharacter(EShowDownSide::Player);
+	AShowDownCharacter* CollectorCharacter = FindSingleRouletteCharacter(EShowDownSide::Collector);
+	SinglePlayerIntroPlayerCharacter = PlayerCharacter;
+	SinglePlayerIntroCollectorCharacter = CollectorCharacter;
+	bSinglePlayerIntroFallbackActive = false;
+
+	if (PlaySinglePlayerIntroSequence(PlayerCharacter, CollectorCharacter))
+	{
+		return;
+	}
+
+	if (PlaySinglePlayerIntroFallback(PlayerCharacter, CollectorCharacter))
+	{
+		return;
+	}
+
+	StartStage(0);
+}
+
+bool AShowDownGameModeBase::PlaySinglePlayerIntroSequence(
+	AShowDownCharacter* PlayerCharacter,
+	AShowDownCharacter* CollectorCharacter)
+{
+	if (!SinglePlayerIntroSequence || !GetWorld())
+	{
+		return false;
+	}
+
+	FMovieSceneSequencePlaybackSettings PlaybackSettings;
+	PlaybackSettings.bDisableMovementInput = true;
+	PlaybackSettings.bDisableLookAtInput = true;
+	PlaybackSettings.FinishCompletionStateOverride = EMovieSceneCompletionModeOverride::ForceKeepState;
+
+	ALevelSequenceActor* SequenceActor = nullptr;
+	ULevelSequencePlayer* SequencePlayer = ULevelSequencePlayer::CreateLevelSequencePlayer(
+		this,
+		SinglePlayerIntroSequence,
+		PlaybackSettings,
+		SequenceActor);
+
+	if (!SequencePlayer || !SequenceActor)
+	{
+		return false;
+	}
+
+	if (PlayerCharacter && !SinglePlayerIntroPlayerBindingTag.IsNone())
+	{
+		TArray<AActor*> BoundActors;
+		BoundActors.Add(PlayerCharacter);
+		SequenceActor->SetBindingByTag(SinglePlayerIntroPlayerBindingTag, BoundActors, false);
+	}
+
+	if (CollectorCharacter && !SinglePlayerIntroCollectorBindingTag.IsNone())
+	{
+		TArray<AActor*> BoundActors;
+		BoundActors.Add(CollectorCharacter);
+		SequenceActor->SetBindingByTag(SinglePlayerIntroCollectorBindingTag, BoundActors, false);
+	}
+
+	ActiveSinglePlayerIntroSequenceActor = SequenceActor;
+	ActiveSinglePlayerIntroSequencePlayer = SequencePlayer;
+	bSinglePlayerIntroFallbackActive = false;
+	SequencePlayer->OnFinished.AddDynamic(this, &AShowDownGameModeBase::HandleSinglePlayerIntroSequenceFinished);
+	SequencePlayer->Play();
+
+	UE_LOG(LogTemp, Log, TEXT("Single-player intro sequence started: %s"), *SinglePlayerIntroSequence->GetName());
+	return true;
+}
+
+bool AShowDownGameModeBase::PlaySinglePlayerIntroFallback(
+	AShowDownCharacter* PlayerCharacter,
+	AShowDownCharacter* CollectorCharacter)
+{
+	if (!bUseSinglePlayerIntroFallbackWhenNoSequence
+		|| SinglePlayerIntroFallbackDuration <= KINDA_SMALL_NUMBER
+		|| SinglePlayerIntroFallbackStartDistance <= KINDA_SMALL_NUMBER
+		|| (!PlayerCharacter && !CollectorCharacter)
+		|| !GetWorld())
+	{
+		return false;
+	}
+
+	const FVector TableCenter = ResolveSingleTableCenter(GetWorld());
+	auto BuildStartTransform = [this, TableCenter](const FTransform& TargetTransform)
+	{
+		FVector Direction = TargetTransform.GetLocation() - TableCenter;
+		Direction.Z = 0.0f;
+		if (!Direction.Normalize())
+		{
+			Direction = -TargetTransform.GetRotation().GetForwardVector();
+			Direction.Z = 0.0f;
+			if (!Direction.Normalize())
+			{
+				Direction = FVector::ForwardVector;
+			}
+		}
+
+		FTransform StartTransform = TargetTransform;
+		StartTransform.SetLocation(TargetTransform.GetLocation() + Direction * SinglePlayerIntroFallbackStartDistance);
+		return StartTransform;
+	};
+
+	if (PlayerCharacter)
+	{
+		SinglePlayerIntroPlayerTargetTransform = PlayerCharacter->GetActorTransform();
+		SinglePlayerIntroPlayerStartTransform = BuildStartTransform(SinglePlayerIntroPlayerTargetTransform);
+		PlayerCharacter->SetActorTransform(SinglePlayerIntroPlayerStartTransform);
+	}
+
+	if (CollectorCharacter)
+	{
+		SinglePlayerIntroCollectorTargetTransform = CollectorCharacter->GetActorTransform();
+		SinglePlayerIntroCollectorStartTransform = BuildStartTransform(SinglePlayerIntroCollectorTargetTransform);
+		CollectorCharacter->SetActorTransform(SinglePlayerIntroCollectorStartTransform);
+	}
+
+	bSinglePlayerIntroFallbackActive = true;
+	SinglePlayerIntroFallbackStartTime = GetWorld()->GetTimeSeconds();
+	GetWorldTimerManager().SetTimer(
+		SinglePlayerIntroFallbackTimerHandle,
+		this,
+		&AShowDownGameModeBase::UpdateSinglePlayerIntroFallback,
+		1.0f / 60.0f,
+		true);
+
+	UE_LOG(LogTemp, Log, TEXT("Single-player intro fallback started."));
+	return true;
+}
+
+void AShowDownGameModeBase::UpdateSinglePlayerIntroFallback()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		FinishSinglePlayerIntro();
+		return;
+	}
+
+	const float Duration = FMath::Max(KINDA_SMALL_NUMBER, SinglePlayerIntroFallbackDuration);
+	const float Alpha = FMath::Clamp((World->GetTimeSeconds() - SinglePlayerIntroFallbackStartTime) / Duration, 0.0f, 1.0f);
+	const float EasedAlpha = FMath::InterpEaseOut(0.0f, 1.0f, Alpha, 2.0f);
+	auto LerpActorTransform = [](AActor* Actor, const FTransform& From, const FTransform& To, float TransformAlpha)
+	{
+		if (!Actor)
+		{
+			return;
+		}
+
+		const FVector Location = FMath::Lerp(From.GetLocation(), To.GetLocation(), TransformAlpha);
+		const FQuat Rotation = FQuat::Slerp(From.GetRotation(), To.GetRotation(), TransformAlpha);
+		const FVector Scale = FMath::Lerp(From.GetScale3D(), To.GetScale3D(), TransformAlpha);
+		Actor->SetActorTransform(FTransform(Rotation, Location, Scale));
+	};
+
+	if (SinglePlayerIntroPlayerCharacter)
+	{
+		LerpActorTransform(
+			SinglePlayerIntroPlayerCharacter,
+			SinglePlayerIntroPlayerStartTransform,
+			SinglePlayerIntroPlayerTargetTransform,
+			EasedAlpha);
+	}
+
+	if (SinglePlayerIntroCollectorCharacter)
+	{
+		LerpActorTransform(
+			SinglePlayerIntroCollectorCharacter,
+			SinglePlayerIntroCollectorStartTransform,
+			SinglePlayerIntroCollectorTargetTransform,
+			EasedAlpha);
+	}
+
+	if (Alpha >= 1.0f)
+	{
+		FinishSinglePlayerIntro();
+	}
+}
+
+void AShowDownGameModeBase::HandleSinglePlayerIntroSequenceFinished()
+{
+	FinishSinglePlayerIntro();
+}
+
+void AShowDownGameModeBase::FinishSinglePlayerIntro()
+{
+	GetWorldTimerManager().ClearTimer(SinglePlayerIntroFallbackTimerHandle);
+
+	if (bSinglePlayerIntroFallbackActive && SinglePlayerIntroPlayerCharacter)
+	{
+		SinglePlayerIntroPlayerCharacter->SetActorTransform(SinglePlayerIntroPlayerTargetTransform);
+	}
+	if (bSinglePlayerIntroFallbackActive && SinglePlayerIntroCollectorCharacter)
+	{
+		SinglePlayerIntroCollectorCharacter->SetActorTransform(SinglePlayerIntroCollectorTargetTransform);
+	}
+
+	if (ActiveSinglePlayerIntroSequencePlayer)
+	{
+		ActiveSinglePlayerIntroSequencePlayer->OnFinished.RemoveDynamic(
+			this,
+			&AShowDownGameModeBase::HandleSinglePlayerIntroSequenceFinished);
+	}
+
+	if (ActiveSinglePlayerIntroSequenceActor)
+	{
+		ActiveSinglePlayerIntroSequenceActor->Destroy();
+	}
+
+	ActiveSinglePlayerIntroSequencePlayer = nullptr;
+	ActiveSinglePlayerIntroSequenceActor = nullptr;
+	SinglePlayerIntroPlayerCharacter = nullptr;
+	SinglePlayerIntroCollectorCharacter = nullptr;
+	bSinglePlayerIntroFallbackActive = false;
+
+	StartStage(0);
 }
 
 TArray<AShowDownCharacter*> AShowDownGameModeBase::GetShowDownCharacters() const
@@ -4539,6 +4775,14 @@ USceneComponent* AShowDownGameModeBase::GetHandSlotForPlayerState(ASDPlayerState
 	}
 
 	const int32 PlayerIndex = MultiplayerPlayers.IndexOfByKey(Player);
+	if (const ASDCardPlacementAnchor* HandAnchor = GetHandAnchorForPlayerSlot(Player->ShowDownSlot))
+	{
+		if (USceneComponent* HandSlot = HandAnchor->GetSlotComponent())
+		{
+			return HandSlot;
+		}
+	}
+
 	for (FConstPlayerControllerIterator Iterator = GetWorld()->GetPlayerControllerIterator(); Iterator; ++Iterator)
 	{
 		const APlayerController* PlayerController = Iterator->Get();
@@ -4573,6 +4817,14 @@ USceneComponent* AShowDownGameModeBase::GetHeadSlotForPlayerState(ASDPlayerState
 	}
 
 	const int32 PlayerIndex = MultiplayerPlayers.IndexOfByKey(Player);
+	if (const ASDCardPlacementAnchor* ForeheadAnchor = GetForeheadAnchorForPlayerSlot(Player->ShowDownSlot))
+	{
+		if (USceneComponent* HeadSlot = ForeheadAnchor->GetSlotComponent())
+		{
+			return HeadSlot;
+		}
+	}
+
 	for (FConstPlayerControllerIterator Iterator = GetWorld()->GetPlayerControllerIterator(); Iterator; ++Iterator)
 	{
 		const APlayerController* PlayerController = Iterator->Get();
@@ -4768,6 +5020,16 @@ FSDCardHandLayoutSettings AShowDownGameModeBase::ResolveHandLayoutSettingsForPla
 		return Settings;
 	}
 
+	if (const ASDCardPlacementAnchor* HandAnchor = GetHandAnchorForPlayerSlot(Player->ShowDownSlot))
+	{
+		Settings.CardSpacing = HandAnchor->CardSpacing;
+		Settings.ForwardOffset = HandAnchor->ForwardOffset;
+		Settings.HeightOffset = HandAnchor->HeightOffset;
+		Settings.LeanAngle = HandAnchor->LeanAngle;
+		Settings.LayerStep = HandAnchor->LayerStep;
+		return Settings;
+	}
+
 	return ResolveHandLayoutSettings(EShowDownSide::Player);
 }
 
@@ -4775,6 +5037,22 @@ void AShowDownGameModeBase::ApplyCardMotionForPlayerState(ASDPlayerState* Player
 {
 	if (!Player)
 	{
+		return;
+	}
+
+	if (const ASDCardPlacementAnchor* HandAnchor = GetHandAnchorForPlayerSlot(Player->ShowDownSlot))
+	{
+		for (ACard* Card : Cards)
+		{
+			if (!Card)
+			{
+				continue;
+			}
+
+			Card->SelectedOffset = HandAnchor->SelectedOffset;
+			Card->HoverOffset = HandAnchor->HoverOffset;
+			Card->MoveSpeed = HandAnchor->MoveSpeed;
+		}
 		return;
 	}
 

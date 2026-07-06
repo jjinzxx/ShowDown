@@ -69,7 +69,7 @@ void AShowDownHubFlowManager::BeginPlay()
 		&& GetNetMode() == NM_Standalone;
 #endif
 
-	PlayCamera(bShouldDeveloperAutoStart ? GameCamera : (bHasSession ? MainMenuCamera : LoginCamera), true);
+	PlayCamera(bShouldDeveloperAutoStart ? MainMenuCamera : (bHasSession ? MainMenuCamera : LoginCamera), true);
 
 	// 게임 종료(승/패)를 받아 허브로 복귀하기 위해 GameState 이벤트를 구독합니다.
 	if (UWorld* World = GetWorld())
@@ -352,48 +352,40 @@ void AShowDownHubFlowManager::ShowSinglePlayPreviewInternal(bool bAllowOnlineRew
 	APlayerController* PlayerController = GetPrimaryPlayerController();
 	if (AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(PlayerController))
 	{
-		ShowDownController->bUseCharacterPlayerCamera = bUseCharacterPlayerCameraForSinglePlay;
-		if (bUseCharacterPlayerCameraForSinglePlay)
+		ShowDownController->bUseCharacterPlayerCamera = true;
+
+		float LookSensitivity = 0.08f;
+		float MinPitch = -35.0f;
+		float MaxPitch = 35.0f;
+		float MinYawOffset = -45.0f;
+		float MaxYawOffset = 45.0f;
+		bool bInvertMouseY = true;
+		if (UWorld* World = GetWorld())
 		{
-			float LookSensitivity = GameCameraLookSensitivity;
-			float MinPitch = GameCameraMinPitch;
-			float MaxPitch = GameCameraMaxPitch;
-			float MinYawOffset = GameCameraMinYawOffset;
-			float MaxYawOffset = GameCameraMaxYawOffset;
-			bool bInvertMouseY = bInvertGameCameraMouseY;
-			if (UWorld* World = GetWorld())
+			if (const AShowDownGameModeBase* GameMode = World->GetAuthGameMode<AShowDownGameModeBase>())
 			{
-				if (const AShowDownGameModeBase* GameMode = World->GetAuthGameMode<AShowDownGameModeBase>())
-				{
-					LookSensitivity = GameMode->GameplayCameraLookSensitivity;
-					MinPitch = GameMode->GameplayCameraMinPitch;
-					MaxPitch = GameMode->GameplayCameraMaxPitch;
-					MinYawOffset = GameMode->GameplayCameraMinYawOffset;
-					MaxYawOffset = GameMode->GameplayCameraMaxYawOffset;
-					bInvertMouseY = GameMode->bInvertGameplayCameraMouseY;
-				}
+				LookSensitivity = GameMode->GameplayCameraLookSensitivity;
+				MinPitch = GameMode->GameplayCameraMinPitch;
+				MaxPitch = GameMode->GameplayCameraMaxPitch;
+				MinYawOffset = GameMode->GameplayCameraMinYawOffset;
+				MaxYawOffset = GameMode->GameplayCameraMaxYawOffset;
+				bInvertMouseY = GameMode->bInvertGameplayCameraMouseY;
 			}
-
-			ShowDownController->ClearFixedCameraMouseLook();
-			ShowDownController->SetPawnCameraMouseLook(
-				LookSensitivity,
-				MinPitch,
-				MaxPitch,
-				MinYawOffset,
-				MaxYawOffset,
-				bInvertMouseY);
-			ShowDownController->bEnablePawnCameraMouseLook = true;
-			ShowDownController->bRequireRightMouseForPawnCameraLook = false;
 		}
+
+		ShowDownController->ClearFixedCameraMouseLook();
+		ShowDownController->SetPawnCameraMouseLook(
+			LookSensitivity,
+			MinPitch,
+			MaxPitch,
+			MinYawOffset,
+			MaxYawOffset,
+			bInvertMouseY);
+		ShowDownController->bEnablePawnCameraMouseLook = true;
+		ShowDownController->bRequireRightMouseForPawnCameraLook = false;
 	}
 
-	if (GameCamera && GameCamera->GetCameraComponent())
-	{
-		ShowDownCameraAspect::ApplyForced16By9(GameCamera);
-	}
-
-	const bool bPlayedGameCamera = bUseCharacterPlayerCameraForSinglePlay ? false : PlayCamera(GameCamera);
-	if (!bPlayedGameCamera && PlayerController && PlayerController->GetPawn())
+	if (PlayerController && PlayerController->GetPawn())
 	{
 		PlayerController->SetViewTargetWithBlend(
 			PlayerController->GetPawn(),
@@ -405,66 +397,9 @@ void AShowDownHubFlowManager::ShowSinglePlayPreviewInternal(bool bAllowOnlineRew
 	// 카드 커서 트레이스·카메라 조작·베팅 핫키가 모두 폰에 전달되도록 게임 입력 모드로 전환합니다.
 	if (PlayerController)
 	{
-		const bool bUseGameCameraLook = bEnableGameCameraMouseLook && bPlayedGameCamera && GameCamera;
 		if (AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(PlayerController))
 		{
 			ShowDownController->bHandleShowDownGameplayInput = true;
-		}
-
-		if (bUseGameCameraLook)
-		{
-			if (AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(PlayerController))
-			{
-				float LookSensitivity = GameCameraLookSensitivity;
-				float MinPitch = GameCameraMinPitch;
-				float MaxPitch = GameCameraMaxPitch;
-				float MinYawOffset = GameCameraMinYawOffset;
-				float MaxYawOffset = GameCameraMaxYawOffset;
-				bool bInvertMouseY = bInvertGameCameraMouseY;
-				bool bEnableBreathingSway = bEnableGameCameraBreathingSway;
-				float BreathingSwaySpeed = GameCameraBreathingSwaySpeed;
-				FRotator BreathingSwayRotationAmplitude = GameCameraBreathingSwayRotationAmplitude;
-				FVector BreathingSwayLocationAmplitude = GameCameraBreathingSwayLocationAmplitude;
-				float BreathingSwayBlendInTime = GameCameraBreathingSwayBlendInTime;
-
-				if (UWorld* World = GetWorld())
-				{
-					if (const AShowDownGameModeBase* GameMode = World->GetAuthGameMode<AShowDownGameModeBase>())
-					{
-						LookSensitivity = GameMode->GameplayCameraLookSensitivity;
-						MinPitch = GameMode->GameplayCameraMinPitch;
-						MaxPitch = GameMode->GameplayCameraMaxPitch;
-						MinYawOffset = GameMode->GameplayCameraMinYawOffset;
-						MaxYawOffset = GameMode->GameplayCameraMaxYawOffset;
-						bInvertMouseY = GameMode->bInvertGameplayCameraMouseY;
-						bEnableBreathingSway = GameMode->bEnableGameplayCameraBreathingSway;
-						BreathingSwaySpeed = GameMode->GameplayCameraBreathingSwaySpeed;
-						BreathingSwayRotationAmplitude = GameMode->GameplayCameraBreathingSwayRotationAmplitude;
-						BreathingSwayLocationAmplitude = GameMode->GameplayCameraBreathingSwayLocationAmplitude;
-						BreathingSwayBlendInTime = GameMode->GameplayCameraBreathingSwayBlendInTime;
-					}
-				}
-
-				ShowDownController->SetFixedCameraMouseLook(
-					GameCamera,
-					LookSensitivity,
-					MinPitch,
-					MaxPitch,
-					MinYawOffset,
-					MaxYawOffset,
-					bInvertMouseY);
-				ShowDownController->SetFixedCameraBreathingSway(
-					bEnableBreathingSway,
-					BreathingSwaySpeed,
-					BreathingSwayRotationAmplitude,
-					BreathingSwayLocationAmplitude,
-					BreathingSwayBlendInTime);
-			}
-
-		}
-		else
-		{
-			ClearGameplayCameraLook();
 		}
 
 		FInputModeGameOnly InputMode;
@@ -495,8 +430,8 @@ void AShowDownHubFlowManager::ApplySinglePlayerVoiceSettings()
 		? GetGameInstance()->GetSubsystem<UShowDownVoiceSubsystem>()
 		: nullptr)
 	{
-		VoiceSubsystem->TTSPlaybackSpeed = FMath::Clamp(GameCameraVoiceSpeed, 0.5f, 2.0f);
-		VoiceSubsystem->TTSPlaybackPitch = FMath::Clamp(GameCameraVoicePitch, 0.5f, 2.0f);
+		VoiceSubsystem->TTSPlaybackSpeed = FMath::Clamp(SinglePlayerVoiceSpeed, 0.5f, 2.0f);
+		VoiceSubsystem->TTSPlaybackPitch = FMath::Clamp(SinglePlayerVoicePitch, 0.5f, 2.0f);
 	}
 }
 

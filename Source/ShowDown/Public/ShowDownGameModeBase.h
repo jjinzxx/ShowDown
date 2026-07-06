@@ -29,6 +29,9 @@ class AShowDownGameStateBase;
 class AController;
 class APlayerController;
 class ASDPlayerState;
+class ALevelSequenceActor;
+class ULevelSequence;
+class ULevelSequencePlayer;
 class USceneComponent;
 enum class ESDCardPlacementRole : uint8;
 
@@ -244,6 +247,27 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation", meta = (ClampMin = "0.0"))
 	float RevealAutoAdvanceSeconds = 0.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro")
+	bool bPlaySinglePlayerIntro = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro", meta = (EditCondition = "bPlaySinglePlayerIntro"))
+	TObjectPtr<ULevelSequence> SinglePlayerIntroSequence = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro", meta = (EditCondition = "bPlaySinglePlayerIntro"))
+	FName SinglePlayerIntroPlayerBindingTag = TEXT("Player");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro", meta = (EditCondition = "bPlaySinglePlayerIntro"))
+	FName SinglePlayerIntroCollectorBindingTag = TEXT("Collector");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro", meta = (EditCondition = "bPlaySinglePlayerIntro"))
+	bool bUseSinglePlayerIntroFallbackWhenNoSequence = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro", meta = (EditCondition = "bPlaySinglePlayerIntro && bUseSinglePlayerIntroFallbackWhenNoSequence", ClampMin = "0.0"))
+	float SinglePlayerIntroFallbackDuration = 1.2f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro", meta = (EditCondition = "bPlaySinglePlayerIntro && bUseSinglePlayerIntroFallbackWhenNoSequence", ClampMin = "0.0"))
+	float SinglePlayerIntroFallbackStartDistance = 280.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Debug")
 	bool bShowGameFlowDebugMessages = true;
 
@@ -366,11 +390,34 @@ private:
 	bool bPendingSelfShotLiveRound = false;
 	EShowDownSide PendingSelfShotTargetSide = EShowDownSide::Player;
 
+	UPROPERTY()
+	TObjectPtr<ULevelSequencePlayer> ActiveSinglePlayerIntroSequencePlayer = nullptr;
+
+	UPROPERTY()
+	TObjectPtr<ALevelSequenceActor> ActiveSinglePlayerIntroSequenceActor = nullptr;
+
+	UPROPERTY()
+	TObjectPtr<AShowDownCharacter> SinglePlayerIntroPlayerCharacter = nullptr;
+
+	UPROPERTY()
+	TObjectPtr<AShowDownCharacter> SinglePlayerIntroCollectorCharacter = nullptr;
+
+	FTimerHandle SinglePlayerIntroFallbackTimerHandle;
+	FTransform SinglePlayerIntroPlayerStartTransform;
+	FTransform SinglePlayerIntroPlayerTargetTransform;
+	FTransform SinglePlayerIntroCollectorStartTransform;
+	FTransform SinglePlayerIntroCollectorTargetTransform;
+	float SinglePlayerIntroFallbackStartTime = 0.0f;
+	bool bSinglePlayerIntroFallbackActive = false;
+
 	UFUNCTION()
 	void HandleSelfShotGunPresentationFinished();
 
 	UFUNCTION()
 	void HandleSelfShotGunShotResolved();
+
+	UFUNCTION()
+	void HandleSinglePlayerIntroSequenceFinished();
 
 	// 덱을 만들고 섞은 뒤에 플레이어와 콜렉터에게 5장 스폰
 	void DealInitialHand();
@@ -417,6 +464,11 @@ private:
 	void BroadcastPendingSelfShotRouletteResult();
 	ASDSelfShotGunActor* FindSelfShotGunActor() const;
 	AShowDownCharacter* FindSingleRouletteCharacter(EShowDownSide TargetSide) const;
+	void PlaySinglePlayerIntroThenStartStage();
+	bool PlaySinglePlayerIntroSequence(AShowDownCharacter* PlayerCharacter, AShowDownCharacter* CollectorCharacter);
+	bool PlaySinglePlayerIntroFallback(AShowDownCharacter* PlayerCharacter, AShowDownCharacter* CollectorCharacter);
+	void UpdateSinglePlayerIntroFallback();
+	void FinishSinglePlayerIntro();
 	TArray<AShowDownCharacter*> GetShowDownCharacters() const;
 	void ConfigureSinglePlayerCharacters();
 	void ConfigureMultiplayerCharacters(const TArray<ASDPlayerState*>& Players);

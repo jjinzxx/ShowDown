@@ -154,6 +154,9 @@ ASDSelfShotGunActor::ASDSelfShotGunActor()
 	MuzzleFlashLight->SetIntensity(0.0f);
 	MuzzleFlashLight->SetAttenuationRadius(MuzzleFlashAttenuationRadius);
 	MuzzleFlashLight->SetLightColor(MuzzleFlashColor);
+	MuzzleFlashLight->SetCastShadows(true);
+	MuzzleFlashLight->SetIndirectLightingIntensity(0.0f);
+	MuzzleFlashLight->SetVolumetricScatteringIntensity(0.0f);
 
 	InitialHitEffectSettings.PixelCount = 95.0f;
 	InitialHitEffectSettings.ColorSteps = 2.0f;
@@ -256,11 +259,6 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 			return;
 		}
 
-		if (bPreviewFirstPersonPose)
-		{
-			SetActorTransform(GetFirstPersonGunTransform());
-		}
-
 		return;
 	}
 
@@ -281,7 +279,7 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 	case EGunAnimState::Raising:
 	{
 		const float Alpha = FMath::Clamp(StateElapsedTime / RaiseTime, 0.0f, 1.0f);
-		SetActorTransformAlpha(RaiseStartTransform, GetFirstPersonGunTransform(), FMath::InterpEaseOut(0.0f, 1.0f, Alpha, 3.0f));
+		SetActorTransformAlpha(RaiseStartTransform, GetPresentationGunTransform(), FMath::InterpEaseOut(0.0f, 1.0f, Alpha, 3.0f));
 		if (Alpha >= 1.0f)
 		{
 			AnimState = EGunAnimState::Aiming;
@@ -290,7 +288,7 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 		break;
 	}
 	case EGunAnimState::Aiming:
-		SetActorTransform(ApplyHeldGunJitter(GetFirstPersonGunTransform()));
+		SetActorTransform(ApplyHeldGunJitter(GetPresentationGunTransform()));
 		if (StateElapsedTime >= AimHoldTime)
 		{
 			if (bEnableMechanismAnimation)
@@ -304,15 +302,15 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 		}
 		break;
 	case EGunAnimState::Cocking:
-		SetActorTransform(ApplyHeldGunJitter(GetFirstPersonGunTransform()));
+		SetActorTransform(ApplyHeldGunJitter(GetPresentationGunTransform()));
 		UpdateMechanismCocking();
 		break;
 	case EGunAnimState::HammerReleasing:
-		SetActorTransform(ApplyHeldGunJitter(GetFirstPersonGunTransform()));
+		SetActorTransform(ApplyHeldGunJitter(GetPresentationGunTransform()));
 		UpdateHammerRelease();
 		break;
 	case EGunAnimState::EmptyImpact:
-		SetActorTransform(GetFirstPersonGunTransform());
+		SetActorTransform(GetPresentationGunTransform());
 		UpdateEmptyShotImpact();
 		break;
 	case EGunAnimState::Fired:
@@ -582,7 +580,6 @@ void ASDSelfShotGunActor::StartGunUse()
 	StateElapsedTime = 0.0f;
 	MechanismResetElapsedTime = 0.0f;
 	HeldGunJitterElapsedTime = 0.0f;
-	CaptureFirstPersonPoseCamera();
 	StartSelfShotCinematicCamera();
 	AnimState = EGunAnimState::Raising;
 	bPresentationFinishPending = true;
@@ -645,6 +642,9 @@ void ASDSelfShotGunActor::FireLiveRound()
 	MuzzleFlashElapsedTime = MuzzleFlashDuration;
 	MuzzleFlashLight->SetAttenuationRadius(FMath::Max(0.0f, MuzzleFlashAttenuationRadius));
 	MuzzleFlashLight->SetLightColor(MuzzleFlashColor);
+	MuzzleFlashLight->SetCastShadows(true);
+	MuzzleFlashLight->SetIndirectLightingIntensity(0.0f);
+	MuzzleFlashLight->SetVolumetricScatteringIntensity(0.0f);
 	MuzzleFlashLight->SetIntensity(MuzzleFlashIntensity);
 
 	PlayConfiguredSound(GunshotSound, bPlayGunshotSound2D, GetActorLocation());
@@ -661,7 +661,7 @@ void ASDSelfShotGunActor::FireEmptyRound()
 	AnimState = EGunAnimState::EmptyImpact;
 	bCurrentShotWasEmpty = true;
 	HeldGunJitterElapsedTime = 0.0f;
-	SetActorTransform(GetFirstPersonGunTransform());
+	SetActorTransform(GetPresentationGunTransform());
 	MuzzleFlashElapsedTime = 0.0f;
 	MuzzleFlashLight->SetIntensity(0.0f);
 
@@ -705,7 +705,6 @@ void ASDSelfShotGunActor::FinishSequence()
 	StateElapsedTime = 0.0f;
 	MechanismResetElapsedTime = 0.0f;
 	bCurrentShotWasEmpty = false;
-	bHasCachedFirstPersonPoseCamera = false;
 	AnimState = EGunAnimState::Idle;
 	OnGunSequenceFinished.Broadcast();
 	BroadcastPresentationFinishedIfIdle();
@@ -872,10 +871,6 @@ void ASDSelfShotGunActor::ActivateSelfShotCinematicCamera()
 	if (PlayerController && ActiveSelfShotCinematicCamera)
 	{
 		ShowDownCameraAspect::ApplyForced16By9(ActiveSelfShotCinematicCamera);
-		if (!bHasCachedFirstPersonPoseCamera)
-		{
-			CaptureFirstPersonPoseCamera();
-		}
 		PreviousViewTarget = PlayerController->GetViewTarget();
 		PlayerController->SetViewTargetWithBlend(
 			ActiveSelfShotCinematicCamera,
@@ -934,21 +929,6 @@ void ASDSelfShotGunActor::UpdateSelfShotCinematicCamera(float DeltaSeconds)
 	bSelfShotCinematicCameraHoldStarted = false;
 	ActiveSelfShotCinematicCamera = nullptr;
 	BroadcastPresentationFinishedIfIdle();
-}
-
-void ASDSelfShotGunActor::CaptureFirstPersonPoseCamera()
-{
-	bHasCachedFirstPersonPoseCamera = false;
-
-	if (const APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0))
-	{
-		if (const APlayerCameraManager* CameraManager = PlayerController->PlayerCameraManager)
-		{
-			CachedFirstPersonCameraLocation = CameraManager->GetCameraLocation();
-			CachedFirstPersonCameraRotation = CameraManager->GetCameraRotation();
-			bHasCachedFirstPersonPoseCamera = true;
-		}
-	}
 }
 
 FTransform ASDSelfShotGunActor::ApplyHeldGunJitter(const FTransform& BaseTransform) const
@@ -1664,70 +1644,27 @@ void ASDSelfShotGunActor::DrawRevolverPlacementDevPreview(
 	DrawDebugCoordinateSystem(World, SourceLocation, GunTransform.Rotator(), DebugSize, false, 0.0f, 0, 0.75f);
 }
 
-FTransform ASDSelfShotGunActor::GetFirstPersonGunTransform() const
+FTransform ASDSelfShotGunActor::GetPresentationGunTransform() const
 {
-	if (!bUseFirstPersonPose)
+	const FTransform BaseTransform = bHasCapturedRestActorTransform
+		? RestActorTransform
+		: GetActorTransform();
+	const FVector SourceLocation = bHasForcedShotSourceLocation
+		? ForcedShotSourceLocation
+		: BaseTransform.GetLocation();
+
+	if (bHasForcedShotAimLocation || ForcedShotTargetActor.IsValid())
 	{
-		return RestActorTransform;
+		const FVector AimLocation = bHasForcedShotAimLocation
+			? ForcedShotAimLocation
+			: ForcedShotTargetActor->GetActorLocation() + TargetShotAimOffset;
+		return MakeTargetShotTransform(
+			SourceLocation,
+			AimLocation,
+			bHasForcedShotRotationOffset ? ForcedShotRotationOffset : FRotator::ZeroRotator);
 	}
 
-	if (bHasCachedFirstPersonPoseCamera)
-	{
-		const FRotationMatrix CameraMatrix(CachedFirstPersonCameraRotation);
-		const FVector TargetLocation = bHasForcedShotSourceLocation
-			? ForcedShotSourceLocation
-			: CachedFirstPersonCameraLocation
-				+ CameraMatrix.GetScaledAxis(EAxis::X) * FirstPersonCameraOffset.X
-				+ CameraMatrix.GetScaledAxis(EAxis::Y) * FirstPersonCameraOffset.Y
-				+ CameraMatrix.GetScaledAxis(EAxis::Z) * FirstPersonCameraOffset.Z;
-
-		if (bHasForcedShotAimLocation || ForcedShotTargetActor.IsValid())
-		{
-			const FVector AimLocation = bHasForcedShotAimLocation
-				? ForcedShotAimLocation
-				: ForcedShotTargetActor->GetActorLocation() + TargetShotAimOffset;
-			return MakeTargetShotTransform(
-				TargetLocation,
-				AimLocation,
-				bHasForcedShotRotationOffset ? ForcedShotRotationOffset : FRotator::ZeroRotator);
-		}
-
-		return FTransform(
-			CachedFirstPersonCameraRotation + FirstPersonRotationOffset,
-			TargetLocation,
-			GetPresentationScale3D());
-	}
-
-	if (const APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0))
-	{
-		if (const APlayerCameraManager* CameraManager = PlayerController->PlayerCameraManager)
-		{
-			const FRotator CameraRotation = CameraManager->GetCameraRotation();
-			const FRotationMatrix CameraMatrix(CameraRotation);
-			const FVector CameraLocation = CameraManager->GetCameraLocation();
-			const FVector TargetLocation = bHasForcedShotSourceLocation
-				? ForcedShotSourceLocation
-				: CameraLocation
-					+ CameraMatrix.GetScaledAxis(EAxis::X) * FirstPersonCameraOffset.X
-					+ CameraMatrix.GetScaledAxis(EAxis::Y) * FirstPersonCameraOffset.Y
-					+ CameraMatrix.GetScaledAxis(EAxis::Z) * FirstPersonCameraOffset.Z;
-
-			if (bHasForcedShotAimLocation || ForcedShotTargetActor.IsValid())
-			{
-				const FVector AimLocation = bHasForcedShotAimLocation
-					? ForcedShotAimLocation
-					: ForcedShotTargetActor->GetActorLocation() + TargetShotAimOffset;
-				return MakeTargetShotTransform(
-					TargetLocation,
-					AimLocation,
-					bHasForcedShotRotationOffset ? ForcedShotRotationOffset : FRotator::ZeroRotator);
-			}
-
-			return FTransform(CameraRotation + FirstPersonRotationOffset, TargetLocation, GetPresentationScale3D());
-		}
-	}
-
-	return RestActorTransform;
+	return BaseTransform;
 }
 
 void ASDSelfShotGunActor::SetActorTransformAlpha(const FTransform& FromTransform, const FTransform& ToTransform, float Alpha)
