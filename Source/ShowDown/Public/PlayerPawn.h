@@ -21,6 +21,7 @@ class SHOWDOWN_API APlayerPawn : public APawn
 
 public:
 	APlayerPawn();
+	void ApplyDefaultCameraAspect();
 
 	
 	//루트 컴포넌트

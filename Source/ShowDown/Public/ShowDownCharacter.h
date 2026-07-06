@@ -13,6 +13,7 @@ class UAnimMontage;
 class UAnimInstance;
 class USceneComponent;
 class UShowDownCharacterAnimInstance;
+class UWidgetComponent;
 
 UCLASS(Blueprintable)
 class SHOWDOWN_API AShowDownCharacter : public ACharacter
@@ -181,6 +182,9 @@ protected:
 	UFUNCTION()
 	void HandleMultiplayerBetActionCommitted(EShowDownPlayerSlot Slot, EShowDownBetAction Action, int32 TargetBet);
 
+	UFUNCTION()
+	void HandleNameTagRoundStatusChanged();
+
 	UFUNCTION(Server, Reliable)
 	void ServerSetCharacterIdentity(EShowDownCharacterRole NewRole, EShowDownPlayerSlot NewPlayerSlot, const FString& NewDisplayName);
 
@@ -189,6 +193,12 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Presentation")
 	TObjectPtr<USceneComponent> RevolverPresentationAnchor;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Name Tag")
+	TObjectPtr<UWidgetComponent> NameTagWidgetComponent;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Name Tag")
+	FVector NameTagRelativeLocation = FVector(0.0f, 0.0f, 135.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Player Camera")
 	FName PlayerCameraAttachName = TEXT("Head");
@@ -284,6 +294,11 @@ private:
 	void PushAnimStateToAnimInstance() const;
 	void ApplyPlayerViewRotation(FRotator ViewRotation);
 	void ApplyCharacterSceneActive();
+	void RefreshNameTag();
+	FString ResolveNameTagDisplayName() const;
+	FString ResolveNameTagStatusText() const;
+	bool IsNameTagTurnActive() const;
+	bool ShouldShowNameTag() const;
 
 	FTimerHandle AnimStateResetTimerHandle;
 	FTimerHandle HitRagdollRecoverTimerHandle;

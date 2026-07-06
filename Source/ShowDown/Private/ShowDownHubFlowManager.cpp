@@ -1,6 +1,7 @@
 #include "ShowDownHubFlowManager.h"
 
 #include "Camera/CameraActor.h"
+#include "Camera/CameraComponent.h"
 #include "Blueprint/UserWidget.h"
 #include "Engine/GameInstance.h"
 #include "GameFramework/PlayerController.h"
@@ -10,6 +11,7 @@
 #include "TimerManager.h"
 #include "ShowDownGameModeBase.h"
 #include "ShowDownGameStateBase.h"
+#include "ShowDownCameraAspect.h"
 #include "ShowDownEosSubsystem.h"
 #include "ShowDownLobbyWidget.h"
 #include "ShowDownLoginWidget.h"
@@ -385,6 +387,11 @@ void AShowDownHubFlowManager::ShowSinglePlayPreviewInternal(bool bAllowOnlineRew
 		}
 	}
 
+	if (GameCamera && GameCamera->GetCameraComponent())
+	{
+		ShowDownCameraAspect::ApplyForced16By9(GameCamera);
+	}
+
 	const bool bPlayedGameCamera = bUseCharacterPlayerCameraForSinglePlay ? false : PlayCamera(GameCamera);
 	if (!bPlayedGameCamera && PlayerController && PlayerController->GetPawn())
 	{
@@ -558,6 +565,7 @@ void AShowDownHubFlowManager::SetUiOnlyInput(UUserWidget* FocusWidget)
 
 bool AShowDownHubFlowManager::PlayCamera(ACameraActor* Camera, bool bCut)
 {
+	ShowDownCameraAspect::ApplyForced16By9(Camera);
 	return PlayViewTarget(Camera, bCut);
 }
 
@@ -570,6 +578,11 @@ bool AShowDownHubFlowManager::PlayViewTarget(AActor* ViewTarget, bool bCut)
 
 	if (APlayerController* PlayerController = GetPrimaryPlayerController())
 	{
+		if (ACameraActor* CameraActor = Cast<ACameraActor>(ViewTarget))
+		{
+			ShowDownCameraAspect::ApplyForced16By9(CameraActor);
+		}
+
 		if (bCut || CameraBlendTime <= 0.0f)
 		{
 			PlayerController->SetViewTarget(ViewTarget);

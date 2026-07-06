@@ -9,6 +9,7 @@
 #include "InputCoreTypes.h"
 #include "Interaction/SDInteractable.h"
 #include "Kismet/GameplayStatics.h"
+#include "ShowDownCameraAspect.h"
 #include "SlateOptMacros.h"
 #include "Widgets/SLeafWidget.h"
 
@@ -107,6 +108,7 @@ void ASDCameraBlendTester::BeginPlay()
 
 		if (bSetDefaultCameraOnBeginPlay && DefaultCamera)
 		{
+			ShowDownCameraAspect::ApplyForced16By9(DefaultCamera);
 			PlayerController->SetViewTarget(DefaultCamera);
 			SetViewMode(ECameraBlendTesterViewMode::DefaultCamera);
 			ApplyFixedCameraInputMode();
@@ -260,6 +262,11 @@ void ASDCameraBlendTester::BlendToViewTarget(AActor* ViewTarget, const TCHAR* Vi
 	{
 		UE_LOG(LogTemp, Warning, TEXT("SDCameraBlendTester: %s is not assigned."), ViewTargetLabel);
 		return;
+	}
+
+	if (ACameraActor* CameraActor = Cast<ACameraActor>(ViewTarget))
+	{
+		ShowDownCameraAspect::ApplyForced16By9(CameraActor);
 	}
 
 	PlayerController->SetViewTargetWithBlend(

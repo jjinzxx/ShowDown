@@ -8,6 +8,7 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/WidgetComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Engine/SkeletalMesh.h"
@@ -17,6 +18,7 @@
 #include "SDPlayerState.h"
 #include "ShowDownCharacterAnimInstance.h"
 #include "ShowDownGameStateBase.h"
+#include "ShowDownNameTagWidget.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -60,6 +62,18 @@ AShowDownCharacter::AShowDownCharacter()
 	RevolverPresentationAnchor->SetRelativeLocation(FVector(34.0f, 26.0f, -18.0f));
 	RevolverPresentationAnchor->SetRelativeRotation(FRotator::ZeroRotator);
 
+	NameTagWidgetComponent = CreateDefaultSubobject<UWidgetComponent>(TEXT("NameTag"));
+	NameTagWidgetComponent->SetupAttachment(GetCapsuleComponent());
+	NameTagWidgetComponent->SetRelativeLocation(NameTagRelativeLocation);
+	NameTagWidgetComponent->SetWidgetClass(UShowDownNameTagWidget::StaticClass());
+	NameTagWidgetComponent->SetWidgetSpace(EWidgetSpace::Screen);
+	NameTagWidgetComponent->SetDrawAtDesiredSize(true);
+	NameTagWidgetComponent->SetDrawSize(FVector2D(180.0f, 58.0f));
+	NameTagWidgetComponent->SetPivot(FVector2D(0.5f, 1.0f));
+	NameTagWidgetComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	NameTagWidgetComponent->SetGenerateOverlapEvents(false);
+	NameTagWidgetComponent->SetVisibility(false);
+
 	static ConstructorHelpers::FObjectFinder<USkeletalMesh> DefaultMesh(
 		TEXT("/Game/Assets/asd/Idle.Idle"));
 	if (DefaultMesh.Succeeded())
@@ -94,6 +108,7 @@ void AShowDownCharacter::PostInitializeComponents()
 	CacheAnimBlueprintClass();
 	CacheBaseMeshTransform();
 	PushAnimStateToAnimInstance();
+	RefreshNameTag();
 }
 
 void AShowDownCharacter::BeginPlay()
@@ -103,6 +118,7 @@ void AShowDownCharacter::BeginPlay()
 	CacheBaseMeshTransform();
 	PushAnimStateToAnimInstance();
 	ApplyCharacterSceneActive();
+	RefreshNameTag();
 	BindToRouletteEvents();
 }
 
@@ -393,6 +409,7 @@ void AShowDownCharacter::OnRep_AnimState()
 
 void AShowDownCharacter::OnRep_Identity()
 {
+	RefreshNameTag();
 	OnCharacterIdentityChanged();
 }
 
@@ -404,6 +421,7 @@ void AShowDownCharacter::OnRep_ViewRotation()
 void AShowDownCharacter::OnRep_SceneActive()
 {
 	ApplyCharacterSceneActive();
+	RefreshNameTag();
 }
 
 void AShowDownCharacter::ServerSetCharacterAnimState_Implementation(EShowDownCharacterAnimState NewState)
@@ -565,6 +583,7 @@ void AShowDownCharacter::BindToRouletteEvents()
 	ShowDownGameState->OnMultiplayerBetActionCommitted.AddUniqueDynamic(this, &AShowDownCharacter::HandleMultiplayerBetActionCommitted);
 	ShowDownGameState->OnMultiplayerRouletteStarted.AddUniqueDynamic(this, &AShowDownCharacter::HandleMultiplayerRouletteStarted);
 	ShowDownGameState->OnMultiplayerRouletteResult.AddUniqueDynamic(this, &AShowDownCharacter::HandleMultiplayerRouletteResult);
+	ShowDownGameState->OnNameTagRoundStatusChanged.AddUniqueDynamic(this, &AShowDownCharacter::HandleNameTagRoundStatusChanged);
 }
 
 void AShowDownCharacter::UnbindFromRouletteEvents()
@@ -584,6 +603,12 @@ void AShowDownCharacter::UnbindFromRouletteEvents()
 	ShowDownGameState->OnMultiplayerBetActionCommitted.RemoveDynamic(this, &AShowDownCharacter::HandleMultiplayerBetActionCommitted);
 	ShowDownGameState->OnMultiplayerRouletteStarted.RemoveDynamic(this, &AShowDownCharacter::HandleMultiplayerRouletteStarted);
 	ShowDownGameState->OnMultiplayerRouletteResult.RemoveDynamic(this, &AShowDownCharacter::HandleMultiplayerRouletteResult);
+	ShowDownGameState->OnNameTagRoundStatusChanged.RemoveDynamic(this, &AShowDownCharacter::HandleNameTagRoundStatusChanged);
+}
+
+void AShowDownCharacter::HandleNameTagRoundStatusChanged()
+{
+	RefreshNameTag();
 }
 
 void AShowDownCharacter::ScheduleAnimStateReset(float Duration)
@@ -1060,4 +1085,136 @@ void AShowDownCharacter::ApplyCharacterSceneActive()
 			MovementComponent->DisableMovement();
 		}
 	}
+
+	RefreshNameTag();
+}
+
+void AShowDownCharacter::RefreshNameTag()
+{
+	if (!NameTagWidgetComponent)
+	{
+		return;
+	}
+
+	const FString DisplayName = ResolveNameTagDisplayName();
+	NameTagWidgetComponent->InitWidget();
+	if (UShowDownNameTagWidget* NameTagWidget = Cast<UShowDownNameTagWidget>(NameTagWidgetComponent->GetUserWidgetObject()))
+	{
+		NameTagWidget->SetDisplayName(FText::FromString(DisplayName));
+		NameTagWidget->SetStatusText(FText::FromString(ResolveNameTagStatusText()));
+		NameTagWidget->SetTurnActive(IsNameTagTurnActive());
+	}
+
+	const bool bVisible = ShouldShowNameTag();
+	NameTagWidgetComponent->SetVisibility(bVisible, true);
+	NameTagWidgetComponent->SetHiddenInGame(!bVisible, true);
+}
+
+FString AShowDownCharacter::ResolveNameTagDisplayName() const
+{
+	const FString TrimmedName = CharacterDisplayName.TrimStartAndEnd();
+	if (!TrimmedName.IsEmpty())
+	{
+		return TrimmedName.Left(32);
+	}
+
+	const UWorld* World = GetWorld();
+	if (World && World->GetNetMode() == NM_Standalone && CharacterRole == EShowDownCharacterRole::Opponent)
+	{
+		return TEXT("김윤아");
+	}
+
+	if (PlayerSlot != EShowDownPlayerSlot::None)
+	{
+		return FString::Printf(TEXT("Player %d"), static_cast<int32>(PlayerSlot));
+	}
+
+	return FString();
+}
+
+FString AShowDownCharacter::ResolveNameTagStatusText() const
+{
+	const UWorld* World = GetWorld();
+	const AShowDownGameStateBase* ShowDownGameState = World ? World->GetGameState<AShowDownGameStateBase>() : nullptr;
+	if (!ShowDownGameState)
+	{
+		return FString();
+	}
+
+	int32 LoadedBulletCount = ShowDownGameState->NameTagLoadedBulletCount;
+	if (ShowDownGameState->IsMultiplayerMatch())
+	{
+		for (const FShowDownNameTagPlayerBetState& PlayerBet : ShowDownGameState->NameTagPlayerBets)
+		{
+			if (PlayerBet.Slot == PlayerSlot)
+			{
+				LoadedBulletCount = PlayerBet.LoadedBulletCount;
+				break;
+			}
+		}
+	}
+	else if (CharacterRole == EShowDownCharacterRole::Opponent)
+	{
+		LoadedBulletCount = ShowDownGameState->NameTagCollectorLoadedBulletCount;
+	}
+	else if (CharacterRole == EShowDownCharacterRole::Player)
+	{
+		LoadedBulletCount = ShowDownGameState->NameTagPlayerLoadedBulletCount;
+	}
+
+	return FString::Printf(TEXT("%d발"), FMath::Clamp(LoadedBulletCount, 0, 6));
+}
+
+bool AShowDownCharacter::IsNameTagTurnActive() const
+{
+	const UWorld* World = GetWorld();
+	const AShowDownGameStateBase* ShowDownGameState = World ? World->GetGameState<AShowDownGameStateBase>() : nullptr;
+	if (!ShowDownGameState || ShowDownGameState->NameTagTurnSlot == EShowDownPlayerSlot::None)
+	{
+		return false;
+	}
+
+	if (ShowDownGameState->IsMultiplayerMatch())
+	{
+		return PlayerSlot != EShowDownPlayerSlot::None && PlayerSlot == ShowDownGameState->NameTagTurnSlot;
+	}
+
+	if (CharacterRole == EShowDownCharacterRole::Opponent)
+	{
+		return ShowDownGameState->NameTagTurnSide == EShowDownSide::Collector;
+	}
+
+	if (CharacterRole == EShowDownCharacterRole::Player)
+	{
+		return ShowDownGameState->NameTagTurnSide == EShowDownSide::Player;
+	}
+
+	return false;
+}
+
+bool AShowDownCharacter::ShouldShowNameTag() const
+{
+	if (!bCharacterSceneActive)
+	{
+		return false;
+	}
+
+	const FString DisplayName = ResolveNameTagDisplayName();
+	if (DisplayName.IsEmpty())
+	{
+		return false;
+	}
+
+	const UWorld* World = GetWorld();
+	if (World && World->GetNetMode() == NM_Standalone)
+	{
+		return CharacterRole == EShowDownCharacterRole::Opponent;
+	}
+
+	if (CharacterRole != EShowDownCharacterRole::Player)
+	{
+		return false;
+	}
+
+	return !IsLocalPlayerCharacter();
 }

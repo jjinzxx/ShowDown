@@ -11,6 +11,7 @@
 #include "ShowDownGameModeBase.h"
 #include "ShowDownGameStateBase.h"
 #include "ShowDownChatWidget.h"
+#include "ShowDownCameraAspect.h"
 #include "ShowDownPlayerController.h"
 #include "ShowDownVoiceSubsystem.h"
 #include "SupabaseSubsystem.h"
@@ -51,6 +52,7 @@ APlayerPawn::APlayerPawn()
 	cameraComp = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
 	cameraComp->SetupAttachment(rootComp);
 	cameraComp->bUsePawnControlRotation = true;
+	ApplyDefaultCameraAspect();
 	bUseControllerRotationPitch = true;
 	bUseControllerRotationYaw = true;
 
@@ -63,8 +65,20 @@ APlayerPawn::APlayerPawn()
 	PlayerHeadCard->SetupAttachment(rootComp);
 }
 
+void APlayerPawn::ApplyDefaultCameraAspect()
+{
+	if (!cameraComp)
+	{
+		return;
+	}
+
+	ShowDownCameraAspect::ApplyForced16By9(cameraComp);
+}
+
 void APlayerPawn::PreInitializeComponents()
 {
+	ApplyDefaultCameraAspect();
+
 	// Preserve the authored standalone map behavior, while preventing every
 	// replicated pawn from trying to claim local Player0 in a networked match.
 	if (GetNetMode() != NM_Standalone)
@@ -88,6 +102,7 @@ void APlayerPawn::PreInitializeComponents()
 void APlayerPawn::BeginPlay()
 {
 	Super::BeginPlay();
+	ApplyDefaultCameraAspect();
 
 	if (ToggleChatKey == VoicePushToTalkKey)
 	{
@@ -108,6 +123,7 @@ void APlayerPawn::BeginPlay()
 void APlayerPawn::PossessedBy(AController* NewController)
 {
 	Super::PossessedBy(NewController);
+	ApplyDefaultCameraAspect();
 	if (!IsShowDownControllerHandlingInput(this))
 	{
 		AddInputMappingContext();

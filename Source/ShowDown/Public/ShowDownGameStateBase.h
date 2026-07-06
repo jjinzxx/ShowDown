@@ -28,6 +28,19 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FShowDownMultiplayerBetActionComm
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FShowDownMultiplayerRouletteStartedSignature, EShowDownPlayerSlot, TargetSlot, const FString&, TargetName, int32, BulletCount);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FShowDownMultiplayerRoulettePresentationSignature, EShowDownPlayerSlot, TargetSlot, const FString&, TargetName, int32, BulletCount, bool, bHit);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FiveParams(FShowDownMultiplayerRouletteResultSignature, EShowDownPlayerSlot, TargetSlot, const FString&, TargetName, int32, BulletCount, bool, bHit, int32, RemainingLives);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FShowDownNameTagRoundStatusChangedSignature);
+
+USTRUCT(BlueprintType)
+struct FShowDownNameTagPlayerBetState
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Name Tag")
+	EShowDownPlayerSlot Slot = EShowDownPlayerSlot::None;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Name Tag")
+	int32 LoadedBulletCount = 0;
+};
 
 UCLASS()
 class SHOWDOWN_API AShowDownGameStateBase : public AGameStateBase
@@ -112,6 +125,9 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Events|Multiplayer")
 	FShowDownMultiplayerRouletteResultSignature OnMultiplayerRouletteResult;
 
+	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Events|Name Tag")
+	FShowDownNameTagRoundStatusChangedSignature OnNameTagRoundStatusChanged;
+
 	//현재 게임 진행 단계
 	UPROPERTY(ReplicatedUsing = OnRep_CurrentPhase, BlueprintReadOnly, Category = "ShowDown|State")
 	EShowDownPhase CurrentPhase = EShowDownPhase::None;
@@ -138,6 +154,24 @@ public:
 	UPROPERTY(ReplicatedUsing = OnRep_PlayerSlots, BlueprintReadOnly, Category = "ShowDown|Multiplayer")
 	TArray<FShowDownNetworkPlayerSlot> PlayerSlots;
 
+	UPROPERTY(ReplicatedUsing = OnRep_NameTagRoundStatus, BlueprintReadOnly, Category = "ShowDown|Name Tag")
+	int32 NameTagLoadedBulletCount = 0;
+
+	UPROPERTY(ReplicatedUsing = OnRep_NameTagRoundStatus, BlueprintReadOnly, Category = "ShowDown|Name Tag")
+	int32 NameTagPlayerLoadedBulletCount = 0;
+
+	UPROPERTY(ReplicatedUsing = OnRep_NameTagRoundStatus, BlueprintReadOnly, Category = "ShowDown|Name Tag")
+	int32 NameTagCollectorLoadedBulletCount = 0;
+
+	UPROPERTY(ReplicatedUsing = OnRep_NameTagRoundStatus, BlueprintReadOnly, Category = "ShowDown|Name Tag")
+	TArray<FShowDownNameTagPlayerBetState> NameTagPlayerBets;
+
+	UPROPERTY(ReplicatedUsing = OnRep_NameTagRoundStatus, BlueprintReadOnly, Category = "ShowDown|Name Tag")
+	EShowDownSide NameTagTurnSide = EShowDownSide::Player;
+
+	UPROPERTY(ReplicatedUsing = OnRep_NameTagRoundStatus, BlueprintReadOnly, Category = "ShowDown|Name Tag")
+	EShowDownPlayerSlot NameTagTurnSlot = EShowDownPlayerSlot::None;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Debug")
 	bool bShowPresentationDebugMessages = false;
 
@@ -156,6 +190,15 @@ public:
 
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "ShowDown|Multiplayer")
 	bool IsMultiplayerMatch() const;
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Name Tag")
+	void SetNameTagRoundStatus(int32 LoadedBulletCount, EShowDownSide TurnSide, EShowDownPlayerSlot TurnSlot);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Name Tag")
+	void SetNameTagSingleRoundStatus(int32 PlayerLoadedBulletCount, int32 CollectorLoadedBulletCount, EShowDownSide TurnSide, EShowDownPlayerSlot TurnSlot);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Name Tag")
+	void SetNameTagPlayerLoadedBulletCount(EShowDownPlayerSlot Slot, int32 LoadedBulletCount);
 
 	//연출 시작 알림
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Presentation", meta = (DisplayName = "eventStart"))
@@ -227,5 +270,8 @@ private:
 
 	UFUNCTION()
 	void OnRep_PlayerSlots();
+
+	UFUNCTION()
+	void OnRep_NameTagRoundStatus();
 	
 };

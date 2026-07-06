@@ -19,6 +19,7 @@
 #include "Materials/MaterialInterface.h"
 #include "PlayerPawn.h"
 #include "SDPlayerState.h"
+#include "ShowDownCameraAspect.h"
 #include "ShowDownCharacter.h"
 #include "ShowDownChatWidget.h"
 #include "ShowDownEosSubsystem.h"
@@ -328,6 +329,10 @@ void AShowDownPlayerController::ClientUseMultiplayerSeatCamera_Implementation(
 	ClearFixedCameraMouseLook();
 	if (APawn* ControlledPawn = GetPawn())
 	{
+		if (APlayerPawn* PlayerPawn = Cast<APlayerPawn>(ControlledPawn))
+		{
+			PlayerPawn->ApplyDefaultCameraAspect();
+		}
 		SetViewTarget(ControlledPawn);
 	}
 	UpdateCenterCrosshairVisibility();
@@ -1404,6 +1409,7 @@ void AShowDownPlayerController::SetFixedCameraMouseLook(
 	float MaxYawOffsetDegrees,
 	bool bInvertY)
 {
+	ShowDownCameraAspect::ApplyForced16By9(Camera);
 	SetFixedCameraComponentMouseLook(
 		Camera ? Camera->GetCameraComponent() : nullptr,
 		Sensitivity,
@@ -1432,6 +1438,11 @@ void AShowDownPlayerController::SetFixedCameraComponentMouseLook(
 	if (!FixedCameraMouseLookTarget)
 	{
 		return;
+	}
+
+	if (UCameraComponent* FixedCameraComponent = Cast<UCameraComponent>(FixedCameraMouseLookTarget.Get()))
+	{
+		ShowDownCameraAspect::ApplyForced16By9(FixedCameraComponent);
 	}
 
 	FixedCameraBaseRotation = FixedCameraMouseLookTarget->GetComponentRotation();
@@ -1670,13 +1681,21 @@ void AShowDownPlayerController::UpdateCharacterPlayerCamera(float DeltaTime)
 	const bool bAlreadyAttached =
 		PlayerCamera->GetAttachParent() == LocalPlayerCameraCharacterTarget->GetMesh()
 		&& PlayerCamera->GetAttachSocketName() == AttachName;
+	const bool bNeedsAspectSetup =
+		ShowDownCameraAspect::NeedsForced16By9(PlayerCamera);
 	const bool bNeedsCameraSetup =
 		!bAlreadyAttached
 		|| GetViewTarget() != PlayerPawn
-		|| !PlayerCamera->bUsePawnControlRotation;
+		|| !PlayerCamera->bUsePawnControlRotation
+		|| bNeedsAspectSetup;
 
 	if (bNeedsCameraSetup)
 	{
+		if (bNeedsAspectSetup)
+		{
+			PlayerPawn->ApplyDefaultCameraAspect();
+		}
+
 		if (!bAlreadyAttached)
 		{
 			PlayerCamera->AttachToComponent(
@@ -2285,6 +2304,19 @@ void AShowDownPlayerController::ServerSetMultiplayerDisplayName_Implementation(c
 	if (APlayerState* CurrentPlayerState = PlayerState)
 	{
 		CurrentPlayerState->SetPlayerName(SanitizedName);
+		if (const ASDPlayerState* ShowDownPlayerState = Cast<ASDPlayerState>(CurrentPlayerState))
+		{
+			for (TActorIterator<AShowDownCharacter> It(GetWorld()); It; ++It)
+			{
+				AShowDownCharacter* ShowDownCharacter = *It;
+				if (IsValid(ShowDownCharacter) && ShowDownCharacter->IsAssignedToSlot(ShowDownPlayerState->ShowDownSlot))
+				{
+					ShowDownCharacter->SetCharacterDisplayName(SanitizedName);
+					break;
+				}
+			}
+		}
+
 		if (AShowDownGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AShowDownGameModeBase>() : nullptr)
 		{
 			GameMode->RefreshMultiplayerLobbyPlayers();

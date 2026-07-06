@@ -13,6 +13,7 @@
 #include "EngineUtils.h"
 #include "Kismet/GameplayStatics.h"
 #include "ShowDownCharacter.h"
+#include "ShowDownCameraAspect.h"
 #include "ShowDownGameStateBase.h"
 #include "ShowDownPlayerController.h"
 #include "SDPlayerState.h"
@@ -870,6 +871,7 @@ void ASDSelfShotGunActor::ActivateSelfShotCinematicCamera()
 	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
 	if (PlayerController && ActiveSelfShotCinematicCamera)
 	{
+		ShowDownCameraAspect::ApplyForced16By9(ActiveSelfShotCinematicCamera);
 		if (!bHasCachedFirstPersonPoseCamera)
 		{
 			CaptureFirstPersonPoseCamera();
