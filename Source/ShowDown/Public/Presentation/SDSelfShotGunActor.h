@@ -523,6 +523,7 @@ private:
 
 	AActor* FindMultiplayerShotTarget(EShowDownPlayerSlot TargetSlot) const;
 	void PlayMultiplayerRoulettePresentation(EShowDownPlayerSlot TargetSlot, bool bHit);
+	bool ShouldTreatSlotAsLocalPlayer(EShowDownPlayerSlot TargetSlot) const;
 	bool ShouldTreatTargetAsLocalPlayer(AActor* TargetActor) const;
 	bool UpdateRevolverPlacementDevPreview();
 	AShowDownCharacter* FindRevolverPlacementDevPreviewTarget() const;

@@ -15,6 +15,7 @@
 #include "ShowDownCharacter.h"
 #include "ShowDownGameStateBase.h"
 #include "ShowDownPlayerController.h"
+#include "SDPlayerState.h"
 #include "Sound/SoundBase.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -1456,6 +1457,7 @@ void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(EShowDownPlayerSlo
 	if (!IsValid(TargetActor))
 	{
 		UseGunWithForcedResult(bHit);
+		bCurrentShotTargetsLocalPlayer = ShouldTreatSlotAsLocalPlayer(TargetSlot);
 		return;
 	}
 
@@ -1475,6 +1477,24 @@ void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(EShowDownPlayerSlo
 	}
 
 	UseGunWithForcedResultAtTarget(bHit, TargetActor);
+}
+
+bool ASDSelfShotGunActor::ShouldTreatSlotAsLocalPlayer(EShowDownPlayerSlot TargetSlot) const
+{
+	if (TargetSlot == EShowDownPlayerSlot::None)
+	{
+		return false;
+	}
+
+	const UWorld* World = GetWorld();
+	const APlayerController* LocalPlayerController = World ? World->GetFirstPlayerController() : nullptr;
+	const ASDPlayerState* LocalPlayerState = LocalPlayerController
+		? Cast<ASDPlayerState>(LocalPlayerController->PlayerState)
+		: nullptr;
+
+	return LocalPlayerState
+		&& LocalPlayerState->ShowDownSlot != EShowDownPlayerSlot::None
+		&& LocalPlayerState->ShowDownSlot == TargetSlot;
 }
 
 bool ASDSelfShotGunActor::ShouldTreatTargetAsLocalPlayer(AActor* TargetActor) const

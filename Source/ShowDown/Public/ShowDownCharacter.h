@@ -244,6 +244,9 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Physics")
 	FVector RagdollHitLocalImpulseDirection = FVector(0.0f, -1.0f, 0.25f);
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Physics", meta = (ClampMin = "0.0"))
+	float HitRagdollRecoverDelay = 5.0f;
+
 	UPROPERTY(ReplicatedUsing = OnRep_Identity, EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Identity")
 	EShowDownCharacterRole CharacterRole = EShowDownCharacterRole::Unassigned;
 
@@ -283,6 +286,7 @@ private:
 	void ApplyCharacterSceneActive();
 
 	FTimerHandle AnimStateResetTimerHandle;
+	FTimerHandle HitRagdollRecoverTimerHandle;
 	UPROPERTY(Transient)
 	TSubclassOf<UAnimInstance> CachedAnimBlueprintClass;
 	UPROPERTY(Transient)

@@ -110,6 +110,7 @@ void AShowDownCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	UnbindFromRouletteEvents();
 	GetWorldTimerManager().ClearTimer(AnimStateResetTimerHandle);
+	GetWorldTimerManager().ClearTimer(HitRagdollRecoverTimerHandle);
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -315,17 +316,33 @@ EShowDownPlayerSlot AShowDownCharacter::GetLocalPlayerSlot() const
 
 bool AShowDownCharacter::IsLocalPlayerCharacter() const
 {
-	if (IsLocallyControlled())
+	if (!bCharacterSceneActive || CharacterRole != EShowDownCharacterRole::Player)
 	{
-		return true;
+		return false;
 	}
 
 	const EShowDownPlayerSlot LocalPlayerSlot = GetLocalPlayerSlot();
-	return LocalPlayerSlot != EShowDownPlayerSlot::None && PlayerSlot == LocalPlayerSlot;
+	if (LocalPlayerSlot != EShowDownPlayerSlot::None)
+	{
+		return PlayerSlot == LocalPlayerSlot;
+	}
+
+	const UWorld* World = GetWorld();
+	if (World && World->GetNetMode() != NM_Standalone)
+	{
+		return false;
+	}
+
+	return PlayerSlot == EShowDownPlayerSlot::None || PlayerSlot == EShowDownPlayerSlot::Player1;
 }
 
 bool AShowDownCharacter::IsOpponentCharacterForLocalPlayer() const
 {
+	if (!bCharacterSceneActive)
+	{
+		return false;
+	}
+
 	if (CharacterRole == EShowDownCharacterRole::Opponent)
 	{
 		return true;
@@ -350,6 +367,7 @@ void AShowDownCharacter::SetCharacterSceneActive(bool bNewActive)
 	if (!bCharacterSceneActive)
 	{
 		GetWorldTimerManager().ClearTimer(AnimStateResetTimerHandle);
+		GetWorldTimerManager().ClearTimer(HitRagdollRecoverTimerHandle);
 		ReplicatedAnimState = EShowDownCharacterAnimState::Idle;
 	}
 
@@ -610,7 +628,7 @@ bool AShowDownCharacter::ShouldReactToSingleRouletteTarget(EShowDownSide Target)
 	switch (Target)
 	{
 	case EShowDownSide::Player:
-		return CharacterRole == EShowDownCharacterRole::Player || IsLocalPlayerCharacter();
+		return CharacterRole == EShowDownCharacterRole::Player;
 	case EShowDownSide::Collector:
 		return CharacterRole == EShowDownCharacterRole::Opponent;
 	default:
@@ -878,6 +896,16 @@ void AShowDownCharacter::StartActionVisual(EShowDownCharacterAnimState State)
 		}
 
 		bRagdollActive = true;
+		if (HasAuthority() && HitRagdollRecoverDelay > 0.0f)
+		{
+			GetWorldTimerManager().ClearTimer(HitRagdollRecoverTimerHandle);
+			GetWorldTimerManager().SetTimer(
+				HitRagdollRecoverTimerHandle,
+				this,
+				&AShowDownCharacter::ResetCharacterAnimState,
+				HitRagdollRecoverDelay,
+				false);
+		}
 		return;
 	}
 
@@ -902,6 +930,8 @@ void AShowDownCharacter::CacheBaseMeshTransform()
 
 void AShowDownCharacter::StopActionVisuals()
 {
+	GetWorldTimerManager().ClearTimer(HitRagdollRecoverTimerHandle);
+
 	if (GetMesh())
 	{
 		if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
