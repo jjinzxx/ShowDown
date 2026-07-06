@@ -51,6 +51,7 @@ AShowDownCharacter::AShowDownCharacter()
 	SetReplicateMovement(true);
 
 	GetCapsuleComponent()->InitCapsuleSize(42.0f, 96.0f);
+	ApplyPresentationCollisionSettings();
 
 	USkeletalMeshComponent* CharacterMesh = GetMesh();
 	CharacterMesh->SetRelativeLocation(FVector(0.0f, 0.0f, -96.0f));
@@ -100,6 +101,7 @@ AShowDownCharacter::AShowDownCharacter()
 	MovementComponent->bOrientRotationToMovement = true;
 	MovementComponent->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
 	MovementComponent->MaxWalkSpeed = 240.0f;
+	MovementComponent->bEnablePhysicsInteraction = false;
 }
 
 void AShowDownCharacter::PostInitializeComponents()
@@ -845,6 +847,7 @@ void AShowDownCharacter::StopRagdoll()
 	GetMesh()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	GetMesh()->SetRelativeLocationAndRotation(BaseMeshRelativeLocation, BaseMeshRelativeRotation);
 	GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	ApplyPresentationCollisionSettings();
 
 	if (UCharacterMovementComponent* MovementComponent = GetCharacterMovement())
 	{
@@ -1055,6 +1058,7 @@ void AShowDownCharacter::ApplyCharacterSceneActive()
 	if (UCapsuleComponent* Capsule = GetCapsuleComponent())
 	{
 		Capsule->SetCollisionEnabled(bActive ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
+		ApplyPresentationCollisionSettings();
 	}
 
 	if (USkeletalMeshComponent* CharacterMesh = GetMesh())
@@ -1087,6 +1091,18 @@ void AShowDownCharacter::ApplyCharacterSceneActive()
 	}
 
 	RefreshNameTag();
+}
+
+void AShowDownCharacter::ApplyPresentationCollisionSettings()
+{
+	UCapsuleComponent* Capsule = GetCapsuleComponent();
+	if (!Capsule)
+	{
+		return;
+	}
+
+	Capsule->SetCollisionObjectType(ECC_Pawn);
+	Capsule->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
 }
 
 void AShowDownCharacter::RefreshNameTag()

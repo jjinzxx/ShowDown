@@ -294,6 +294,7 @@ private:
 	void PushAnimStateToAnimInstance() const;
 	void ApplyPlayerViewRotation(FRotator ViewRotation);
 	void ApplyCharacterSceneActive();
+	void ApplyPresentationCollisionSettings();
 	void RefreshNameTag();
 	FString ResolveNameTagDisplayName() const;
 	FString ResolveNameTagStatusText() const;

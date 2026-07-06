@@ -640,7 +640,12 @@ void UShowDownEosSubsystem::LeaveLobby(FName HubMapName)
 
 	if (DestroySessionCompleteDelegateHandle.IsValid())
 	{
-		OnSessionResult.Broadcast(false, TEXT("A session operation is already in progress."));
+		if (SessionInterface.IsValid())
+		{
+			SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(DestroySessionCompleteDelegateHandle);
+		}
+		DestroySessionCompleteDelegateHandle.Reset();
+		CompleteLobbyLeave(false);
 		return;
 	}
 

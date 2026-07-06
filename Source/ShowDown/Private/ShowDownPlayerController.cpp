@@ -2225,6 +2225,16 @@ void AShowDownPlayerController::SubmitLocalMultiplayerDisplayName()
 		return;
 	}
 
+	if (const UWorld* World = GetWorld())
+	{
+		const float CurrentTime = World->GetTimeSeconds();
+		if (CurrentTime - LastMultiplayerDisplayNameSubmitTime < 1.0f)
+		{
+			return;
+		}
+		LastMultiplayerDisplayNameSubmitTime = CurrentTime;
+	}
+
 	const USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
 		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
 		: nullptr;

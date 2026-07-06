@@ -415,6 +415,7 @@ private:
 	TArray<AShowDownCharacter*> GetShowDownCharacters() const;
 	void ConfigureSinglePlayerCharacters();
 	void ConfigureMultiplayerCharacters(const TArray<ASDPlayerState*>& Players);
+	void RefreshMultiplayerCharacterVisibility();
 	float ResolveMultiplayerRouletteResultDelay() const;
 	float ResolveMultiplayerRoulettePresentationDelay(bool bLiveRound) const;
 	FSDCardHandLayoutSettings GetDefaultHandLayoutSettings() const;
@@ -439,6 +440,8 @@ private:
 	void StartMultiplayerDuel(ASDPlayerState* FirstPlayer, ASDPlayerState* SecondPlayer);
 	bool AreAllAliveMultiplayerPlayersReadyToReveal() const;
 	bool AreAllActiveMultiplayerPlayersDoneBetting(int32 CurrentBet) const;
+	int32 CountActiveMultiplayerPlayers() const;
+	void HandleMultiplayerPlayerDisconnected(ASDPlayerState* LeavingPlayer);
 	void StartMultiplayerCardSelection(ASDPlayerState* Giver, ASDPlayerState* Receiver);
 	void HandleMultiplayerSelectedCard(ASDPlayerState* SubmittingPlayer, ACard* SelectedCard);
 	void StartMultiplayerBetting();

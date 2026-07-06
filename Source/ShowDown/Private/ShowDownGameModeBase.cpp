@@ -46,6 +46,38 @@ namespace
 		}
 	}
 
+	int32 GetMultiplayerTurnOrderIndex(EShowDownPlayerSlot Slot)
+	{
+		switch (Slot)
+		{
+		case EShowDownPlayerSlot::Player1: return 0;
+		case EShowDownPlayerSlot::Player3: return 1;
+		case EShowDownPlayerSlot::Player2: return 2;
+		case EShowDownPlayerSlot::Player4: return 3;
+		case EShowDownPlayerSlot::None:
+		default: return MAX_int32;
+		}
+	}
+
+	bool IsBeforeInMultiplayerTurnOrder(const ASDPlayerState* Left, const ASDPlayerState* Right)
+	{
+		const int32 LeftOrder = GetMultiplayerTurnOrderIndex(Left ? Left->ShowDownSlot : EShowDownPlayerSlot::None);
+		const int32 RightOrder = GetMultiplayerTurnOrderIndex(Right ? Right->ShowDownSlot : EShowDownPlayerSlot::None);
+		if (LeftOrder != RightOrder)
+		{
+			return LeftOrder < RightOrder;
+		}
+
+		const EShowDownPlayerSlot LeftSlot = Left ? Left->ShowDownSlot : EShowDownPlayerSlot::None;
+		const EShowDownPlayerSlot RightSlot = Right ? Right->ShowDownSlot : EShowDownPlayerSlot::None;
+		return static_cast<uint8>(LeftSlot) < static_cast<uint8>(RightSlot);
+	}
+
+	bool SortByMultiplayerTurnOrder(const ASDPlayerState& Left, const ASDPlayerState& Right)
+	{
+		return IsBeforeInMultiplayerTurnOrder(&Left, &Right);
+	}
+
 	FRotator GetHiddenForeheadCardRotationOffset()
 	{
 		return FRotator(0.0f, 180.0f, 0.0f);
@@ -53,10 +85,8 @@ namespace
 
 	FRotator GetMultiplayerForeheadCardRotationOffset(int32 ReceiverPlayerIndex)
 	{
-		// Player1 uses the single-player player forehead slot, which needs the
-		// hidden-card flip. Player2 reuses the old opponent/collector slot, which
-		// is already authored to face the table correctly.
-		return ReceiverPlayerIndex == 0 ? GetHiddenForeheadCardRotationOffset() : FRotator::ZeroRotator;
+		(void)ReceiverPlayerIndex;
+		return GetHiddenForeheadCardRotationOffset();
 	}
 
 	bool IsActiveNetworkPlayerController(const APlayerController* PlayerController)
@@ -422,6 +452,7 @@ void AShowDownGameModeBase::Logout(AController* Exiting)
 {
 	if (ASDPlayerState* ShowDownPlayerState = Exiting ? Exiting->GetPlayerState<ASDPlayerState>() : nullptr)
 	{
+		HandleMultiplayerPlayerDisconnected(ShowDownPlayerState);
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 		{
 			ShowDownGameState->ClearPlayerSlot(ShowDownPlayerState->ShowDownSlot);
@@ -1222,10 +1253,7 @@ void AShowDownGameModeBase::ConfigureMultiplayerCharacters(const TArray<ASDPlaye
 	{
 		return !Player || Player->ShowDownSlot == EShowDownPlayerSlot::None;
 	});
-	SortedPlayers.Sort([](const ASDPlayerState& Left, const ASDPlayerState& Right)
-	{
-		return static_cast<uint8>(Left.ShowDownSlot) < static_cast<uint8>(Right.ShowDownSlot);
-	});
+	SortedPlayers.Sort(SortByMultiplayerTurnOrder);
 
 	TSet<AShowDownCharacter*> AssignedCharacters;
 	for (ASDPlayerState* Player : SortedPlayers)
@@ -1289,7 +1317,7 @@ void AShowDownGameModeBase::ConfigureMultiplayerCharacters(const TArray<ASDPlaye
 			EShowDownCharacterRole::Player,
 			Player->ShowDownSlot,
 			GetNetworkPlayerDisplayName(Player));
-		AssignedCharacter->SetCharacterSceneActive(true);
+		AssignedCharacter->SetCharacterSceneActive(Player->Lives > 0);
 	}
 
 	for (AShowDownCharacter* Character : Characters)
@@ -1306,6 +1334,42 @@ void AShowDownGameModeBase::ConfigureMultiplayerCharacters(const TArray<ASDPlaye
 		TEXT("Multiplayer characters configured. Active=%d Hidden=%d"),
 		AssignedCharacters.Num(),
 		FMath::Max(0, Characters.Num() - AssignedCharacters.Num()));
+}
+
+void AShowDownGameModeBase::RefreshMultiplayerCharacterVisibility()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	TMap<EShowDownPlayerSlot, bool> AliveBySlot;
+	for (ASDPlayerState* Player : MultiplayerPlayers)
+	{
+		if (IsValid(Player) && Player->ShowDownSlot != EShowDownPlayerSlot::None)
+		{
+			AliveBySlot.Add(Player->ShowDownSlot, Player->Lives > 0);
+		}
+	}
+
+	for (AShowDownCharacter* Character : GetShowDownCharacters())
+	{
+		if (!IsValid(Character)
+			|| Character->GetCharacterRole() != EShowDownCharacterRole::Player
+			|| Character->GetPlayerSlot() == EShowDownPlayerSlot::None)
+		{
+			continue;
+		}
+
+		if (const bool* bAlive = AliveBySlot.Find(Character->GetPlayerSlot()))
+		{
+			Character->SetCharacterSceneActive(*bAlive);
+		}
+		else
+		{
+			Character->SetCharacterSceneActive(false);
+		}
+	}
 }
 
 float AShowDownGameModeBase::ResolveMultiplayerRouletteResultDelay() const
@@ -3053,6 +3117,7 @@ void AShowDownGameModeBase::StartMultiplayerMatch(const TArray<ASDPlayerState*>&
 		Player->ClearHand();
 		MultiplayerPlayers.Add(Player);
 	}
+	MultiplayerPlayers.Sort(SortByMultiplayerTurnOrder);
 
 	TArray<ASDPlayerState*> CurrentPlayers;
 	for (ASDPlayerState* Player : MultiplayerPlayers)
@@ -3124,10 +3189,7 @@ TArray<ASDPlayerState*> AShowDownGameModeBase::GetConnectedShowDownPlayers() con
 		}
 	}
 
-	Players.Sort([](const ASDPlayerState& Left, const ASDPlayerState& Right)
-	{
-		return static_cast<uint8>(Left.ShowDownSlot) < static_cast<uint8>(Right.ShowDownSlot);
-	});
+	Players.Sort(SortByMultiplayerTurnOrder);
 
 	return Players;
 }
@@ -3249,12 +3311,6 @@ void AShowDownGameModeBase::EnsureMultiplayerSeatAnchors()
 		return;
 	}
 
-	UWorld* World = GetWorld();
-	if (!World)
-	{
-		return;
-	}
-
 	for (ASDMultiplayerSeatAnchor* SeatAnchor : MultiplayerSeatAnchors)
 	{
 		if (SeatAnchor)
@@ -3264,31 +3320,8 @@ void AShowDownGameModeBase::EnsureMultiplayerSeatAnchors()
 	}
 	MultiplayerSeatAnchors.Reset();
 
-	for (int32 PlayerIndex = 0; PlayerIndex < MultiplayerPlayers.Num(); ++PlayerIndex)
-	{
-		const ASDPlayerState* Player = MultiplayerPlayers[PlayerIndex];
-		const int32 SeatIndexFromSlot = Player ? GetSeatIndexFromPlayerSlot(Player->ShowDownSlot) : INDEX_NONE;
-		const int32 SeatIndex = SeatIndexFromSlot == INDEX_NONE ? PlayerIndex : SeatIndexFromSlot;
-		if (SeatIndex == 0 || SeatIndex == 1)
-		{
-			MultiplayerSeatAnchors.Add(nullptr);
-			continue;
-		}
-
-		FActorSpawnParameters SpawnParams;
-		SpawnParams.Owner = this;
-		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-		ASDMultiplayerSeatAnchor* SeatAnchor = World->SpawnActor<ASDMultiplayerSeatAnchor>(
-			ASDMultiplayerSeatAnchor::StaticClass(), FTransform::Identity, SpawnParams);
-		if (!SeatAnchor)
-		{
-			MultiplayerSeatAnchors.Add(nullptr);
-			continue;
-		}
-
-		SeatAnchor->ConfigureFromCameraTransform(GetMultiplayerPawnSpawnTransform(nullptr, SeatIndex));
-		MultiplayerSeatAnchors.Add(SeatAnchor);
-	}
+	// Multiplayer cards now use each player's pawn card slots. Keep this path as
+	// cleanup for older spawned anchors, but do not create the old per-seat layout.
 }
 
 FTransform AShowDownGameModeBase::GetMultiplayerPawnSpawnTransform(AController* Controller, int32 PlayerIndex)
@@ -3540,6 +3573,169 @@ bool AShowDownGameModeBase::AreAllActiveMultiplayerPlayersDoneBetting(int32 Curr
 	return true;
 }
 
+int32 AShowDownGameModeBase::CountActiveMultiplayerPlayers() const
+{
+	int32 ActiveCount = 0;
+	for (ASDPlayerState* Player : MultiplayerPlayers)
+	{
+		if (IsValid(Player) && Player->Lives > 0 && !MultiplayerFoldedPlayers.Contains(Player))
+		{
+			++ActiveCount;
+		}
+	}
+
+	return ActiveCount;
+}
+
+void AShowDownGameModeBase::HandleMultiplayerPlayerDisconnected(ASDPlayerState* LeavingPlayer)
+{
+	if (!HasAuthority() || !bMultiplayerMatchStarted || !IsValid(LeavingPlayer) || !MultiplayerPlayers.Contains(LeavingPlayer))
+	{
+		return;
+	}
+
+	const EShowDownPlayerSlot LeavingSlot = LeavingPlayer->ShowDownSlot;
+	for (ACard* Card : LeavingPlayer->HandCards)
+	{
+		if (IsValid(Card))
+		{
+			Card->Destroy();
+		}
+	}
+	LeavingPlayer->ClearHand();
+
+	if (IsValid(LeavingPlayer->ForeheadCard))
+	{
+		LeavingPlayer->ForeheadCard->Destroy();
+		LeavingPlayer->ForeheadCard = nullptr;
+	}
+
+	const bool bWasCardGiver = MultiplayerCardGiver == LeavingPlayer;
+	const bool bWasCardReceiver = MultiplayerCardReceiver == LeavingPlayer;
+	const bool bWasCurrentBetter = MultiplayerCurrentBetter == LeavingPlayer;
+
+	MultiplayerPlayers.RemoveAll([LeavingPlayer](const TObjectPtr<ASDPlayerState>& Player)
+	{
+		return Player.Get() == LeavingPlayer;
+	});
+	for (auto FoldedIterator = MultiplayerFoldedPlayers.CreateIterator(); FoldedIterator; ++FoldedIterator)
+	{
+		if ((*FoldedIterator).Get() == LeavingPlayer)
+		{
+			FoldedIterator.RemoveCurrent();
+			break;
+		}
+	}
+	for (auto ActedIterator = MultiplayerPlayersActed.CreateIterator(); ActedIterator; ++ActedIterator)
+	{
+		if ((*ActedIterator).Get() == LeavingPlayer)
+		{
+			ActedIterator.RemoveCurrent();
+			break;
+		}
+	}
+	MultiplayerEliminationOrder.RemoveAll([LeavingPlayer](const TObjectPtr<ASDPlayerState>& Player)
+	{
+		return Player.Get() == LeavingPlayer;
+	});
+	for (auto VoteIterator = MultiplayerRestartVotes.CreateIterator(); VoteIterator; ++VoteIterator)
+	{
+		if ((*VoteIterator).Get() == LeavingPlayer)
+		{
+			VoteIterator.RemoveCurrent();
+			break;
+		}
+	}
+
+	if (MultiplayerRoundLeader == LeavingPlayer)
+	{
+		MultiplayerRoundLeader = FindNextAliveMultiplayerPlayer(nullptr);
+	}
+	if (MultiplayerDuelA == LeavingPlayer)
+	{
+		MultiplayerDuelA = MultiplayerRoundLeader;
+	}
+	if (MultiplayerDuelB == LeavingPlayer)
+	{
+		MultiplayerDuelB = FindNextAliveMultiplayerPlayer(MultiplayerDuelA);
+	}
+	if (MultiplayerNextFirstPlayer == LeavingPlayer)
+	{
+		MultiplayerNextFirstPlayer = FindNextAliveMultiplayerPlayer(nullptr);
+	}
+	if (bWasCardGiver)
+	{
+		MultiplayerCardGiver = nullptr;
+	}
+	if (bWasCardReceiver)
+	{
+		MultiplayerCardReceiver = nullptr;
+	}
+	if (bWasCurrentBetter)
+	{
+		MultiplayerCurrentBetter = nullptr;
+	}
+
+	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+	{
+		ShowDownGameState->SetNameTagPlayerLoadedBulletCount(LeavingSlot, 0);
+	}
+
+	RefreshMultiplayerCharacterVisibility();
+	NotifyMultiplayerStatus(FString::Printf(TEXT("%s left the match."), *LeavingPlayer->GetPlayerName()));
+
+	if (MultiplayerPlayers.Num() <= 1 || CountActiveMultiplayerPlayers() <= 1)
+	{
+		EndMultiplayerRound();
+		return;
+	}
+
+	if (bMultiplayerRoundResolving)
+	{
+		return;
+	}
+
+	if (!AreAllAliveMultiplayerPlayersReadyToReveal())
+	{
+		DealMultiplayerHands();
+		ASDPlayerState* NextGiver = MultiplayerRoundLeader && MultiplayerRoundLeader->Lives > 0
+			? MultiplayerRoundLeader.Get()
+			: FindNextAliveMultiplayerPlayer(nullptr);
+		if (NextGiver)
+		{
+			StartMultiplayerDuel(NextGiver, FindNextAliveMultiplayerPlayer(NextGiver));
+		}
+		return;
+	}
+
+	AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState();
+	if (ShowDownGameState && ShowDownGameState->CurrentPhase == EShowDownPhase::Betting)
+	{
+		if (CountActiveMultiplayerPlayers() <= 1 || AreAllActiveMultiplayerPlayersDoneBetting(BettingSystem ? BettingSystem->GetCurrentBet() : 0))
+		{
+			FinishMultiplayerRoundByReveal();
+			return;
+		}
+
+		if (!MultiplayerCurrentBetter)
+		{
+			MultiplayerCurrentBetter = FindNextAliveMultiplayerPlayer(nullptr);
+			while (MultiplayerCurrentBetter && MultiplayerFoldedPlayers.Contains(MultiplayerCurrentBetter))
+			{
+				MultiplayerCurrentBetter = FindNextAliveMultiplayerPlayer(MultiplayerCurrentBetter);
+			}
+		}
+
+		ShowDownGameState->SetNameTagRoundStatus(
+			BettingSystem ? BettingSystem->GetCurrentBet() : 0,
+			EShowDownSide::Player,
+			MultiplayerCurrentBetter ? MultiplayerCurrentBetter->ShowDownSlot : EShowDownPlayerSlot::None);
+		return;
+	}
+
+	StartMultiplayerBetting();
+}
+
 void AShowDownGameModeBase::StartMultiplayerCardSelection(ASDPlayerState* Giver, ASDPlayerState* Receiver)
 {
 	MultiplayerCardGiver = Giver;
@@ -3707,7 +3903,7 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 		{
 			ShowDownGameState->SetNameTagPlayerLoadedBulletCount(SubmittingPlayer->ShowDownSlot, SubmittingPlayer->CurrentBet);
 		}
-		if (AreAllActiveMultiplayerPlayersDoneBetting(CurrentBet))
+		if (CountActiveMultiplayerPlayers() <= 1 || AreAllActiveMultiplayerPlayersDoneBetting(CurrentBet))
 		{
 			FinishMultiplayerRoundByReveal();
 			return;
@@ -3752,6 +3948,11 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 			ShowDownGameState->SetNameTagPlayerLoadedBulletCount(SubmittingPlayer->ShowDownSlot, SubmittingPlayer->CurrentBet);
 		}
 		MultiplayerCurrentBetter = FindNextActivePlayer(SubmittingPlayer);
+		if (CountActiveMultiplayerPlayers() <= 1 || !MultiplayerCurrentBetter)
+		{
+			FinishMultiplayerRoundByReveal();
+			return;
+		}
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 		{
 			ShowDownGameState->SetNameTagRoundStatus(
@@ -3790,7 +3991,7 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 			MultiplayerNextFirstPlayer = SubmittingPlayer;
 			MultiplayerPlayersActed.Add(SubmittingPlayer);
 			MultiplayerCurrentBetter = FindNextActivePlayer(SubmittingPlayer);
-			if (!MultiplayerCurrentBetter || AreAllActiveMultiplayerPlayersDoneBetting(CurrentBet))
+			if (CountActiveMultiplayerPlayers() <= 1 || !MultiplayerCurrentBetter || AreAllActiveMultiplayerPlayersDoneBetting(CurrentBet))
 			{
 				FinishMultiplayerRoundByReveal();
 				return;
@@ -4051,6 +4252,7 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(ASDPlayerState* TargetPlay
 		}
 
 		ResolvedTargetPlayer->ForceNetUpdate();
+		RefreshMultiplayerCharacterVisibility();
 		const int32 RemainingLives = ResolvedTargetPlayer->Lives;
 		NotifyMultiplayerStatus(FString::Printf(
 			TEXT("%s roulette %d/6: %s (lives: %d)"),
@@ -4114,6 +4316,7 @@ void AShowDownGameModeBase::EndMultiplayerRound()
 {
 	SetMultiplayerSelectableHand(nullptr);
 	ClearMultiplayerForeheadCards();
+	RefreshMultiplayerCharacterVisibility();
 
 	int32 AliveCount = 0;
 	ASDPlayerState* Winner = nullptr;
@@ -4336,33 +4539,6 @@ USceneComponent* AShowDownGameModeBase::GetHandSlotForPlayerState(ASDPlayerState
 	}
 
 	const int32 PlayerIndex = MultiplayerPlayers.IndexOfByKey(Player);
-	if (const ASDCardPlacementAnchor* HandAnchor = GetHandAnchorForPlayerSlot(Player->ShowDownSlot))
-	{
-		if (USceneComponent* HandSlot = HandAnchor->GetSlotComponent())
-		{
-			return HandSlot;
-		}
-	}
-
-	if (PlayerIndex == 0)
-	{
-		if (USceneComponent* HandSlot = GetHandSlotForSide(EShowDownSide::Player))
-		{
-			return HandSlot;
-		}
-	}
-	if (PlayerIndex == 1)
-	{
-		if (USceneComponent* HandSlot = GetHandSlotForSide(EShowDownSide::Collector))
-		{
-			return HandSlot;
-		}
-	}
-	if (MultiplayerSeatAnchors.IsValidIndex(PlayerIndex) && MultiplayerSeatAnchors[PlayerIndex])
-	{
-		return MultiplayerSeatAnchors[PlayerIndex]->GetHandSlot();
-	}
-
 	for (FConstPlayerControllerIterator Iterator = GetWorld()->GetPlayerControllerIterator(); Iterator; ++Iterator)
 	{
 		const APlayerController* PlayerController = Iterator->Get();
@@ -4386,7 +4562,7 @@ USceneComponent* AShowDownGameModeBase::GetHandSlotForPlayerState(ASDPlayerState
 		return GetHandSlotForSide(EShowDownSide::Collector);
 	}
 
-	return nullptr;
+	return GetHandSlotForSide(GetMultiplayerLayoutSideForPlayerIndex(PlayerIndex));
 }
 
 USceneComponent* AShowDownGameModeBase::GetHeadSlotForPlayerState(ASDPlayerState* Player) const
@@ -4397,33 +4573,6 @@ USceneComponent* AShowDownGameModeBase::GetHeadSlotForPlayerState(ASDPlayerState
 	}
 
 	const int32 PlayerIndex = MultiplayerPlayers.IndexOfByKey(Player);
-	if (const ASDCardPlacementAnchor* ForeheadAnchor = GetForeheadAnchorForPlayerSlot(Player->ShowDownSlot))
-	{
-		if (USceneComponent* HeadSlot = ForeheadAnchor->GetSlotComponent())
-		{
-			return HeadSlot;
-		}
-	}
-
-	if (PlayerIndex == 0)
-	{
-		if (USceneComponent* HeadSlot = GetHeadSlotForSide(EShowDownSide::Player))
-		{
-			return HeadSlot;
-		}
-	}
-	if (PlayerIndex == 1)
-	{
-		if (USceneComponent* HeadSlot = GetHeadSlotForSide(EShowDownSide::Collector))
-		{
-			return HeadSlot;
-		}
-	}
-	if (MultiplayerSeatAnchors.IsValidIndex(PlayerIndex) && MultiplayerSeatAnchors[PlayerIndex])
-	{
-		return MultiplayerSeatAnchors[PlayerIndex]->GetForeheadSlot();
-	}
-
 	for (FConstPlayerControllerIterator Iterator = GetWorld()->GetPlayerControllerIterator(); Iterator; ++Iterator)
 	{
 		const APlayerController* PlayerController = Iterator->Get();
@@ -4447,7 +4596,7 @@ USceneComponent* AShowDownGameModeBase::GetHeadSlotForPlayerState(ASDPlayerState
 		return GetHeadSlotForSide(EShowDownSide::Collector);
 	}
 
-	return nullptr;
+	return GetHeadSlotForSide(GetMultiplayerLayoutSideForPlayerIndex(PlayerIndex));
 }
 
 void AShowDownGameModeBase::NotifyMultiplayerStatus(const FString& Message) const
@@ -4619,18 +4768,7 @@ FSDCardHandLayoutSettings AShowDownGameModeBase::ResolveHandLayoutSettingsForPla
 		return Settings;
 	}
 
-	if (const ASDCardPlacementAnchor* HandAnchor = GetHandAnchorForPlayerSlot(Player->ShowDownSlot))
-	{
-		Settings.CardSpacing = HandAnchor->CardSpacing;
-		Settings.ForwardOffset = HandAnchor->ForwardOffset;
-		Settings.HeightOffset = HandAnchor->HeightOffset;
-		Settings.LeanAngle = HandAnchor->LeanAngle;
-		Settings.LayerStep = HandAnchor->LayerStep;
-		return Settings;
-	}
-
-	const int32 PlayerIndex = MultiplayerPlayers.IndexOfByKey(Player);
-	return ResolveHandLayoutSettings(GetMultiplayerLayoutSideForPlayerIndex(PlayerIndex));
+	return ResolveHandLayoutSettings(EShowDownSide::Player);
 }
 
 void AShowDownGameModeBase::ApplyCardMotionForPlayerState(ASDPlayerState* Player, const TArray<ACard*>& Cards) const
@@ -4640,24 +4778,7 @@ void AShowDownGameModeBase::ApplyCardMotionForPlayerState(ASDPlayerState* Player
 		return;
 	}
 
-	if (const ASDCardPlacementAnchor* HandAnchor = GetHandAnchorForPlayerSlot(Player->ShowDownSlot))
-	{
-		for (ACard* Card : Cards)
-		{
-			if (!Card)
-			{
-				continue;
-			}
-
-			Card->SelectedOffset = HandAnchor->SelectedOffset;
-			Card->HoverOffset = HandAnchor->HoverOffset;
-			Card->MoveSpeed = HandAnchor->MoveSpeed;
-		}
-		return;
-	}
-
-	const int32 PlayerIndex = MultiplayerPlayers.IndexOfByKey(Player);
-	ApplyCardMotionForSide(GetMultiplayerLayoutSideForPlayerIndex(PlayerIndex), Cards);
+	ApplyCardMotionForSide(EShowDownSide::Player, Cards);
 }
 
 ASDPlayerSeat* AShowDownGameModeBase::GetSeatForSide(EShowDownSide Side) const

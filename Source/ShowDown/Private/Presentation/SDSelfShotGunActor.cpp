@@ -1475,10 +1475,12 @@ void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(EShowDownPlayerSlo
 			AimLocation,
 			RotationOffset,
 			nullptr);
+		bCurrentShotTargetsLocalPlayer = ShouldTreatSlotAsLocalPlayer(TargetSlot);
 		return;
 	}
 
 	UseGunWithForcedResultAtTarget(bHit, TargetActor);
+	bCurrentShotTargetsLocalPlayer = ShouldTreatSlotAsLocalPlayer(TargetSlot);
 }
 
 bool ASDSelfShotGunActor::ShouldTreatSlotAsLocalPlayer(EShowDownPlayerSlot TargetSlot) const

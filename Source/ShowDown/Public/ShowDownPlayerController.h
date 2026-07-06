@@ -440,6 +440,7 @@ private:
 
 	bool bChatOpen = false;
 	FString LastSubmittedMultiplayerDisplayName;
+	float LastMultiplayerDisplayNameSubmitTime = -1000.0f;
 	bool bPendingMultiplayerSeatCamera = false;
 	int32 PendingMultiplayerSeatIndex = INDEX_NONE;
 	float PendingMultiplayerSeatCameraLookSensitivity = 0.08f;
