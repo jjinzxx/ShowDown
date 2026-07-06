@@ -121,6 +121,31 @@ namespace
 		return PlayerIndex == 1 ? EShowDownSide::Collector : EShowDownSide::Player;
 	}
 
+	bool TryGetMultiplayerPlacementRole(
+		EShowDownPlayerSlot Slot,
+		bool bForeheadSlot,
+		ESDCardPlacementRole& OutRole)
+	{
+		switch (Slot)
+		{
+		case EShowDownPlayerSlot::Player3:
+			OutRole = bForeheadSlot
+				? ESDCardPlacementRole::Player3Forehead
+				: ESDCardPlacementRole::Player3Hand;
+			return true;
+		case EShowDownPlayerSlot::Player4:
+			OutRole = bForeheadSlot
+				? ESDCardPlacementRole::Player4Forehead
+				: ESDCardPlacementRole::Player4Hand;
+			return true;
+		case EShowDownPlayerSlot::Player1:
+		case EShowDownPlayerSlot::Player2:
+		case EShowDownPlayerSlot::None:
+		default:
+			return false;
+		}
+	}
+
 	FVector ResolveSingleTableCenter(UWorld* World)
 	{
 		if (!World)
@@ -3281,9 +3306,7 @@ void AShowDownGameModeBase::DealMultiplayerHands()
 			continue;
 		}
 
-		const int32 PlayerIndex = MultiplayerPlayers.IndexOfByKey(Player);
-		const FSDCardHandLayoutSettings HandLayout =
-			ResolveHandLayoutSettings(GetMultiplayerLayoutSideForPlayerIndex(PlayerIndex));
+		const FSDCardHandLayoutSettings HandLayout = ResolveHandLayoutSettingsForPlayerState(Player);
 
 		CardSystem->SpawnHandCards(
 			this,
@@ -3295,7 +3318,7 @@ void AShowDownGameModeBase::DealMultiplayerHands()
 			false,
 			Player->HandCards);
 
-		ApplyCardMotionForSide(GetMultiplayerLayoutSideForPlayerIndex(PlayerIndex), Player->HandCards);
+		ApplyCardMotionForPlayerState(Player, Player->HandCards);
 
 		for (ACard* Card : Player->HandCards)
 		{
@@ -4135,10 +4158,9 @@ void AShowDownGameModeBase::ReflowMultiplayerHand(ASDPlayerState* Player)
 
 	if (USceneComponent* HandSlot = GetHandSlotForPlayerState(Player))
 	{
-		const int32 PlayerIndex = MultiplayerPlayers.IndexOfByKey(Player);
-		const FSDCardHandLayoutSettings HandLayout =
-			ResolveHandLayoutSettings(GetMultiplayerLayoutSideForPlayerIndex(PlayerIndex));
+		const FSDCardHandLayoutSettings HandLayout = ResolveHandLayoutSettingsForPlayerState(Player);
 		CardSystem->LayoutHandCards(this, HandSlot, HandLayout, Player->HandCards);
+		ApplyCardMotionForPlayerState(Player, Player->HandCards);
 	}
 }
 
@@ -4150,6 +4172,14 @@ USceneComponent* AShowDownGameModeBase::GetHandSlotForPlayerState(ASDPlayerState
 	}
 
 	const int32 PlayerIndex = MultiplayerPlayers.IndexOfByKey(Player);
+	if (const ASDCardPlacementAnchor* HandAnchor = GetHandAnchorForPlayerSlot(Player->ShowDownSlot))
+	{
+		if (USceneComponent* HandSlot = HandAnchor->GetSlotComponent())
+		{
+			return HandSlot;
+		}
+	}
+
 	if (PlayerIndex == 0)
 	{
 		if (USceneComponent* HandSlot = GetHandSlotForSide(EShowDownSide::Player))
@@ -4203,6 +4233,14 @@ USceneComponent* AShowDownGameModeBase::GetHeadSlotForPlayerState(ASDPlayerState
 	}
 
 	const int32 PlayerIndex = MultiplayerPlayers.IndexOfByKey(Player);
+	if (const ASDCardPlacementAnchor* ForeheadAnchor = GetForeheadAnchorForPlayerSlot(Player->ShowDownSlot))
+	{
+		if (USceneComponent* HeadSlot = ForeheadAnchor->GetSlotComponent())
+		{
+			return HeadSlot;
+		}
+	}
+
 	if (PlayerIndex == 0)
 	{
 		if (USceneComponent* HeadSlot = GetHeadSlotForSide(EShowDownSide::Player))
@@ -4351,17 +4389,13 @@ APlayerPawn* AShowDownGameModeBase::GetPrimaryPlayerPawn() const
 	return Cast<APlayerPawn>(UGameplayStatics::GetPlayerPawn(GetWorld(), 0));
 }
 
-ASDCardPlacementAnchor* AShowDownGameModeBase::GetCardPlacementAnchor(EShowDownSide Side, bool bForeheadSlot) const
+ASDCardPlacementAnchor* AShowDownGameModeBase::GetCardPlacementAnchorByRole(ESDCardPlacementRole TargetRole) const
 {
 	UWorld* World = GetWorld();
 	if (!World)
 	{
 		return nullptr;
 	}
-
-	const ESDCardPlacementRole TargetRole = Side == EShowDownSide::Collector
-		? (bForeheadSlot ? ESDCardPlacementRole::OpponentForehead : ESDCardPlacementRole::OpponentHand)
-		: (bForeheadSlot ? ESDCardPlacementRole::PlayerForehead : ESDCardPlacementRole::PlayerHand);
 
 	TArray<AActor*> AnchorActors;
 	UGameplayStatics::GetAllActorsOfClass(World, ASDCardPlacementAnchor::StaticClass(), AnchorActors);
@@ -4378,6 +4412,15 @@ ASDCardPlacementAnchor* AShowDownGameModeBase::GetCardPlacementAnchor(EShowDownS
 	return nullptr;
 }
 
+ASDCardPlacementAnchor* AShowDownGameModeBase::GetCardPlacementAnchor(EShowDownSide Side, bool bForeheadSlot) const
+{
+	const ESDCardPlacementRole TargetRole = Side == EShowDownSide::Collector
+		? (bForeheadSlot ? ESDCardPlacementRole::OpponentForehead : ESDCardPlacementRole::OpponentHand)
+		: (bForeheadSlot ? ESDCardPlacementRole::PlayerForehead : ESDCardPlacementRole::PlayerHand);
+
+	return GetCardPlacementAnchorByRole(TargetRole);
+}
+
 ASDCardPlacementAnchor* AShowDownGameModeBase::GetHandAnchorForSide(EShowDownSide Side) const
 {
 	return GetCardPlacementAnchor(Side, false);
@@ -4386,6 +4429,71 @@ ASDCardPlacementAnchor* AShowDownGameModeBase::GetHandAnchorForSide(EShowDownSid
 ASDCardPlacementAnchor* AShowDownGameModeBase::GetForeheadAnchorForSide(EShowDownSide Side) const
 {
 	return GetCardPlacementAnchor(Side, true);
+}
+
+ASDCardPlacementAnchor* AShowDownGameModeBase::GetHandAnchorForPlayerSlot(EShowDownPlayerSlot Slot) const
+{
+	ESDCardPlacementRole TargetRole = ESDCardPlacementRole::PlayerHand;
+	return TryGetMultiplayerPlacementRole(Slot, false, TargetRole)
+		? GetCardPlacementAnchorByRole(TargetRole)
+		: nullptr;
+}
+
+ASDCardPlacementAnchor* AShowDownGameModeBase::GetForeheadAnchorForPlayerSlot(EShowDownPlayerSlot Slot) const
+{
+	ESDCardPlacementRole TargetRole = ESDCardPlacementRole::PlayerForehead;
+	return TryGetMultiplayerPlacementRole(Slot, true, TargetRole)
+		? GetCardPlacementAnchorByRole(TargetRole)
+		: nullptr;
+}
+
+FSDCardHandLayoutSettings AShowDownGameModeBase::ResolveHandLayoutSettingsForPlayerState(ASDPlayerState* Player) const
+{
+	FSDCardHandLayoutSettings Settings = GetDefaultHandLayoutSettings();
+	if (!Player)
+	{
+		return Settings;
+	}
+
+	if (const ASDCardPlacementAnchor* HandAnchor = GetHandAnchorForPlayerSlot(Player->ShowDownSlot))
+	{
+		Settings.CardSpacing = HandAnchor->CardSpacing;
+		Settings.ForwardOffset = HandAnchor->ForwardOffset;
+		Settings.HeightOffset = HandAnchor->HeightOffset;
+		Settings.LeanAngle = HandAnchor->LeanAngle;
+		Settings.LayerStep = HandAnchor->LayerStep;
+		return Settings;
+	}
+
+	const int32 PlayerIndex = MultiplayerPlayers.IndexOfByKey(Player);
+	return ResolveHandLayoutSettings(GetMultiplayerLayoutSideForPlayerIndex(PlayerIndex));
+}
+
+void AShowDownGameModeBase::ApplyCardMotionForPlayerState(ASDPlayerState* Player, const TArray<ACard*>& Cards) const
+{
+	if (!Player)
+	{
+		return;
+	}
+
+	if (const ASDCardPlacementAnchor* HandAnchor = GetHandAnchorForPlayerSlot(Player->ShowDownSlot))
+	{
+		for (ACard* Card : Cards)
+		{
+			if (!Card)
+			{
+				continue;
+			}
+
+			Card->SelectedOffset = HandAnchor->SelectedOffset;
+			Card->HoverOffset = HandAnchor->HoverOffset;
+			Card->MoveSpeed = HandAnchor->MoveSpeed;
+		}
+		return;
+	}
+
+	const int32 PlayerIndex = MultiplayerPlayers.IndexOfByKey(Player);
+	ApplyCardMotionForSide(GetMultiplayerLayoutSideForPlayerIndex(PlayerIndex), Cards);
 }
 
 ASDPlayerSeat* AShowDownGameModeBase::GetSeatForSide(EShowDownSide Side) const

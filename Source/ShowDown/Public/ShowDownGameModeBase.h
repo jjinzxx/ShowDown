@@ -30,6 +30,7 @@ class AController;
 class APlayerController;
 class ASDPlayerState;
 class USceneComponent;
+enum class ESDCardPlacementRole : uint8;
 
 //각 플레이어(콜렉터, 플레이어, 멀티플레이어) 에 대한 값(손패, 이마의 카드, 목숨, 베팅값) 구조체로 저장
 USTRUCT(BlueprintType)
@@ -457,15 +458,20 @@ private:
 	const FShowDownStageRule* GetCurrentStageRule() const;
 	AShowDownGameStateBase* GetShowDownGameState() const;
 	APlayerPawn* GetPrimaryPlayerPawn() const;
+	ASDCardPlacementAnchor* GetCardPlacementAnchorByRole(ESDCardPlacementRole TargetRole) const;
 	ASDCardPlacementAnchor* GetCardPlacementAnchor(EShowDownSide Side, bool bForeheadSlot) const;
 	ASDCardPlacementAnchor* GetHandAnchorForSide(EShowDownSide Side) const;
 	ASDCardPlacementAnchor* GetForeheadAnchorForSide(EShowDownSide Side) const;
+	ASDCardPlacementAnchor* GetHandAnchorForPlayerSlot(EShowDownPlayerSlot Slot) const;
+	ASDCardPlacementAnchor* GetForeheadAnchorForPlayerSlot(EShowDownPlayerSlot Slot) const;
 	ASDPlayerSeat* GetSeatForSide(EShowDownSide Side) const;
 	ASDPlayerSeat* GetPrimaryPlayerSeat() const;
 	USceneComponent* GetHandSlotForSide(EShowDownSide Side) const;
 	USceneComponent* GetHeadSlotForSide(EShowDownSide Side) const;
 	USceneComponent* GetPlayerHandSlot() const;
 	USceneComponent* GetPlayerHeadSlot() const;
+	FSDCardHandLayoutSettings ResolveHandLayoutSettingsForPlayerState(ASDPlayerState* Player) const;
+	void ApplyCardMotionForPlayerState(ASDPlayerState* Player, const TArray<ACard*>& Cards) const;
 	void ScheduleRevealAutoAdvanceIfNeeded();
 	void ShowEventDebugMessage(const FString& Message) const;
 	
