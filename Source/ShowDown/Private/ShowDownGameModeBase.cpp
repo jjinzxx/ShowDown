@@ -86,9 +86,13 @@ namespace
 		return FRotator(0.0f, 180.0f, 0.0f);
 	}
 
-	FRotator GetMultiplayerForeheadCardRotationOffset(int32 ReceiverPlayerIndex)
+	FRotator GetMultiplayerForeheadCardRotationOffset(EShowDownPlayerSlot ReceiverSlot)
 	{
-		(void)ReceiverPlayerIndex;
+		if (ReceiverSlot == EShowDownPlayerSlot::Player2)
+		{
+			return FRotator::ZeroRotator;
+		}
+
 		return GetHiddenForeheadCardRotationOffset();
 	}
 
@@ -4027,12 +4031,11 @@ void AShowDownGameModeBase::HandleMultiplayerSelectedCard(ASDPlayerState* Submit
 	SelectedCard->SetSelectable(false);
 	if (USceneComponent* HeadSlot = GetHeadSlotForPlayerState(MultiplayerCardReceiver))
 	{
-		const int32 ReceiverPlayerIndex = MultiplayerPlayers.IndexOfByKey(MultiplayerCardReceiver);
 		CardSystem->MoveCardToSlotWithRotationOffset(
 			SelectedCard,
 			HeadSlot,
 			true,
-			GetMultiplayerForeheadCardRotationOffset(ReceiverPlayerIndex));
+			GetMultiplayerForeheadCardRotationOffset(MultiplayerCardReceiver->ShowDownSlot));
 	}
 
 	if (AreAllAliveMultiplayerPlayersReadyToReveal())
