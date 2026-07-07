@@ -2,6 +2,8 @@
 
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
+#include "Components/HorizontalBox.h"
+#include "Components/HorizontalBoxSlot.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
@@ -18,6 +20,7 @@ namespace
 	constexpr float OverheadChatAnimationInterval = 1.0f / 30.0f;
 	constexpr float OverheadChatMaxWidth = 260.0f;
 	constexpr float OverheadChatPushDistance = 34.0f;
+	constexpr float SpeakingIndicatorInterpSpeed = 10.0f;
 	constexpr int32 MaxOverheadChatBubbleCount = 3;
 
 	float EaseOutCubic(float Alpha)
@@ -111,6 +114,16 @@ void UShowDownNameTagWidget::ShowOverheadChatMessage(const FText& NewChatText)
 	RefreshChatBubbleTimer();
 }
 
+void UShowDownNameTagWidget::SetSpeakingIndicatorVisible(bool bVisible)
+{
+	bCachedSpeakingIndicatorVisible = bVisible;
+	BuildDefaultWidget();
+	if (bVisible && SpeakingIndicatorText)
+	{
+		SpeakingIndicatorText->SetVisibility(ESlateVisibility::HitTestInvisible);
+	}
+}
+
 TSharedRef<SWidget> UShowDownNameTagWidget::RebuildWidget()
 {
 	BuildDefaultWidget();
@@ -125,6 +138,7 @@ void UShowDownNameTagWidget::NativeConstruct()
 	SetDisplayName(CachedDisplayName);
 	SetStatusText(CachedStatusText);
 	SetTurnActive(bCachedTurnActive);
+	SetSpeakingIndicatorVisible(bCachedSpeakingIndicatorVisible);
 }
 
 void UShowDownNameTagWidget::NativeDestruct()
@@ -135,6 +149,13 @@ void UShowDownNameTagWidget::NativeDestruct()
 	}
 
 	Super::NativeDestruct();
+}
+
+void UShowDownNameTagWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+{
+	Super::NativeTick(MyGeometry, InDeltaTime);
+
+	UpdateSpeakingIndicatorAnimation(InDeltaTime);
 }
 
 void UShowDownNameTagWidget::BuildDefaultWidget()
@@ -158,6 +179,16 @@ void UShowDownNameTagWidget::BuildDefaultWidget()
 	NameText->SetShadowOffset(FVector2D(0.0f, 1.0f));
 	NameText->SetShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.55f));
 
+	SpeakingIndicatorText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("SpeakingIndicatorText"));
+	SpeakingIndicatorText->SetText(FText::FromString(TEXT("말 하는 중...")));
+	SpeakingIndicatorText->SetColorAndOpacity(FSlateColor(FLinearColor(0.70f, 0.92f, 1.0f, 1.0f)));
+	SpeakingIndicatorText->SetJustification(ETextJustify::Center);
+	SpeakingIndicatorText->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), 12));
+	SpeakingIndicatorText->SetShadowOffset(FVector2D(0.0f, 1.0f));
+	SpeakingIndicatorText->SetShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.55f));
+	SpeakingIndicatorText->SetVisibility(ESlateVisibility::Collapsed);
+	SpeakingIndicatorText->SetRenderOpacity(0.0f);
+
 	StatusText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("StatusText"));
 	StatusText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
 	StatusText->SetJustification(ETextJustify::Center);
@@ -165,7 +196,18 @@ void UShowDownNameTagWidget::BuildDefaultWidget()
 	StatusText->SetShadowOffset(FVector2D(0.0f, 1.0f));
 	StatusText->SetShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.55f));
 
-	NameBackground->SetContent(NameText);
+	UHorizontalBox* NameRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("NameRow"));
+	if (UHorizontalBoxSlot* NameTextSlot = NameRow->AddChildToHorizontalBox(NameText))
+	{
+		NameTextSlot->SetVerticalAlignment(VAlign_Center);
+	}
+	if (UHorizontalBoxSlot* SpeakingSlot = NameRow->AddChildToHorizontalBox(SpeakingIndicatorText))
+	{
+		SpeakingSlot->SetPadding(FMargin(7.0f, 0.0f, 0.0f, 0.0f));
+		SpeakingSlot->SetVerticalAlignment(VAlign_Center);
+	}
+
+	NameBackground->SetContent(NameRow);
 
 	if (UVerticalBoxSlot* ChatStackSlot = Root->AddChildToVerticalBox(ChatStack))
 	{
@@ -186,6 +228,26 @@ void UShowDownNameTagWidget::BuildDefaultWidget()
 
 	WidgetTree->RootWidget = Root;
 	RefreshNameBackgroundColor();
+}
+
+void UShowDownNameTagWidget::UpdateSpeakingIndicatorAnimation(float InDeltaTime)
+{
+	if (!SpeakingIndicatorText)
+	{
+		return;
+	}
+
+	const float TargetOpacity = bCachedSpeakingIndicatorVisible ? 1.0f : 0.0f;
+	CurrentSpeakingIndicatorOpacity = InDeltaTime > 0.0f
+		? FMath::FInterpTo(CurrentSpeakingIndicatorOpacity, TargetOpacity, InDeltaTime, SpeakingIndicatorInterpSpeed)
+		: TargetOpacity;
+
+	const bool bShouldShow = bCachedSpeakingIndicatorVisible || CurrentSpeakingIndicatorOpacity > 0.02f;
+	SpeakingIndicatorText->SetVisibility(bShouldShow
+		? ESlateVisibility::HitTestInvisible
+		: ESlateVisibility::Collapsed);
+	SpeakingIndicatorText->SetRenderOpacity(CurrentSpeakingIndicatorOpacity);
+	SpeakingIndicatorText->SetRenderTranslation(FVector2D((1.0f - CurrentSpeakingIndicatorOpacity) * -4.0f, 0.0f));
 }
 
 void UShowDownNameTagWidget::RefreshNameBackgroundColor()

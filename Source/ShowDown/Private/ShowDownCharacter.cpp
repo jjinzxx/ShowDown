@@ -69,7 +69,7 @@ AShowDownCharacter::AShowDownCharacter()
 	NameTagWidgetComponent->SetWidgetClass(UShowDownNameTagWidget::StaticClass());
 	NameTagWidgetComponent->SetWidgetSpace(EWidgetSpace::Screen);
 	NameTagWidgetComponent->SetDrawAtDesiredSize(true);
-	NameTagWidgetComponent->SetDrawSize(FVector2D(180.0f, 58.0f));
+	NameTagWidgetComponent->SetDrawSize(FVector2D(260.0f, 64.0f));
 	NameTagWidgetComponent->SetPivot(FVector2D(0.5f, 1.0f));
 	NameTagWidgetComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	NameTagWidgetComponent->SetGenerateOverlapEvents(false);
@@ -1153,16 +1153,14 @@ void AShowDownCharacter::RefreshNameTag()
 		return;
 	}
 
-	const FString BaseDisplayName = ResolveNameTagDisplayName();
-	const FString DisplayName = bVoiceTalking && !BaseDisplayName.IsEmpty()
-		? FString::Printf(TEXT("🎙 %s"), *BaseDisplayName)
-		: BaseDisplayName;
+	const FString DisplayName = ResolveNameTagDisplayName();
 	NameTagWidgetComponent->InitWidget();
 	if (UShowDownNameTagWidget* NameTagWidget = Cast<UShowDownNameTagWidget>(NameTagWidgetComponent->GetUserWidgetObject()))
 	{
 		NameTagWidget->SetDisplayName(FText::FromString(DisplayName));
 		NameTagWidget->SetStatusText(FText::FromString(ResolveNameTagStatusText()));
 		NameTagWidget->SetTurnActive(IsNameTagTurnActive());
+		NameTagWidget->SetSpeakingIndicatorVisible(bVoiceTalking);
 	}
 
 	const bool bVisible = ShouldShowNameTag();
@@ -1293,7 +1291,8 @@ bool AShowDownCharacter::ShouldShowOverheadChatMessage(const FString& SenderName
 	}
 
 	if (CharacterRole == EShowDownCharacterRole::Opponent
-		&& TrimmedSenderName.Equals(TEXT("Collector"), ESearchCase::IgnoreCase))
+		&& (TrimmedSenderName.Equals(TEXT("Collector"), ESearchCase::IgnoreCase)
+			|| TrimmedSenderName.Equals(TEXT("김윤아"), ESearchCase::IgnoreCase)))
 	{
 		return true;
 	}

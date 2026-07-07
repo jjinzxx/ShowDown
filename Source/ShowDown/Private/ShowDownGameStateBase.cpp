@@ -275,7 +275,7 @@ void AShowDownGameStateBase::BroadcastCollectorLLMDecision(const FString& Dialog
 
 	OnCollectorDialogue.Broadcast(Dialogue, Intent);
 	OnCollectorLLMDecision.Broadcast(Dialogue, Intent, Action, TargetBet);
-	OnCollectorLLMStatus.Broadcast(true, TEXT("답변 완료."));
+	OnCollectorLLMStatus.Broadcast(true, FString());
 }
 
 void AShowDownGameStateBase::BroadcastCollectorLLMStatus(bool bSuccess, const FString& Message)
@@ -349,7 +349,7 @@ void AShowDownGameStateBase::MulticastCollectorLLMDecision_Implementation(const 
 {
 	OnCollectorDialogue.Broadcast(Dialogue, Intent);
 	OnCollectorLLMDecision.Broadcast(Dialogue, Intent, Action, TargetBet);
-	OnCollectorLLMStatus.Broadcast(true, TEXT("답변 완료."));
+	OnCollectorLLMStatus.Broadcast(true, FString());
 }
 
 void AShowDownGameStateBase::MulticastCollectorLLMStatus_Implementation(bool bSuccess, const FString& Message)

@@ -16,6 +16,7 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Sound/SoundWaveProcedural.h"
+#include "TimerManager.h"
 
 #if __has_include("SDLLMSecrets.h")
 #include "SDLLMSecrets.h"
@@ -226,11 +227,18 @@ FString UShowDownVoiceSubsystem::GetVoiceDebugSummary() const
 void UShowDownVoiceSubsystem::Deinitialize()
 {
 	CancelPushToTalk();
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(SpeechPlaybackFallbackTimerHandle);
+	}
 	if (ActiveSpeechComponent)
 	{
+		ActiveSpeechComponent->OnAudioFinished.RemoveDynamic(this, &UShowDownVoiceSubsystem::HandleSpeechAudioFinished);
 		ActiveSpeechComponent->Stop();
+		ActiveSpeechComponent->DestroyComponent();
 		ActiveSpeechComponent = nullptr;
 	}
+	BroadcastSpeechPlaybackState(false);
 	Super::Deinitialize();
 }
 
@@ -534,6 +542,25 @@ FString UShowDownVoiceSubsystem::ResolveApiKey() const
 void UShowDownVoiceSubsystem::BroadcastVoiceStatus(bool bSuccess, const FString& Message)
 {
 	OnVoiceStatus.Broadcast(bSuccess, Message);
+}
+
+void UShowDownVoiceSubsystem::BroadcastSpeechPlaybackState(bool bIsSpeaking)
+{
+	if (!bIsSpeaking)
+	{
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().ClearTimer(SpeechPlaybackFallbackTimerHandle);
+		}
+	}
+
+	if (bSpeechPlaybackActive == bIsSpeaking)
+	{
+		return;
+	}
+
+	bSpeechPlaybackActive = bIsSpeaking;
+	OnSpeechPlaybackStateChanged.Broadcast(bIsSpeaking);
 }
 
 void UShowDownVoiceSubsystem::OpenAndStartCaptureStream()
@@ -1021,8 +1048,11 @@ void UShowDownVoiceSubsystem::PlaySpeechWav(const TArray<uint8>& WavData)
 
 	if (ActiveSpeechComponent)
 	{
+		ActiveSpeechComponent->OnAudioFinished.RemoveDynamic(this, &UShowDownVoiceSubsystem::HandleSpeechAudioFinished);
 		ActiveSpeechComponent->Stop();
+		ActiveSpeechComponent->DestroyComponent();
 		ActiveSpeechComponent = nullptr;
+		BroadcastSpeechPlaybackState(false);
 	}
 
 	ActiveSpeechWave->NumChannels = NumChannels;
@@ -1046,6 +1076,38 @@ void UShowDownVoiceSubsystem::PlaySpeechWav(const TArray<uint8>& WavData)
 	if (UWorld* World = GetWorld())
 	{
 		const float SafePlaybackPitch = FMath::Clamp(TTSPlaybackPitch, 0.5f, 2.0f);
-		ActiveSpeechComponent = UGameplayStatics::SpawnSound2D(World, ActiveSpeechWave, 1.0f, SafePlaybackPitch);
+		ActiveSpeechComponent = UGameplayStatics::SpawnSound2D(
+			World,
+			ActiveSpeechWave,
+			1.0f,
+			SafePlaybackPitch,
+			0.0f,
+			nullptr,
+			false,
+			false);
+		if (ActiveSpeechComponent)
+		{
+			ActiveSpeechComponent->OnAudioFinished.AddDynamic(this, &UShowDownVoiceSubsystem::HandleSpeechAudioFinished);
+			BroadcastSpeechPlaybackState(true);
+			const float ExpectedPlaybackSeconds = FMath::Max(0.05f, ActiveSpeechWave->Duration / SafePlaybackPitch);
+			World->GetTimerManager().SetTimer(
+				SpeechPlaybackFallbackTimerHandle,
+				this,
+				&UShowDownVoiceSubsystem::HandleSpeechAudioFinished,
+				ExpectedPlaybackSeconds + 0.25f,
+				false);
+		}
 	}
+}
+
+void UShowDownVoiceSubsystem::HandleSpeechAudioFinished()
+{
+	if (ActiveSpeechComponent)
+	{
+		ActiveSpeechComponent->OnAudioFinished.RemoveDynamic(this, &UShowDownVoiceSubsystem::HandleSpeechAudioFinished);
+		ActiveSpeechComponent->DestroyComponent();
+		ActiveSpeechComponent = nullptr;
+	}
+
+	BroadcastSpeechPlaybackState(false);
 }

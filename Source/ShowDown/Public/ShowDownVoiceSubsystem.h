@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "AudioCaptureCore.h"
 #include "Subsystems/GameInstanceSubsystem.h"
+#include "TimerManager.h"
 #include "ShowDownVoiceSubsystem.generated.h"
 
 class IHttpRequest;
@@ -20,6 +21,7 @@ enum class EShowDownVoiceInputMode : uint8
 
 DECLARE_DELEGATE_TwoParams(FShowDownVoiceTextCallback, bool /*bSuccess*/, const FString& /*Text*/);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FShowDownVoiceStatusSignature, bool, bSuccess, const FString&, Message);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FShowDownSpeechPlaybackStateSignature, bool, bIsSpeaking);
 
 UCLASS(Config=Game)
 class SHOWDOWN_API UShowDownVoiceSubsystem : public UGameInstanceSubsystem
@@ -81,6 +83,9 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Voice")
 	FShowDownVoiceStatusSignature OnVoiceStatus;
 
+	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Voice")
+	FShowDownSpeechPlaybackStateSignature OnSpeechPlaybackStateChanged;
+
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Voice")
 	bool IsConfigured() const;
 
@@ -139,6 +144,7 @@ public:
 private:
 	FString ResolveApiKey() const;
 	void BroadcastVoiceStatus(bool bSuccess, const FString& Message);
+	void BroadcastSpeechPlaybackState(bool bIsSpeaking);
 	void OpenAndStartCaptureStream();
 	void HandleCapturedAudio(const void* AudioData, int32 NumFrames, int32 NumChannels, int32 SampleRate);
 	void RequestTranscription(TArray<uint8>&& WavData);
@@ -147,6 +153,9 @@ private:
 	bool ParseTranscriptionResponse(const FString& ResponseBody, FString& OutText) const;
 	bool BuildRecordedWav(TArray<uint8>& OutWavData, float& OutDurationSeconds) const;
 	void PlaySpeechWav(const TArray<uint8>& WavData);
+
+	UFUNCTION()
+	void HandleSpeechAudioFinished();
 
 	TUniquePtr<Audio::FAudioCapture> AudioCapture;
 	mutable FCriticalSection CaptureCriticalSection;
@@ -158,6 +167,7 @@ private:
 	bool bTranscriptionInFlight = false;
 	bool bSpeechInFlight = false;
 	bool bHasPendingSpeech = false;
+	bool bSpeechPlaybackActive = false;
 	int32 LastSpeechByteCount = 0;
 	TArray<uint8> LastRecordedWavData;
 	double LastAcceptedSpeechTimeSeconds = -1.0;
@@ -172,4 +182,6 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UAudioComponent> ActiveSpeechComponent;
+
+	FTimerHandle SpeechPlaybackFallbackTimerHandle;
 };

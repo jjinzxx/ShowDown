@@ -151,16 +151,7 @@ AShowDownPlayerController::AShowDownPlayerController()
 	// not supplied an override. This also makes the widget available early so it
 	// can subscribe to replicated GameState chat broadcasts before the user
 	// presses the chat key.
-	static ConstructorHelpers::FClassFinder<UShowDownChatWidget> ChatWidgetBlueprint(
-		TEXT("/Game/UI/WBP_Chat"));
-	if (ChatWidgetBlueprint.Succeeded())
-	{
-		ChatWidgetClass = ChatWidgetBlueprint.Class;
-	}
-	else
-	{
-		ChatWidgetClass = UShowDownChatWidget::StaticClass();
-	}
+	ChatWidgetClass = UShowDownChatWidget::StaticClass();
 
 	static ConstructorHelpers::FClassFinder<UShowDownMultiRankWidget> MultiRankWidgetBlueprint(
 		TEXT("/Game/UI/WBP_MultiRank"));
@@ -188,6 +179,7 @@ void AShowDownPlayerController::BeginPlay()
 	bEnableClickEvents = false;
 	bEnableMouseOverEvents = false;
 	InitializeFromPossessedPawn();
+	EnsureChatWidget();
 	InitializeInteractableOutlinePostProcess();
 	CreateCenterCrosshairWidget();
 	UpdateCenterCrosshairVisibility();
@@ -205,6 +197,9 @@ void AShowDownPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason
 		: nullptr)
 	{
 		VoiceSubsystem->OnVoiceStatus.RemoveDynamic(this, &AShowDownPlayerController::HandleVoiceStatus);
+		VoiceSubsystem->OnSpeechPlaybackStateChanged.RemoveDynamic(
+			this,
+			&AShowDownPlayerController::HandleSpeechPlaybackStateChanged);
 	}
 	if (UShowDownEosSubsystem* EosSubsystem = GetGameInstance()
 		? GetGameInstance()->GetSubsystem<UShowDownEosSubsystem>()
@@ -491,6 +486,14 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 		if (WasInputKeyJustPressed(CloseChatKey))
 		{
 			CloseChat();
+			return;
+		}
+		if (WasInputKeyJustPressed(ToggleChatKey) && ChatWidget && !ChatWidget->IsChatInputFocused())
+		{
+			ChatWidget->SetVisibility(ESlateVisibility::Visible);
+			ChatWidget->SetChatInputOpen(true);
+			ApplyChatInputMode(true);
+			ChatWidget->FocusChatInput();
 		}
 		return;
 	}
@@ -1096,6 +1099,7 @@ void AShowDownPlayerController::OpenChat()
 
 	bChatOpen = true;
 	ChatWidget->SetVisibility(ESlateVisibility::Visible);
+	ChatWidget->SetChatInputOpen(true);
 	ApplyChatInputMode(true);
 	ChatWidget->FocusChatInput();
 
@@ -1113,7 +1117,8 @@ void AShowDownPlayerController::CloseChat()
 	bChatOpen = false;
 	if (ChatWidget)
 	{
-		ChatWidget->SetVisibility(ESlateVisibility::Collapsed);
+		ChatWidget->SetChatInputOpen(false);
+		ChatWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
 	}
 	ApplyChatInputMode(false);
 }
@@ -1990,11 +1995,15 @@ void AShowDownPlayerController::HandleVoicePushToTalkInput()
 
 		if (WasInputKeyJustPressed(VoicePushToTalkKey))
 		{
-			EosSubsystem->BeginVoiceTransmission();
+			if (EosSubsystem->BeginVoiceTransmission())
+			{
+				SetLocalSpeakingIndicatorVisible(true);
+			}
 		}
 		if (WasInputKeyJustReleased(VoicePushToTalkKey))
 		{
 			EosSubsystem->EndVoiceTransmission();
+			SetLocalSpeakingIndicatorVisible(false);
 		}
 		return;
 	}
@@ -2009,7 +2018,7 @@ void AShowDownPlayerController::HandleVoicePushToTalkInput()
 
 	if (WasInputKeyJustPressed(VoicePushToTalkKey))
 	{
-		VoiceSubsystem->BeginPushToTalk(
+		const bool bStartedRecording = VoiceSubsystem->BeginPushToTalk(
 			FShowDownVoiceTextCallback::CreateWeakLambda(
 				this,
 				[this](bool bSuccess, const FString& Text)
@@ -2025,11 +2034,16 @@ void AShowDownPlayerController::HandleVoicePushToTalkInput()
 						SubmitDialogueInput(TrimmedText);
 					}
 				}));
+		if (bStartedRecording)
+		{
+			SetLocalSpeakingIndicatorVisible(true);
+		}
 	}
 
 	if (WasInputKeyJustReleased(VoicePushToTalkKey))
 	{
 		VoiceSubsystem->EndPushToTalk();
+		SetLocalSpeakingIndicatorVisible(false);
 	}
 }
 
@@ -2040,6 +2054,7 @@ void AShowDownPlayerController::EnsureChatWidget()
 		return;
 	}
 
+	ChatWidgetClass = UShowDownChatWidget::StaticClass();
 	if (!ChatWidgetClass)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("ChatWidgetClass is not assigned on %s."), *GetName());
@@ -2055,7 +2070,8 @@ void AShowDownPlayerController::EnsureChatWidget()
 
 	ChatWidget->SetOwningShowDownController(this);
 	ChatWidget->AddToViewport();
-	ChatWidget->SetVisibility(ESlateVisibility::Collapsed);
+	ChatWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
+	ChatWidget->SetChatInputOpen(false);
 }
 
 void AShowDownPlayerController::EnsureLeaveConfirmWidget()
@@ -2226,6 +2242,12 @@ void AShowDownPlayerController::TryBindVoiceChatEvents()
 		{
 			VoiceSubsystem->OnVoiceStatus.RemoveDynamic(this, &AShowDownPlayerController::HandleVoiceStatus);
 			VoiceSubsystem->OnVoiceStatus.AddDynamic(this, &AShowDownPlayerController::HandleVoiceStatus);
+			VoiceSubsystem->OnSpeechPlaybackStateChanged.RemoveDynamic(
+				this,
+				&AShowDownPlayerController::HandleSpeechPlaybackStateChanged);
+			VoiceSubsystem->OnSpeechPlaybackStateChanged.AddDynamic(
+				this,
+				&AShowDownPlayerController::HandleSpeechPlaybackStateChanged);
 			bVoiceSubsystemEventsBound = true;
 		}
 	}
@@ -2261,6 +2283,42 @@ void AShowDownPlayerController::BroadcastLocalCollectorStatus(bool bSuccess, con
 	}
 }
 
+void AShowDownPlayerController::SetLocalSpeakingIndicatorVisible(bool bVisible)
+{
+	if (!ChatWidget)
+	{
+		EnsureChatWidget();
+	}
+	if (ChatWidget)
+	{
+		ChatWidget->SetLocalSpeakingIndicatorVisible(bVisible);
+	}
+}
+
+void AShowDownPlayerController::SetSingleOpponentSpeakingIndicatorVisible(bool bVisible) const
+{
+	if (!IsLocalController() || IsMultiplayerGameMap(GetWorld()))
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	for (TActorIterator<AShowDownCharacter> It(World); It; ++It)
+	{
+		AShowDownCharacter* ShowDownCharacter = *It;
+		if (IsValid(ShowDownCharacter) && ShowDownCharacter->GetCharacterRole() == EShowDownCharacterRole::Opponent)
+		{
+			ShowDownCharacter->SetVoiceTalking(bVisible);
+			return;
+		}
+	}
+}
+
 void AShowDownPlayerController::HandleChatMessageReceived(const FString& SenderName, const FString& Message)
 {
 	if (!IsLocalController() || !SenderName.Equals(TEXT("Collector"), ESearchCase::IgnoreCase))
@@ -2285,8 +2343,14 @@ void AShowDownPlayerController::HandleLocalVoiceTalkingChanged(bool bIsTalking)
 {
 	if (IsLocalController() && IsMultiplayerGameMap(GetWorld()))
 	{
+		SetLocalSpeakingIndicatorVisible(bIsTalking);
 		ServerSetMultiplayerVoiceTalking(bIsTalking);
 	}
+}
+
+void AShowDownPlayerController::HandleSpeechPlaybackStateChanged(bool bIsSpeaking)
+{
+	SetSingleOpponentSpeakingIndicatorVisible(bIsSpeaking);
 }
 
 void AShowDownPlayerController::SubmitLocalMultiplayerDisplayName()

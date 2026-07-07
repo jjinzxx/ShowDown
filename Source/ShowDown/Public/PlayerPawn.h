@@ -163,6 +163,8 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Chat")
 	void SubmitDialogueInput(const FString& Text);
 
+	FString GetChatSenderName() const;
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Betting")
 	void RequestPlayerCheck();
 
@@ -231,5 +233,4 @@ private:
 	void HandleVoicePushToTalkInput();
 	void EnsureChatWidget();
 	void ApplyChatInputMode(bool bOpen);
-	FString GetChatSenderName() const;
 };

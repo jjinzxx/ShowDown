@@ -466,6 +466,7 @@ private:
 	void BroadcastBetActionCommitted(EShowDownSide Side, EShowDownBetAction Action, int32 TargetBet) const;
 	void BroadcastMultiplayerCardSelectedAction(ASDPlayerState* Player) const;
 	void BroadcastMultiplayerBetActionCommitted(ASDPlayerState* Player, EShowDownBetAction Action, int32 TargetBet) const;
+	void BroadcastSystemChatMessage(const FString& Message) const;
 	void PlaySelfShotGunPresentationThen(EShowDownSide TargetSide, bool bLiveRound, TFunction<void()>&& Continuation);
 	void FinishSelfShotGunPresentation();
 	void BroadcastPendingSelfShotRouletteResult();

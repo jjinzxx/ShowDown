@@ -827,6 +827,25 @@ void AShowDownGameModeBase::BroadcastBetActionCommitted(
 	{
 		ShowDownGameState->OnBetActionCommitted.Broadcast(Side, Action, TargetBet);
 	}
+
+	const FString ActorName = Side == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector");
+	switch (Action)
+	{
+	case EShowDownBetAction::Check:
+		BroadcastSystemChatMessage(FString::Printf(TEXT("%s님이 %d발 장전 상태로 체크했습니다."), *ActorName, TargetBet));
+		break;
+	case EShowDownBetAction::Call:
+		BroadcastSystemChatMessage(FString::Printf(TEXT("%s님이 %d발로 콜했습니다."), *ActorName, TargetBet));
+		break;
+	case EShowDownBetAction::Raise:
+		BroadcastSystemChatMessage(FString::Printf(TEXT("%s님이 %d발 장전했습니다."), *ActorName, TargetBet));
+		break;
+	case EShowDownBetAction::Fold:
+		BroadcastSystemChatMessage(FString::Printf(TEXT("%s님이 폴드했습니다."), *ActorName));
+		break;
+	default:
+		break;
+	}
 }
 
 void AShowDownGameModeBase::BroadcastMultiplayerCardSelectedAction(ASDPlayerState* Player) const
@@ -855,6 +874,20 @@ void AShowDownGameModeBase::BroadcastMultiplayerBetActionCommitted(
 	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 	{
 		ShowDownGameState->OnMultiplayerBetActionCommitted.Broadcast(Player->ShowDownSlot, Action, TargetBet);
+	}
+}
+
+void AShowDownGameModeBase::BroadcastSystemChatMessage(const FString& Message) const
+{
+	const FString TrimmedMessage = Message.TrimStartAndEnd().Left(240);
+	if (TrimmedMessage.IsEmpty())
+	{
+		return;
+	}
+
+	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+	{
+		ShowDownGameState->BroadcastChatMessage(TEXT("System"), TrimmedMessage);
 	}
 }
 
@@ -2095,7 +2128,7 @@ void AShowDownGameModeBase::TryRequestBossChatReply(const FString& PlayerDialogu
 							{
 								AppendRecentDialogueLine(TEXT("Collector"), Dialogue);
 								ShowDownGameState->BroadcastChatMessage(TEXT("Collector"), Dialogue);
-								ShowDownGameState->BroadcastCollectorLLMStatus(true, TEXT("답변 완료."));
+								ShowDownGameState->BroadcastCollectorLLMStatus(true, FString());
 							}
 							else
 							{
@@ -2942,6 +2975,10 @@ void AShowDownGameModeBase::ApplyRouletteResult(EShowDownSide TargetSide, int32 
 
 	if (!bHit)
 	{
+		BroadcastSystemChatMessage(FString::Printf(
+			TEXT("%s님이 %d발 룰렛을 피했습니다."),
+			TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
+			ClampedBulletCount));
 		ShowEventDebugMessage(FString::Printf(TEXT("룰렛: %s %d발 / 안 맞음"),
 			*GetSideDisplayText(TargetSide),
 			ClampedBulletCount));
@@ -2954,6 +2991,17 @@ void AShowDownGameModeBase::ApplyRouletteResult(EShowDownSide TargetSide, int32 
 	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 	{
 		ShowDownGameState->OnLifeChanged.Broadcast(TargetSide, TargetState.Lives);
+	}
+	BroadcastSystemChatMessage(FString::Printf(
+		TEXT("%s님이 %d발 룰렛에 맞았습니다. 남은 목숨: %d"),
+		TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
+		ClampedBulletCount,
+		TargetState.Lives));
+	if (TargetState.Lives <= 0)
+	{
+		BroadcastSystemChatMessage(FString::Printf(
+			TEXT("%s님이 사망했습니다."),
+			TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector")));
 	}
 	ShowEventDebugMessage(FString::Printf(TEXT("룰렛: %s %d발 / 총 맞음 / 목숨 %d"),
 		*GetSideDisplayText(TargetSide),
@@ -4153,10 +4201,18 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 		{
 			SubmittingPlayer->CurrentBet = CurrentBet;
 			NotifyMultiplayerStatus(FString::Printf(TEXT("%s: %d 콜"), *SubmittingPlayer->GetPlayerName(), CurrentBet));
+			BroadcastSystemChatMessage(FString::Printf(
+				TEXT("%s님이 %d발로 콜했습니다."),
+				*SubmittingPlayer->GetPlayerName(),
+				CurrentBet));
 		}
 		else
 		{
 			NotifyMultiplayerStatus(FString::Printf(TEXT("%s 체크."), *SubmittingPlayer->GetPlayerName()));
+			BroadcastSystemChatMessage(FString::Printf(
+				TEXT("%s님이 %d발 장전 상태로 체크했습니다."),
+				*SubmittingPlayer->GetPlayerName(),
+				CurrentBet));
 		}
 
 		BroadcastMultiplayerBetActionCommitted(SubmittingPlayer, CommittedAction, CurrentBet);
@@ -4204,6 +4260,10 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 		BettingRaisesLeft = FMath::Max(0, BettingRaisesLeft - 1);
 		MultiplayerPlayersActed.Reset();
 		MultiplayerPlayersActed.Add(SubmittingPlayer);
+		BroadcastSystemChatMessage(FString::Printf(
+			TEXT("%s님이 %d발 장전했습니다."),
+			*SubmittingPlayer->GetPlayerName(),
+			NewBet));
 		BroadcastMultiplayerBetActionCommitted(SubmittingPlayer, EShowDownBetAction::Raise, NewBet);
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 		{
@@ -4233,6 +4293,9 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 	case EShowDownBetAction::Fold:
 	{
 		NotifyMultiplayerStatus(FString::Printf(TEXT("%s 폴드."), *SubmittingPlayer->GetPlayerName()));
+		BroadcastSystemChatMessage(FString::Printf(
+			TEXT("%s님이 폴드했습니다."),
+			*SubmittingPlayer->GetPlayerName()));
 		MultiplayerFoldedPlayers.Add(SubmittingPlayer);
 		BroadcastMultiplayerBetActionCommitted(SubmittingPlayer, EShowDownBetAction::Fold, SubmittingPlayer->CurrentBet);
 
@@ -4504,11 +4567,13 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(ASDPlayerState* TargetPlay
 		}
 
 		const int32 PreviousLives = ResolvedTargetPlayer->Lives;
+		bool bEliminated = false;
 		if (bHit)
 		{
 			ResolvedTargetPlayer->Lives = FMath::Max(0, ResolvedTargetPlayer->Lives - 1);
 			if (PreviousLives > 0 && ResolvedTargetPlayer->Lives <= 0)
 			{
+				bEliminated = true;
 				MultiplayerEliminationOrder.AddUnique(ResolvedTargetPlayer);
 			}
 		}
@@ -4516,6 +4581,27 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(ASDPlayerState* TargetPlay
 		ResolvedTargetPlayer->ForceNetUpdate();
 		RefreshMultiplayerCharacterVisibility();
 		const int32 RemainingLives = ResolvedTargetPlayer->Lives;
+		if (bHit)
+		{
+			BroadcastSystemChatMessage(FString::Printf(
+				TEXT("%s님이 %d발 룰렛에 맞았습니다. 남은 목숨: %d"),
+				*TargetName,
+				ClampedBulletCount,
+				RemainingLives));
+		}
+		else
+		{
+			BroadcastSystemChatMessage(FString::Printf(
+				TEXT("%s님이 %d발 룰렛을 피했습니다."),
+				*TargetName,
+				ClampedBulletCount));
+		}
+		if (bEliminated)
+		{
+			BroadcastSystemChatMessage(FString::Printf(
+				TEXT("%s님이 사망했습니다."),
+				*TargetName));
+		}
 		NotifyMultiplayerStatus(FString::Printf(
 			TEXT("%s roulette %d/6: %s (lives: %d)"),
 			*TargetName,

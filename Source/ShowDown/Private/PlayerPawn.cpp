@@ -15,7 +15,6 @@
 #include "ShowDownPlayerController.h"
 #include "ShowDownVoiceSubsystem.h"
 #include "SupabaseSubsystem.h"
-#include "UObject/ConstructorHelpers.h"
 
 namespace
 {
@@ -33,16 +32,7 @@ APlayerPawn::APlayerPawn()
 	AutoPossessPlayer = EAutoReceiveInput::Player0;
 	bReplicates = true;
 
-	static ConstructorHelpers::FClassFinder<UShowDownChatWidget> ChatWidgetBlueprint(
-		TEXT("/Game/UI/WBP_Chat"));
-	if (ChatWidgetBlueprint.Succeeded())
-	{
-		ChatWidgetClass = ChatWidgetBlueprint.Class;
-	}
-	else
-	{
-		ChatWidgetClass = UShowDownChatWidget::StaticClass();
-	}
+	ChatWidgetClass = UShowDownChatWidget::StaticClass();
 
 	// 루트 메시 컴포넌트 생성
 	rootComp = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
@@ -161,6 +151,8 @@ void APlayerPawn::AddInputMappingContext()
 			}
 		}
 	}
+
+	EnsureChatWidget();
 }
 
 void APlayerPawn::Tick(float DeltaTime)
@@ -185,6 +177,14 @@ void APlayerPawn::Tick(float DeltaTime)
 		if (PC->WasInputKeyJustPressed(CloseChatKey))
 		{
 			CloseChat();
+			return;
+		}
+		if (PC->WasInputKeyJustPressed(ToggleChatKey) && ChatWidget && !ChatWidget->IsChatInputFocused())
+		{
+			ChatWidget->SetVisibility(ESlateVisibility::Visible);
+			ChatWidget->SetChatInputOpen(true);
+			ApplyChatInputMode(true);
+			ChatWidget->FocusChatInput();
 		}
 		bHasPreviousMousePosition = false;
 		return;
@@ -433,6 +433,7 @@ void APlayerPawn::OpenChat()
 
 	bChatOpen = true;
 	ChatWidget->SetVisibility(ESlateVisibility::Visible);
+	ChatWidget->SetChatInputOpen(true);
 	ApplyChatInputMode(true);
 	ChatWidget->FocusChatInput();
 	GetWorldTimerManager().SetTimerForNextTick(FTimerDelegate::CreateWeakLambda(this, [this]()
@@ -449,7 +450,8 @@ void APlayerPawn::CloseChat()
 	bChatOpen = false;
 	if (ChatWidget)
 	{
-		ChatWidget->SetVisibility(ESlateVisibility::Collapsed);
+		ChatWidget->SetChatInputOpen(false);
+		ChatWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
 	}
 	ApplyChatInputMode(false);
 }
@@ -715,7 +717,7 @@ void APlayerPawn::HandleVoicePushToTalkInput()
 
 	if (PC->WasInputKeyJustPressed(VoicePushToTalkKey))
 	{
-		VoiceSubsystem->BeginPushToTalk(
+		const bool bStartedRecording = VoiceSubsystem->BeginPushToTalk(
 			FShowDownVoiceTextCallback::CreateWeakLambda(
 				this,
 				[this](bool bSuccess, const FString& Text)
@@ -725,11 +727,27 @@ void APlayerPawn::HandleVoicePushToTalkInput()
 						SubmitDialogueInput(Text);
 					}
 				}));
+		if (bStartedRecording && ChatWidget)
+		{
+			ChatWidget->SetLocalSpeakingIndicatorVisible(true);
+		}
+		else if (bStartedRecording)
+		{
+			EnsureChatWidget();
+			if (ChatWidget)
+			{
+				ChatWidget->SetLocalSpeakingIndicatorVisible(true);
+			}
+		}
 	}
 
 	if (PC->WasInputKeyJustReleased(VoicePushToTalkKey))
 	{
 		VoiceSubsystem->EndPushToTalk();
+		if (ChatWidget)
+		{
+			ChatWidget->SetLocalSpeakingIndicatorVisible(false);
+		}
 	}
 }
 
@@ -761,6 +779,7 @@ void APlayerPawn::EnsureChatWidget()
 	}
 
 	APlayerController* PC = Cast<APlayerController>(GetController());
+	ChatWidgetClass = UShowDownChatWidget::StaticClass();
 	if (!PC || !ChatWidgetClass)
 	{
 		if (!ChatWidgetClass)
@@ -779,7 +798,8 @@ void APlayerPawn::EnsureChatWidget()
 
 	ChatWidget->SetOwningShowDownPawn(this);
 	ChatWidget->AddToViewport();
-	ChatWidget->SetVisibility(ESlateVisibility::Collapsed);
+	ChatWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
+	ChatWidget->SetChatInputOpen(false);
 }
 
 void APlayerPawn::ApplyChatInputMode(bool bOpen)

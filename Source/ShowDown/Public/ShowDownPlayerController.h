@@ -59,6 +59,8 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Chat")
 	void SubmitDialogueInput(const FString& Text);
 
+	FString GetChatSenderName() const;
+
 	UFUNCTION(Exec)
 	void SDVoiceSubmitText(const FString& Text);
 
@@ -392,9 +394,10 @@ private:
 	void UpdateCenterCrosshairVisibility();
 	void RemoveCenterCrosshairWidget();
 	void SubmitLocalMultiplayerDisplayName();
-	FString GetChatSenderName() const;
 	void TryBindVoiceChatEvents();
 	void BroadcastLocalCollectorStatus(bool bSuccess, const FString& Message) const;
+	void SetLocalSpeakingIndicatorVisible(bool bVisible);
+	void SetSingleOpponentSpeakingIndicatorVisible(bool bVisible) const;
 	UFUNCTION()
 	void HandleMultiRankRestartRequested();
 	UFUNCTION()
@@ -405,6 +408,8 @@ private:
 	void HandleVoiceStatus(bool bSuccess, const FString& Message);
 	UFUNCTION()
 	void HandleLocalVoiceTalkingChanged(bool bIsTalking);
+	UFUNCTION()
+	void HandleSpeechPlaybackStateChanged(bool bIsSpeaking);
 	AShowDownGameModeBase* ResolveGameMode() const;
 
 	UPROPERTY()
