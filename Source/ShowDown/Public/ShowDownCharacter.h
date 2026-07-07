@@ -185,6 +185,9 @@ protected:
 	UFUNCTION()
 	void HandleNameTagRoundStatusChanged();
 
+	UFUNCTION()
+	void HandleChatMessageReceived(const FString& SenderName, const FString& Message);
+
 	UFUNCTION(Server, Reliable)
 	void ServerSetCharacterIdentity(EShowDownCharacterRole NewRole, EShowDownPlayerSlot NewPlayerSlot, const FString& NewDisplayName);
 
@@ -300,6 +303,7 @@ private:
 	FString ResolveNameTagStatusText() const;
 	bool IsNameTagTurnActive() const;
 	bool ShouldShowNameTag() const;
+	bool ShouldShowOverheadChatMessage(const FString& SenderName) const;
 
 	FTimerHandle AnimStateResetTimerHandle;
 	FTimerHandle HitRagdollRecoverTimerHandle;

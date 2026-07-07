@@ -410,6 +410,12 @@ private:
 	float SinglePlayerIntroFallbackStartTime = 0.0f;
 	bool bSinglePlayerIntroFallbackActive = false;
 
+	mutable bool bCardPlacementAnchorCacheInitialized = false;
+	mutable TMap<ESDCardPlacementRole, TWeakObjectPtr<ASDCardPlacementAnchor>> CachedCardPlacementAnchors;
+	mutable bool bPlayerSeatCacheInitialized = false;
+	mutable TMap<EShowDownSide, TWeakObjectPtr<ASDPlayerSeat>> CachedPlayerSeats;
+	mutable TWeakObjectPtr<ASDPlayerSeat> CachedFirstPlayerSeat;
+
 	UFUNCTION()
 	void HandleSelfShotGunPresentationFinished();
 
@@ -518,6 +524,8 @@ private:
 	const FShowDownStageRule* GetCurrentStageRule() const;
 	AShowDownGameStateBase* GetShowDownGameState() const;
 	APlayerPawn* GetPrimaryPlayerPawn() const;
+	void RefreshCardPlacementAnchorCache() const;
+	void RefreshPlayerSeatCache() const;
 	ASDCardPlacementAnchor* GetCardPlacementAnchorByRole(ESDCardPlacementRole TargetRole) const;
 	ASDCardPlacementAnchor* GetCardPlacementAnchor(EShowDownSide Side, bool bForeheadSlot) const;
 	ASDCardPlacementAnchor* GetHandAnchorForSide(EShowDownSide Side) const;

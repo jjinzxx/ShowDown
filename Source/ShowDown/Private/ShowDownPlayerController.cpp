@@ -440,7 +440,10 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 	{
 		TryApplyPendingMultiplayerSeatCamera();
 	}
-	TryBindVoiceChatEvents();
+	if (!bVoiceChatEventsBound || !bVoiceSubsystemEventsBound || !VoiceBoundGameState.IsValid())
+	{
+		TryBindVoiceChatEvents();
+	}
 	if (IsMultiplayerGameMap(GetWorld()))
 	{
 		SubmitLocalMultiplayerDisplayName();

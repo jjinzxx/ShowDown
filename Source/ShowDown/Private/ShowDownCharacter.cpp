@@ -586,6 +586,7 @@ void AShowDownCharacter::BindToRouletteEvents()
 	ShowDownGameState->OnMultiplayerRouletteStarted.AddUniqueDynamic(this, &AShowDownCharacter::HandleMultiplayerRouletteStarted);
 	ShowDownGameState->OnMultiplayerRouletteResult.AddUniqueDynamic(this, &AShowDownCharacter::HandleMultiplayerRouletteResult);
 	ShowDownGameState->OnNameTagRoundStatusChanged.AddUniqueDynamic(this, &AShowDownCharacter::HandleNameTagRoundStatusChanged);
+	ShowDownGameState->OnChatMessageReceived.AddUniqueDynamic(this, &AShowDownCharacter::HandleChatMessageReceived);
 }
 
 void AShowDownCharacter::UnbindFromRouletteEvents()
@@ -606,11 +607,32 @@ void AShowDownCharacter::UnbindFromRouletteEvents()
 	ShowDownGameState->OnMultiplayerRouletteStarted.RemoveDynamic(this, &AShowDownCharacter::HandleMultiplayerRouletteStarted);
 	ShowDownGameState->OnMultiplayerRouletteResult.RemoveDynamic(this, &AShowDownCharacter::HandleMultiplayerRouletteResult);
 	ShowDownGameState->OnNameTagRoundStatusChanged.RemoveDynamic(this, &AShowDownCharacter::HandleNameTagRoundStatusChanged);
+	ShowDownGameState->OnChatMessageReceived.RemoveDynamic(this, &AShowDownCharacter::HandleChatMessageReceived);
 }
 
 void AShowDownCharacter::HandleNameTagRoundStatusChanged()
 {
 	RefreshNameTag();
+}
+
+void AShowDownCharacter::HandleChatMessageReceived(const FString& SenderName, const FString& Message)
+{
+	if (!NameTagWidgetComponent || !ShouldShowOverheadChatMessage(SenderName))
+	{
+		return;
+	}
+
+	const FString TrimmedMessage = Message.TrimStartAndEnd();
+	if (TrimmedMessage.IsEmpty())
+	{
+		return;
+	}
+
+	RefreshNameTag();
+	if (UShowDownNameTagWidget* NameTagWidget = Cast<UShowDownNameTagWidget>(NameTagWidgetComponent->GetUserWidgetObject()))
+	{
+		NameTagWidget->ShowOverheadChatMessage(FText::FromString(TrimmedMessage));
+	}
 }
 
 void AShowDownCharacter::ScheduleAnimStateReset(float Duration)
@@ -1239,4 +1261,44 @@ bool AShowDownCharacter::ShouldShowNameTag() const
 	}
 
 	return !IsLocalPlayerCharacter();
+}
+
+bool AShowDownCharacter::ShouldShowOverheadChatMessage(const FString& SenderName) const
+{
+	if (!ShouldShowNameTag())
+	{
+		return false;
+	}
+
+	const FString TrimmedSenderName = SenderName.TrimStartAndEnd();
+	if (TrimmedSenderName.IsEmpty())
+	{
+		return false;
+	}
+
+	if (CharacterRole == EShowDownCharacterRole::Opponent
+		&& TrimmedSenderName.Equals(TEXT("Collector"), ESearchCase::IgnoreCase))
+	{
+		return true;
+	}
+
+	const FString DisplayName = ResolveNameTagDisplayName().TrimStartAndEnd();
+	if (!DisplayName.IsEmpty() && TrimmedSenderName.Equals(DisplayName, ESearchCase::IgnoreCase))
+	{
+		return true;
+	}
+
+	const FString IdentityName = CharacterDisplayName.TrimStartAndEnd().Left(32);
+	if (!IdentityName.IsEmpty() && TrimmedSenderName.Equals(IdentityName, ESearchCase::IgnoreCase))
+	{
+		return true;
+	}
+
+	if (PlayerSlot != EShowDownPlayerSlot::None)
+	{
+		const FString FallbackPlayerName = FString::Printf(TEXT("Player %d"), static_cast<int32>(PlayerSlot));
+		return TrimmedSenderName.Equals(FallbackPlayerName, ESearchCase::IgnoreCase);
+	}
+
+	return false;
 }

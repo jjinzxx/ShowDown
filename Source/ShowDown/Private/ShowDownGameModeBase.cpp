@@ -4957,12 +4957,15 @@ APlayerPawn* AShowDownGameModeBase::GetPrimaryPlayerPawn() const
 	return Cast<APlayerPawn>(UGameplayStatics::GetPlayerPawn(GetWorld(), 0));
 }
 
-ASDCardPlacementAnchor* AShowDownGameModeBase::GetCardPlacementAnchorByRole(ESDCardPlacementRole TargetRole) const
+void AShowDownGameModeBase::RefreshCardPlacementAnchorCache() const
 {
+	CachedCardPlacementAnchors.Reset();
+	bCardPlacementAnchorCacheInitialized = true;
+
 	UWorld* World = GetWorld();
 	if (!World)
 	{
-		return nullptr;
+		return;
 	}
 
 	TArray<AActor*> AnchorActors;
@@ -4971,9 +4974,66 @@ ASDCardPlacementAnchor* AShowDownGameModeBase::GetCardPlacementAnchorByRole(ESDC
 	for (AActor* AnchorActor : AnchorActors)
 	{
 		ASDCardPlacementAnchor* Anchor = Cast<ASDCardPlacementAnchor>(AnchorActor);
-		if (Anchor && Anchor->PlacementRole == TargetRole)
+		if (Anchor && !CachedCardPlacementAnchors.Contains(Anchor->PlacementRole))
 		{
-			return Anchor;
+			CachedCardPlacementAnchors.Add(Anchor->PlacementRole, Anchor);
+		}
+	}
+}
+
+void AShowDownGameModeBase::RefreshPlayerSeatCache() const
+{
+	CachedPlayerSeats.Reset();
+	CachedFirstPlayerSeat.Reset();
+	bPlayerSeatCacheInitialized = true;
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	TArray<AActor*> SeatActors;
+	UGameplayStatics::GetAllActorsOfClass(World, ASDPlayerSeat::StaticClass(), SeatActors);
+
+	for (AActor* SeatActor : SeatActors)
+	{
+		ASDPlayerSeat* Seat = Cast<ASDPlayerSeat>(SeatActor);
+		if (!Seat)
+		{
+			continue;
+		}
+
+		if (!CachedFirstPlayerSeat.IsValid())
+		{
+			CachedFirstPlayerSeat = Seat;
+		}
+
+		if (!CachedPlayerSeats.Contains(Seat->SeatSide))
+		{
+			CachedPlayerSeats.Add(Seat->SeatSide, Seat);
+		}
+	}
+}
+
+ASDCardPlacementAnchor* AShowDownGameModeBase::GetCardPlacementAnchorByRole(ESDCardPlacementRole TargetRole) const
+{
+	if (!bCardPlacementAnchorCacheInitialized)
+	{
+		RefreshCardPlacementAnchorCache();
+	}
+
+	if (const TWeakObjectPtr<ASDCardPlacementAnchor>* CachedAnchor = CachedCardPlacementAnchors.Find(TargetRole))
+	{
+		if (CachedAnchor->IsValid())
+		{
+			return CachedAnchor->Get();
+		}
+
+		RefreshCardPlacementAnchorCache();
+		if (const TWeakObjectPtr<ASDCardPlacementAnchor>* RefreshedAnchor = CachedCardPlacementAnchors.Find(TargetRole))
+		{
+			return RefreshedAnchor->Get();
 		}
 	}
 
@@ -5064,31 +5124,27 @@ void AShowDownGameModeBase::ApplyCardMotionForPlayerState(ASDPlayerState* Player
 
 ASDPlayerSeat* AShowDownGameModeBase::GetSeatForSide(EShowDownSide Side) const
 {
-	TArray<AActor*> SeatActors;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASDPlayerSeat::StaticClass(), SeatActors);
-
-	ASDPlayerSeat* FirstSeat = nullptr;
-	for (AActor* SeatActor : SeatActors)
+	if (!bPlayerSeatCacheInitialized)
 	{
-		ASDPlayerSeat* Seat = Cast<ASDPlayerSeat>(SeatActor);
-		if (!Seat)
+		RefreshPlayerSeatCache();
+	}
+
+	if (const TWeakObjectPtr<ASDPlayerSeat>* CachedSeat = CachedPlayerSeats.Find(Side))
+	{
+		if (CachedSeat->IsValid())
 		{
-			continue;
+			return CachedSeat->Get();
 		}
 
-		if (!FirstSeat)
+		RefreshPlayerSeatCache();
+		if (const TWeakObjectPtr<ASDPlayerSeat>* RefreshedSeat = CachedPlayerSeats.Find(Side))
 		{
-			FirstSeat = Seat;
-		}
-
-		if (Seat->SeatSide == Side)
-		{
-			return Seat;
+			return RefreshedSeat->Get();
 		}
 	}
 
 	// Old maps may have a single SDPlayerSeat without an explicit side set yet.
-	return Side == EShowDownSide::Player ? FirstSeat : nullptr;
+	return Side == EShowDownSide::Player ? CachedFirstPlayerSeat.Get() : nullptr;
 }
 
 ASDPlayerSeat* AShowDownGameModeBase::GetPrimaryPlayerSeat() const

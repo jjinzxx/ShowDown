@@ -11,6 +11,7 @@
 ASDPressableButtonActor::ASDPressableButtonActor()
 {
 	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bStartWithTickEnabled = false;
 
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
@@ -25,6 +26,7 @@ ASDPressableButtonActor::ASDPressableButtonActor()
 void ASDPressableButtonActor::BeginPlay()
 {
 	Super::BeginPlay();
+	SetActorTickEnabled(false);
 
 	RestRelativeLocation = ButtonMesh->GetRelativeLocation();
 	PressedRelativeLocation = RestRelativeLocation + LocalPressOffset;
@@ -108,6 +110,7 @@ void ASDPressableButtonActor::Press()
 	PressStartRelativeLocation = ButtonMesh->GetRelativeLocation();
 	AnimState = EButtonAnimState::PressingDown;
 	StateElapsedTime = 0.0f;
+	SetActorTickEnabled(true);
 	OnPressed.Broadcast();
 }
 
@@ -131,5 +134,6 @@ void ASDPressableButtonActor::FinishPressAnimation()
 	ButtonMesh->SetRelativeLocation(RestRelativeLocation);
 	AnimState = EButtonAnimState::Idle;
 	StateElapsedTime = 0.0f;
+	SetActorTickEnabled(false);
 	OnPressFinished.Broadcast();
 }

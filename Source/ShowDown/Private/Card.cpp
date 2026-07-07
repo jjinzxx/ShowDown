@@ -172,13 +172,24 @@ void ACard::Tick(float DeltaTime)
 
 void ACard::SetCard(int32 NewRank)
 {
-	Rank = FMath::Clamp(NewRank, 1, 7);
+	const int32 ClampedRank = FMath::Clamp(NewRank, 1, 7);
+	if (Rank == ClampedRank && bHasCachedVisual)
+	{
+		return;
+	}
+
+	Rank = ClampedRank;
 	RefreshVisual();
 	ForceNetUpdate();
 }
 
 void ACard::SetFaceUp(bool bNewFaceUp)
 {
+	if (bFaceUp == bNewFaceUp && bHasCachedVisual)
+	{
+		return;
+	}
+
 	bFaceUp = bNewFaceUp;
 	RefreshVisual();
 	ForceNetUpdate();
@@ -186,6 +197,11 @@ void ACard::SetFaceUp(bool bNewFaceUp)
 
 void ACard::SetHiddenFromSlot(EShowDownPlayerSlot NewHiddenFromSlot)
 {
+	if (HiddenFromSlot == NewHiddenFromSlot && bHasCachedVisual)
+	{
+		return;
+	}
+
 	HiddenFromSlot = NewHiddenFromSlot;
 	RefreshVisual();
 	ForceNetUpdate();
@@ -193,6 +209,11 @@ void ACard::SetHiddenFromSlot(EShowDownPlayerSlot NewHiddenFromSlot)
 
 void ACard::SetHandOwnerSlot(EShowDownPlayerSlot NewHandOwnerSlot)
 {
+	if (HandOwnerSlot == NewHandOwnerSlot && bHasCachedVisual)
+	{
+		return;
+	}
+
 	HandOwnerSlot = NewHandOwnerSlot;
 	RefreshVisual();
 	ForceNetUpdate();
@@ -288,6 +309,11 @@ bool ACard::IsHovered() const
 
 void ACard::SetSelectable(bool bNewSelectable)
 {
+	if (bSelectable == bNewSelectable)
+	{
+		return;
+	}
+
 	bSelectable = bNewSelectable;
 	if (!bSelectable)
 	{
