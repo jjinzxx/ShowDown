@@ -38,6 +38,7 @@ namespace
 ASDSmokableCigaretteActor::ASDSmokableCigaretteActor()
 {
 	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bStartWithTickEnabled = false;
 
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
@@ -78,6 +79,7 @@ ASDSmokableCigaretteActor::ASDSmokableCigaretteActor()
 void ASDSmokableCigaretteActor::BeginPlay()
 {
 	Super::BeginPlay();
+	SetActorTickEnabled(false);
 
 	RestRelativeLocation = CigaretteMesh->GetRelativeLocation();
 	RestRelativeRotation = CigaretteMesh->GetRelativeRotation();
@@ -259,6 +261,7 @@ void ASDSmokableCigaretteActor::Smoke()
 	PostSmokeElapsedTime = 0.0f;
 	bSmokeParticleActivated = false;
 	bSmokeSoundPlayed = false;
+	SetActorTickEnabled(true);
 
 	if (bDisableCollisionWhileSmoking)
 	{
@@ -641,5 +644,6 @@ void ASDSmokableCigaretteActor::FinishSmoke()
 	bSmokeSoundPlayed = false;
 	bScreenEffectActive = false;
 	bScreenEffectRestoring = false;
+	SetActorTickEnabled(false);
 	OnSmokeFinished.Broadcast();
 }

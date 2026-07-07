@@ -12,6 +12,24 @@ class UStaticMeshComponent;
 class UTextRenderComponent;
 class FLifetimeProperty;
 
+USTRUCT()
+struct FSDCardMovementTarget
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FVector Location = FVector::ZeroVector;
+
+	UPROPERTY()
+	FRotator Rotation = FRotator::ZeroRotator;
+
+	UPROPERTY()
+	bool bUseSlotAttachMotion = false;
+
+	UPROPERTY()
+	uint8 Revision = 0;
+};
+
 UCLASS()
 class SHOWDOWN_API ACard : public AActor, public ISDInteractable
 {
@@ -151,6 +169,9 @@ protected:
 	UFUNCTION()
 	void OnRep_TargetVisualScaleMultiplier();
 
+	UFUNCTION()
+	void OnRep_MovementTarget();
+
 public:
 	virtual void Tick(float DeltaTime) override;
 
@@ -159,6 +180,9 @@ private:
 	void UpdateTargetTransform();
 	void EnableMotionTick();
 	void MoveToSlotTransform(const FTransform& SlotTransform, bool bNewFaceUp);
+	void PublishMovementTarget(const FTransform& NewTransform, bool bPlaySlotAttachMotion);
+	void ApplyMovementTarget(const FTransform& NewTransform, bool bPlaySlotAttachMotion);
+	void ResetTravelMotionState();
 	void StartSlotAttachMotion(const FTransform& TargetTransform);
 	void UpdateSlotAttachMotion(float DeltaTime);
 	void UpdateSlotAttachSettle(float DeltaTime, FVector& InOutVisualWorldOffset, FRotator& OutVisualRelativeRotation);
@@ -192,6 +216,8 @@ private:
 	float SlotAttachSettleElapsedTime = 0.0f;
 	UPROPERTY(ReplicatedUsing = OnRep_TargetVisualScaleMultiplier)
 	float TargetVisualScaleMultiplier = 1.0f;
+	UPROPERTY(ReplicatedUsing = OnRep_MovementTarget)
+	FSDCardMovementTarget ReplicatedMovementTarget;
 	int32 CachedVisualRank = INDEX_NONE;
 	bool bCachedVisualVisible = false;
 	bool bHasCachedVisual = false;

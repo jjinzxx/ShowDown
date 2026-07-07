@@ -13,7 +13,11 @@ enum class ESDCardPlacementRole : uint8
 	PlayerHand UMETA(DisplayName = "Player Hand"),
 	PlayerForehead UMETA(DisplayName = "Player Forehead"),
 	OpponentHand UMETA(DisplayName = "Opponent Hand"),
-	OpponentForehead UMETA(DisplayName = "Opponent Forehead")
+	OpponentForehead UMETA(DisplayName = "Opponent Forehead"),
+	Player3Hand UMETA(DisplayName = "Player 3 Hand"),
+	Player3Forehead UMETA(DisplayName = "Player 3 Forehead"),
+	Player4Hand UMETA(DisplayName = "Player 4 Hand"),
+	Player4Forehead UMETA(DisplayName = "Player 4 Forehead")
 };
 
 UCLASS(Blueprintable)
@@ -105,4 +109,40 @@ class SHOWDOWN_API ASDOpponentForeheadAnchor : public ASDCardPlacementAnchor
 
 public:
 	ASDOpponentForeheadAnchor();
+};
+
+UCLASS(Blueprintable)
+class SHOWDOWN_API ASDPlayer3HandAnchor : public ASDCardPlacementAnchor
+{
+	GENERATED_BODY()
+
+public:
+	ASDPlayer3HandAnchor();
+};
+
+UCLASS(Blueprintable)
+class SHOWDOWN_API ASDPlayer3ForeheadAnchor : public ASDCardPlacementAnchor
+{
+	GENERATED_BODY()
+
+public:
+	ASDPlayer3ForeheadAnchor();
+};
+
+UCLASS(Blueprintable)
+class SHOWDOWN_API ASDPlayer4HandAnchor : public ASDCardPlacementAnchor
+{
+	GENERATED_BODY()
+
+public:
+	ASDPlayer4HandAnchor();
+};
+
+UCLASS(Blueprintable)
+class SHOWDOWN_API ASDPlayer4ForeheadAnchor : public ASDCardPlacementAnchor
+{
+	GENERATED_BODY()
+
+public:
+	ASDPlayer4ForeheadAnchor();
 };

@@ -11,6 +11,14 @@
 #include "ShowDownGameStateBase.h"
 #include "Styling/CoreStyle.h"
 
+namespace
+{
+int32 GetLobbyExpectedPlayerCount(const UGameInstance* GameInstance)
+{
+	return 4;
+}
+}
+
 TSharedRef<SWidget> UShowDownLobbyWidget::RebuildWidget()
 {
 	BuildDefaultLayout();
@@ -216,7 +224,8 @@ void UShowDownLobbyWidget::RefreshParticipantText()
 		: nullptr;
 	if (!ShowDownGameState)
 	{
-		const FString LoadingText = TEXT("참여자 (0/4)\n참가자 정보를 불러오는 중...");
+		const int32 ExpectedPlayerCount = GetLobbyExpectedPlayerCount(GetGameInstance());
+		const FString LoadingText = FString::Printf(TEXT("참여자 (0/%d)\n참가자 정보를 불러오는 중..."), ExpectedPlayerCount);
 		if (CachedParticipantText != LoadingText)
 		{
 			CachedParticipantText = LoadingText;
@@ -231,7 +240,8 @@ void UShowDownLobbyWidget::RefreshParticipantText()
 		return static_cast<uint8>(Left.Slot) < static_cast<uint8>(Right.Slot);
 	});
 
-	FString ParticipantText = FString::Printf(TEXT("참여자 (%d/4)"), Slots.Num());
+	const int32 ExpectedPlayerCount = GetLobbyExpectedPlayerCount(GetGameInstance());
+	FString ParticipantText = FString::Printf(TEXT("참여자 (%d/%d)"), Slots.Num(), ExpectedPlayerCount);
 	for (const FShowDownNetworkPlayerSlot& PlayerSlot : Slots)
 	{
 		const FString DisplayName = PlayerSlot.DisplayName.IsEmpty() ? TEXT("이름 없는 플레이어") : PlayerSlot.DisplayName;

@@ -8,6 +8,7 @@
 #include "Online/OnlineSessionNames.h"
 #include "OnlineSessionSettings.h"
 #include "OnlineSubsystem.h"
+#include "ShowDownGameModeBase.h"
 #include "ShowDownGameStateBase.h"
 #include "ShowDownPlayerController.h"
 #include "SupabaseSubsystem.h"
@@ -17,6 +18,8 @@ namespace
 constexpr int32 LocalUserNum = 0;
 const FName ShowDownSessionName = NAME_GameSession;
 const FName ShowDownRoomCodeKey = TEXT("SHOWDOWN_ROOM_CODE");
+const FName ShowDownRoomNameKey = TEXT("SHOWDOWN_ROOM_NAME");
+const FName ShowDownRoomPublicKey = TEXT("SHOWDOWN_ROOM_PUBLIC");
 const FName ShowDownGameStartedKey = TEXT("SHOWDOWN_GAME_STARTED");
 const FName ShowDownGameMapKey = TEXT("SHOWDOWN_GAME_MAP");
 const FName ShowDownExpectedPlayerCountKey = TEXT("SHOWDOWN_EXPECTED_PLAYER_COUNT");
@@ -24,8 +27,35 @@ const FString EosOpenIdCredentialType = TEXT("externalauth:OpenIdAccessToken");
 
 FString MakeRoomCode()
 {
-	return FString::Printf(TEXT("%06d"), FMath::RandRange(0, 999999));
+	const uint32 CodeSeed = FGuid::NewGuid().A % 1000000;
+	return FString::Printf(TEXT("%06u"), CodeSeed);
 }
+
+constexpr int32 ShowDownMaxLobbyPlayers = 4;
+
+FString MakeDefaultRoomName(const USupabaseSubsystem* SupabaseSubsystem, const FString& RoomCode)
+{
+	const FString Nickname = SupabaseSubsystem ? SupabaseSubsystem->GetNickname().TrimStartAndEnd() : TEXT("");
+	return Nickname.IsEmpty()
+		? FString::Printf(TEXT("Room %s"), *RoomCode)
+		: FString::Printf(TEXT("%s's Room"), *Nickname.Left(24));
+}
+}
+
+void UShowDownEosSubsystem::Deinitialize()
+{
+	StopLobbyStartPolling();
+	ClearOnlineDelegateHandles();
+
+	ClearTransientSearchState(true);
+	PendingJoinCode.Empty();
+	LobbyCode.Empty();
+	PendingSessionFlow = ESessionFlow::None;
+	bLobbyStartPollInFlight = false;
+	bInMultiplayerLobby = false;
+	bLobbyHost = false;
+
+	Super::Deinitialize();
 }
 
 IOnlineSubsystem* UShowDownEosSubsystem::GetEosSubsystem() const
@@ -51,6 +81,63 @@ IOnlineSessionPtr UShowDownEosSubsystem::GetSessionInterface() const
 	}
 
 	return nullptr;
+}
+
+void UShowDownEosSubsystem::ClearOnlineDelegateHandles()
+{
+	const IOnlineIdentityPtr IdentityInterface = GetIdentityInterface();
+	if (IdentityInterface.IsValid() && LoginCompleteDelegateHandle.IsValid())
+	{
+		IdentityInterface->ClearOnLoginCompleteDelegate_Handle(LocalUserNum, LoginCompleteDelegateHandle);
+		LoginCompleteDelegateHandle.Reset();
+	}
+
+	const IOnlineSessionPtr SessionInterface = GetSessionInterface();
+	if (!SessionInterface.IsValid())
+	{
+		CreateSessionCompleteDelegateHandle.Reset();
+		UpdateSessionCompleteDelegateHandle.Reset();
+		DestroySessionCompleteDelegateHandle.Reset();
+		FindSessionsCompleteDelegateHandle.Reset();
+		JoinSessionCompleteDelegateHandle.Reset();
+		return;
+	}
+
+	if (CreateSessionCompleteDelegateHandle.IsValid())
+	{
+		SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteDelegateHandle);
+		CreateSessionCompleteDelegateHandle.Reset();
+	}
+	if (UpdateSessionCompleteDelegateHandle.IsValid())
+	{
+		SessionInterface->ClearOnUpdateSessionCompleteDelegate_Handle(UpdateSessionCompleteDelegateHandle);
+		UpdateSessionCompleteDelegateHandle.Reset();
+	}
+	if (DestroySessionCompleteDelegateHandle.IsValid())
+	{
+		SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(DestroySessionCompleteDelegateHandle);
+		DestroySessionCompleteDelegateHandle.Reset();
+	}
+	if (FindSessionsCompleteDelegateHandle.IsValid())
+	{
+		SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegateHandle);
+		FindSessionsCompleteDelegateHandle.Reset();
+	}
+	if (JoinSessionCompleteDelegateHandle.IsValid())
+	{
+		SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(JoinSessionCompleteDelegateHandle);
+		JoinSessionCompleteDelegateHandle.Reset();
+	}
+}
+
+void UShowDownEosSubsystem::ClearTransientSearchState(bool bClearPublicRooms)
+{
+	SessionSearch.Reset();
+	PendingStartedGameSearchResult = FOnlineSessionSearchResult();
+	if (bClearPublicRooms)
+	{
+		PublicLobbySearchResults.Reset();
+	}
 }
 
 bool UShowDownEosSubsystem::IsEosLoggedIn() const
@@ -142,6 +229,13 @@ void UShowDownEosSubsystem::HostSession(FName MapName)
 		return;
 	}
 
+	if (SessionInterface->GetNamedSession(ShowDownSessionName))
+	{
+		PendingSessionFlow = ESessionFlow::None;
+		OnSessionResult.Broadcast(false, TEXT("An EOS session already exists. Destroy it before hosting again."));
+		return;
+	}
+
 	PendingHostMapName = MapName.IsNone() ? FName(TEXT("L_MultiplayerGame")) : MapName;
 	PendingSessionFlow = ESessionFlow::HostImmediateGame;
 
@@ -157,7 +251,7 @@ void UShowDownEosSubsystem::HostSession(FName MapName)
 
 	FOnlineSessionSettings Settings;
 	Settings.bIsLANMatch = false;
-	Settings.NumPublicConnections = 4;
+	Settings.NumPublicConnections = ShowDownMaxLobbyPlayers;
 	Settings.NumPrivateConnections = 0;
 	Settings.bShouldAdvertise = true;
 	Settings.bAllowJoinInProgress = true;
@@ -166,23 +260,29 @@ void UShowDownEosSubsystem::HostSession(FName MapName)
 	Settings.bUseLobbiesIfAvailable = true;
 	Settings.Set(SETTING_MAPNAME, PendingHostMapName.ToString(), EOnlineDataAdvertisementType::ViaOnlineService);
 
-	if (SessionInterface->GetNamedSession(ShowDownSessionName))
-	{
-		OnSessionResult.Broadcast(false, TEXT("An EOS session already exists. Destroy it before hosting again."));
-		return;
-	}
-
 	OnSessionResult.Broadcast(false, TEXT("Creating EOS session..."));
 
 	if (!SessionInterface->CreateSession(LocalUserNum, ShowDownSessionName, Settings))
 	{
 		SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteDelegateHandle);
 		CreateSessionCompleteDelegateHandle.Reset();
+		PendingSessionFlow = ESessionFlow::None;
+		ClearTransientSearchState(true);
 		OnSessionResult.Broadcast(false, TEXT("EOS session creation could not start."));
 	}
 }
 
 void UShowDownEosSubsystem::HostLobby(FName LobbyMapName, FName GameMapName)
+{
+	HostLobbyWithVisibility(LobbyMapName, GameMapName, true);
+}
+
+void UShowDownEosSubsystem::HostPrivateLobby(FName LobbyMapName, FName GameMapName)
+{
+	HostLobbyWithVisibility(LobbyMapName, GameMapName, false);
+}
+
+void UShowDownEosSubsystem::HostLobbyWithVisibility(FName LobbyMapName, FName GameMapName, bool bPublicRoom)
 {
 	if (!IsEosLoggedIn())
 	{
@@ -208,6 +308,7 @@ void UShowDownEosSubsystem::HostLobby(FName LobbyMapName, FName GameMapName)
 
 		PendingHostMapName = LobbyMapName.IsNone() ? FName(TEXT("L_MultiplayerLobby")) : LobbyMapName;
 		PendingGameMapName = GameMapName.IsNone() ? FName(TEXT("L_MultiplayerGame")) : GameMapName;
+		bPendingLobbyIsPublic = bPublicRoom;
 		PendingJoinCode.Empty();
 		LobbyCode.Empty();
 		bLobbyHost = false;
@@ -223,6 +324,9 @@ void UShowDownEosSubsystem::HostLobby(FName LobbyMapName, FName GameMapName)
 			SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(DestroySessionCompleteDelegateHandle);
 			DestroySessionCompleteDelegateHandle.Reset();
 			PendingSessionFlow = ESessionFlow::None;
+			PendingJoinCode.Empty();
+			LobbyCode.Empty();
+			ClearTransientSearchState(true);
 			OnSessionResult.Broadcast(false, TEXT("이전 방 정리에 실패했습니다."));
 		}
 		return;
@@ -230,10 +334,16 @@ void UShowDownEosSubsystem::HostLobby(FName LobbyMapName, FName GameMapName)
 
 	PendingHostMapName = LobbyMapName.IsNone() ? FName(TEXT("L_MultiplayerLobby")) : LobbyMapName;
 	PendingGameMapName = GameMapName.IsNone() ? FName(TEXT("L_MultiplayerGame")) : GameMapName;
+	bPendingLobbyIsPublic = bPublicRoom;
 	LobbyCode = MakeRoomCode();
+	USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
+		: nullptr;
+	const FString RoomName = MakeDefaultRoomName(SupabaseSubsystem, LobbyCode);
 	PendingJoinCode.Empty();
 	bLobbyHost = true;
 	bInMultiplayerLobby = true;
+	ExpectedLobbyPlayerCount = ShowDownMaxLobbyPlayers;
 	PendingSessionFlow = ESessionFlow::HostLobby;
 
 	if (CreateSessionCompleteDelegateHandle.IsValid())
@@ -248,7 +358,7 @@ void UShowDownEosSubsystem::HostLobby(FName LobbyMapName, FName GameMapName)
 
 	FOnlineSessionSettings Settings;
 	Settings.bIsLANMatch = false;
-	Settings.NumPublicConnections = 4;
+	Settings.NumPublicConnections = ShowDownMaxLobbyPlayers;
 	Settings.NumPrivateConnections = 0;
 	Settings.bShouldAdvertise = true;
 	Settings.bAllowJoinInProgress = true;
@@ -257,17 +367,23 @@ void UShowDownEosSubsystem::HostLobby(FName LobbyMapName, FName GameMapName)
 	Settings.bUseLobbiesIfAvailable = true;
 	Settings.Set(SETTING_MAPNAME, PendingHostMapName.ToString(), EOnlineDataAdvertisementType::ViaOnlineService);
 	Settings.Set(ShowDownRoomCodeKey, LobbyCode, EOnlineDataAdvertisementType::ViaOnlineService);
+	Settings.Set(ShowDownRoomNameKey, RoomName, EOnlineDataAdvertisementType::ViaOnlineService);
+	Settings.Set(ShowDownRoomPublicKey, bPendingLobbyIsPublic, EOnlineDataAdvertisementType::ViaOnlineService);
 	Settings.Set(ShowDownGameStartedKey, false, EOnlineDataAdvertisementType::ViaOnlineService);
 	Settings.Set(ShowDownGameMapKey, PendingGameMapName.ToString(), EOnlineDataAdvertisementType::ViaOnlineService);
-	Settings.Set(ShowDownExpectedPlayerCountKey, 2, EOnlineDataAdvertisementType::ViaOnlineService);
+	Settings.Set(ShowDownExpectedPlayerCountKey, ExpectedLobbyPlayerCount, EOnlineDataAdvertisementType::ViaOnlineService);
 
-	OnSessionResult.Broadcast(false, FString::Printf(TEXT("4인 방 %s 생성 중..."), *LobbyCode));
+	OnSessionResult.Broadcast(false, FString::Printf(
+		TEXT("%s %s 생성 중..."),
+		bPendingLobbyIsPublic ? TEXT("공개방") : TEXT("비공개방"),
+		*LobbyCode));
 
 	if (!SessionInterface->CreateSession(LocalUserNum, ShowDownSessionName, Settings))
 	{
 		SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteDelegateHandle);
 		CreateSessionCompleteDelegateHandle.Reset();
 		PendingSessionFlow = ESessionFlow::None;
+		ClearTransientSearchState(true);
 		bInMultiplayerLobby = false;
 		bLobbyHost = false;
 		LobbyCode.Empty();
@@ -321,6 +437,9 @@ void UShowDownEosSubsystem::JoinLobbyByCode(const FString& RoomCode)
 			SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(DestroySessionCompleteDelegateHandle);
 			DestroySessionCompleteDelegateHandle.Reset();
 			PendingSessionFlow = ESessionFlow::None;
+			PendingJoinCode.Empty();
+			LobbyCode.Empty();
+			ClearTransientSearchState(false);
 			OnSessionResult.Broadcast(false, TEXT("이전 방 정리에 실패했습니다."));
 		}
 		return;
@@ -354,7 +473,134 @@ void UShowDownEosSubsystem::JoinLobbyByCode(const FString& RoomCode)
 		SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegateHandle);
 		FindSessionsCompleteDelegateHandle.Reset();
 		PendingSessionFlow = ESessionFlow::None;
+		ClearTransientSearchState(false);
 		OnSessionResult.Broadcast(false, TEXT("EOS lobby search could not start."));
+	}
+}
+
+void UShowDownEosSubsystem::FindPublicLobbies()
+{
+	if (!IsEosLoggedIn())
+	{
+		ClearTransientSearchState(true);
+		OnSessionResult.Broadcast(false, TEXT("EOS login is required before browsing rooms."));
+		OnPublicRoomsUpdated.Broadcast(false, TArray<FShowDownPublicRoomInfo>());
+		LoginWithSupabaseSession();
+		return;
+	}
+
+	const IOnlineSessionPtr SessionInterface = GetSessionInterface();
+	if (!SessionInterface.IsValid())
+	{
+		ClearTransientSearchState(true);
+		OnSessionResult.Broadcast(false, TEXT("EOS session interface is unavailable."));
+		OnPublicRoomsUpdated.Broadcast(false, TArray<FShowDownPublicRoomInfo>());
+		return;
+	}
+
+	if (FindSessionsCompleteDelegateHandle.IsValid())
+	{
+		SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegateHandle);
+		FindSessionsCompleteDelegateHandle.Reset();
+	}
+
+	FindSessionsCompleteDelegateHandle = SessionInterface->AddOnFindSessionsCompleteDelegate_Handle(
+		FOnFindSessionsCompleteDelegate::CreateUObject(this, &UShowDownEosSubsystem::HandleFindSessionsComplete)
+	);
+
+	PendingSessionFlow = ESessionFlow::BrowsePublicLobbies;
+	PendingJoinCode.Empty();
+	PublicLobbySearchResults.Reset();
+
+	SessionSearch = MakeShared<FOnlineSessionSearch>();
+	SessionSearch->MaxSearchResults = 100;
+	SessionSearch->bIsLanQuery = false;
+	SessionSearch->QuerySettings.Set(SEARCH_LOBBIES, true, EOnlineComparisonOp::Equals);
+	SessionSearch->QuerySettings.Set(ShowDownRoomPublicKey, true, EOnlineComparisonOp::Equals);
+
+	OnSessionResult.Broadcast(false, TEXT("공개방 목록을 불러오는 중..."));
+
+	if (!SessionInterface->FindSessions(LocalUserNum, SessionSearch.ToSharedRef()))
+	{
+		SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegateHandle);
+		FindSessionsCompleteDelegateHandle.Reset();
+		PendingSessionFlow = ESessionFlow::None;
+		ClearTransientSearchState(true);
+		OnSessionResult.Broadcast(false, TEXT("공개방 검색을 시작하지 못했습니다."));
+		OnPublicRoomsUpdated.Broadcast(false, TArray<FShowDownPublicRoomInfo>());
+	}
+}
+
+void UShowDownEosSubsystem::JoinPublicLobbyByIndex(int32 SearchResultIndex)
+{
+	if (!PublicLobbySearchResults.IsValidIndex(SearchResultIndex))
+	{
+		OnSessionResult.Broadcast(false, TEXT("선택한 공개방 정보를 찾을 수 없습니다. 목록을 새로고침하세요."));
+		return;
+	}
+
+	FString RoomCodeToJoin;
+	PublicLobbySearchResults[SearchResultIndex].Session.SessionSettings.Get(ShowDownRoomCodeKey, RoomCodeToJoin);
+	if (RoomCodeToJoin.IsEmpty())
+	{
+		OnSessionResult.Broadcast(false, TEXT("선택한 공개방의 방 코드가 비어 있습니다."));
+		return;
+	}
+
+	PendingJoinCode = RoomCodeToJoin;
+	LobbyCode = RoomCodeToJoin;
+	bLobbyHost = false;
+	PendingSessionFlow = ESessionFlow::JoinLobby;
+
+	const IOnlineSessionPtr SessionInterface = GetSessionInterface();
+	if (!SessionInterface.IsValid())
+	{
+		PendingSessionFlow = ESessionFlow::None;
+		PendingJoinCode.Empty();
+		LobbyCode.Empty();
+		OnSessionResult.Broadcast(false, TEXT("EOS session interface is unavailable."));
+		return;
+	}
+
+	if (SessionInterface->GetNamedSession(ShowDownSessionName))
+	{
+		JoinLobbyByCode(RoomCodeToJoin);
+		return;
+	}
+
+	if (JoinSessionCompleteDelegateHandle.IsValid())
+	{
+		SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(JoinSessionCompleteDelegateHandle);
+		JoinSessionCompleteDelegateHandle.Reset();
+	}
+
+	JoinSessionCompleteDelegateHandle = SessionInterface->AddOnJoinSessionCompleteDelegate_Handle(
+		FOnJoinSessionCompleteDelegate::CreateUObject(this, &UShowDownEosSubsystem::HandleJoinSessionComplete)
+	);
+
+	const FOnlineSessionSearchResult& SearchResult = PublicLobbySearchResults[SearchResultIndex];
+	if (SearchResult.Session.NumOpenPublicConnections <= 0)
+	{
+		SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(JoinSessionCompleteDelegateHandle);
+		JoinSessionCompleteDelegateHandle.Reset();
+		PendingSessionFlow = ESessionFlow::None;
+		ClearTransientSearchState(false);
+		PendingJoinCode.Empty();
+		LobbyCode.Empty();
+		OnSessionResult.Broadcast(false, TEXT("방이 가득 찼습니다. 목록을 새로고침하세요."));
+		return;
+	}
+
+	OnSessionResult.Broadcast(false, FString::Printf(TEXT("공개방 %s 입장 요청 중..."), *RoomCodeToJoin));
+	if (!SessionInterface->JoinSession(LocalUserNum, ShowDownSessionName, SearchResult))
+	{
+		SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(JoinSessionCompleteDelegateHandle);
+		JoinSessionCompleteDelegateHandle.Reset();
+		PendingSessionFlow = ESessionFlow::None;
+		ClearTransientSearchState(false);
+		PendingJoinCode.Empty();
+		LobbyCode.Empty();
+		OnSessionResult.Broadcast(false, TEXT("공개방 입장 요청을 시작하지 못했습니다."));
 	}
 }
 
@@ -373,16 +619,30 @@ void UShowDownEosSubsystem::StartHostedGame()
 		return;
 	}
 
+	AGameModeBase* GameMode = World->GetAuthGameMode();
+	if (!GameMode)
+	{
+		OnSessionResult.Broadcast(false, TEXT("Only the listen server host can start the game."));
+		return;
+	}
+
+	if (AShowDownGameModeBase* ShowDownGameMode = Cast<AShowDownGameModeBase>(GameMode))
+	{
+		ShowDownGameMode->RefreshMultiplayerLobbyPlayers();
+	}
+
 	int32 PlayerControllerCount = 0;
 	for (FConstPlayerControllerIterator Iterator = World->GetPlayerControllerIterator(); Iterator; ++Iterator)
 	{
-		++PlayerControllerCount;
+		if (const APlayerController* PlayerController = Iterator->Get(); PlayerController && PlayerController->Player)
+		{
+			++PlayerControllerCount;
+		}
 	}
 	const int32 LobbySlotCount = World->GetGameState<AShowDownGameStateBase>()
 		? World->GetGameState<AShowDownGameStateBase>()->PlayerSlots.Num()
 		: 0;
 
-	AGameModeBase* GameMode = World->GetAuthGameMode();
 	UE_LOG(
 		LogTemp,
 		Log,
@@ -393,12 +653,6 @@ void UShowDownEosSubsystem::StartHostedGame()
 		*PendingGameMapName.ToString()
 	);
 
-	if (!GameMode)
-	{
-		OnSessionResult.Broadcast(false, TEXT("Only the listen server host can start the game."));
-		return;
-	}
-
 	const IOnlineSessionPtr SessionInterface = GetSessionInterface();
 	FNamedOnlineSession* NamedSession = SessionInterface.IsValid()
 		? SessionInterface->GetNamedSession(ShowDownSessionName)
@@ -406,20 +660,13 @@ void UShowDownEosSubsystem::StartHostedGame()
 
 	if (!SessionInterface.IsValid() || !NamedSession)
 	{
-		ExpectedLobbyPlayerCount = FMath::Clamp(FMath::Max(PlayerControllerCount, LobbySlotCount), 2, 4);
+		ExpectedLobbyPlayerCount = FMath::Clamp(LobbySlotCount > 0 ? LobbySlotCount : PlayerControllerCount, 2, 4);
 		OnSessionResult.Broadcast(true, TEXT("Starting game without EOS session update..."));
 		TravelHostedGame();
 		return;
 	}
 
-	const int32 RegisteredPlayerCount = NamedSession->RegisteredPlayers.Num();
-
-	// Server travel is asynchronous for clients. Preserve the exact lobby
-	// population so the destination map cannot begin with only early arrivals.
-	ExpectedLobbyPlayerCount = FMath::Clamp(
-		FMath::Max3(PlayerControllerCount, LobbySlotCount, RegisteredPlayerCount),
-		2,
-		4);
+	ExpectedLobbyPlayerCount = FMath::Clamp(LobbySlotCount > 0 ? LobbySlotCount : PlayerControllerCount, 2, 4);
 
 	if (UpdateSessionCompleteDelegateHandle.IsValid())
 	{
@@ -455,7 +702,7 @@ void UShowDownEosSubsystem::StartHostedGame()
 void UShowDownEosSubsystem::LeaveLobby(FName HubMapName)
 {
 	StopLobbyStartPolling();
-	PendingHostMapName = HubMapName.IsNone() ? FName(TEXT("L_Hub")) : HubMapName;
+	PendingHostMapName = HubMapName.IsNone() ? FName(TEXT("L_ShowdownMain")) : HubMapName;
 	PendingJoinCode.Empty();
 	SessionSearch.Reset();
 
@@ -489,7 +736,12 @@ void UShowDownEosSubsystem::LeaveLobby(FName HubMapName)
 
 	if (DestroySessionCompleteDelegateHandle.IsValid())
 	{
-		OnSessionResult.Broadcast(false, TEXT("A session operation is already in progress."));
+		if (SessionInterface.IsValid())
+		{
+			SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(DestroySessionCompleteDelegateHandle);
+		}
+		DestroySessionCompleteDelegateHandle.Reset();
+		CompleteLobbyLeave(false);
 		return;
 	}
 
@@ -544,7 +796,7 @@ void UShowDownEosSubsystem::MarkEnteredMultiplayerGame()
 	bInMultiplayerLobby = false;
 	bLobbyHost = false;
 	PendingJoinCode.Empty();
-	SessionSearch.Reset();
+	ClearTransientSearchState(true);
 	PendingSessionFlow = ESessionFlow::None;
 }
 
@@ -552,6 +804,7 @@ void UShowDownEosSubsystem::FindAndJoinFirstSession()
 {
 	if (!IsEosLoggedIn())
 	{
+		ClearTransientSearchState(true);
 		OnSessionResult.Broadcast(false, TEXT("EOS login is required before joining."));
 		LoginWithSupabaseSession();
 		return;
@@ -560,6 +813,7 @@ void UShowDownEosSubsystem::FindAndJoinFirstSession()
 	const IOnlineSessionPtr SessionInterface = GetSessionInterface();
 	if (!SessionInterface.IsValid())
 	{
+		ClearTransientSearchState(true);
 		OnSessionResult.Broadcast(false, TEXT("EOS session interface is unavailable."));
 		return;
 	}
@@ -585,6 +839,7 @@ void UShowDownEosSubsystem::FindAndJoinFirstSession()
 	{
 		SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegateHandle);
 		FindSessionsCompleteDelegateHandle.Reset();
+		ClearTransientSearchState(false);
 		OnSessionResult.Broadcast(false, TEXT("EOS session search could not start."));
 	}
 }
@@ -629,6 +884,9 @@ void UShowDownEosSubsystem::HandleCreateSessionComplete(FName SessionName, bool 
 	if (!bWasSuccessful)
 	{
 		PendingSessionFlow = ESessionFlow::None;
+		ClearTransientSearchState(true);
+		PendingJoinCode.Empty();
+		LobbyCode.Empty();
 		bInMultiplayerLobby = false;
 		bLobbyHost = false;
 		OnSessionResult.Broadcast(false, TEXT("EOS session creation failed."));
@@ -680,11 +938,23 @@ void UShowDownEosSubsystem::HandleFindSessionsComplete(bool bWasSuccessful)
 	{
 		bLobbyStartPollInFlight = false;
 	}
+	const bool bBrowsingPublicLobbies = PendingSessionFlow == ESessionFlow::BrowsePublicLobbies;
 
 	if (!bWasSuccessful || !SessionSearch.IsValid() || SessionSearch->SearchResults.Num() == 0)
 	{
-		if (!bPollingLobbyStart)
+		ClearTransientSearchState(bBrowsingPublicLobbies);
+		if (bBrowsingPublicLobbies)
 		{
+			PublicLobbySearchResults.Reset();
+			PendingSessionFlow = ESessionFlow::None;
+			OnPublicRoomsUpdated.Broadcast(bWasSuccessful, TArray<FShowDownPublicRoomInfo>());
+			OnSessionResult.Broadcast(bWasSuccessful, TEXT("참가 가능한 공개방이 없습니다."));
+		}
+		else if (!bPollingLobbyStart)
+		{
+			PendingSessionFlow = ESessionFlow::None;
+			PendingJoinCode.Empty();
+			LobbyCode.Empty();
 			OnSessionResult.Broadcast(false, TEXT("No EOS sessions found."));
 		}
 		return;
@@ -692,6 +962,90 @@ void UShowDownEosSubsystem::HandleFindSessionsComplete(bool bWasSuccessful)
 
 	if (SessionInterface.IsValid())
 	{
+		if (bBrowsingPublicLobbies)
+		{
+			PublicLobbySearchResults.Reset();
+			TArray<FShowDownPublicRoomInfo> PublicRooms;
+			int32 RejectedPrivateRooms = 0;
+			int32 RejectedStartedRooms = 0;
+			int32 RejectedFullRooms = 0;
+			int32 RejectedInvalidRooms = 0;
+
+			for (const FOnlineSessionSearchResult& SearchResult : SessionSearch->SearchResults)
+			{
+				FString FoundCode;
+				SearchResult.Session.SessionSettings.Get(ShowDownRoomCodeKey, FoundCode);
+				if (FoundCode.IsEmpty())
+				{
+					++RejectedInvalidRooms;
+					continue;
+				}
+
+				bool bPublicRoom = false;
+				SearchResult.Session.SessionSettings.Get(ShowDownRoomPublicKey, bPublicRoom);
+				if (!bPublicRoom)
+				{
+					++RejectedPrivateRooms;
+					continue;
+				}
+
+				bool bGameStarted = false;
+				SearchResult.Session.SessionSettings.Get(ShowDownGameStartedKey, bGameStarted);
+				if (bGameStarted)
+				{
+					++RejectedStartedRooms;
+					continue;
+				}
+
+				if (SearchResult.Session.NumOpenPublicConnections <= 0)
+				{
+					++RejectedFullRooms;
+					continue;
+				}
+
+				FString RoomName;
+				SearchResult.Session.SessionSettings.Get(ShowDownRoomNameKey, RoomName);
+				if (RoomName.IsEmpty())
+				{
+					RoomName = FString::Printf(TEXT("Room %s"), *FoundCode);
+				}
+
+				const int32 PublicSearchIndex = PublicLobbySearchResults.Add(SearchResult);
+				FShowDownPublicRoomInfo RoomInfo;
+				RoomInfo.SearchResultIndex = PublicSearchIndex;
+				RoomInfo.RoomCode = FoundCode;
+				RoomInfo.RoomName = RoomName;
+				RoomInfo.MaxPlayers = ShowDownMaxLobbyPlayers;
+				RoomInfo.CurrentPlayers = FMath::Clamp(
+					ShowDownMaxLobbyPlayers - SearchResult.Session.NumOpenPublicConnections,
+					0,
+					ShowDownMaxLobbyPlayers);
+				PublicRooms.Add(RoomInfo);
+			}
+
+			UE_LOG(
+				LogTemp,
+				Log,
+				TEXT("Public lobby browse complete. Raw=%d Listed=%d RejectedInvalid=%d RejectedPrivate=%d RejectedStarted=%d RejectedFull=%d"),
+				SessionSearch->SearchResults.Num(),
+				PublicRooms.Num(),
+				RejectedInvalidRooms,
+				RejectedPrivateRooms,
+				RejectedStartedRooms,
+				RejectedFullRooms);
+
+			PendingSessionFlow = ESessionFlow::None;
+			OnPublicRoomsUpdated.Broadcast(true, PublicRooms);
+			ClearTransientSearchState(false);
+			OnSessionResult.Broadcast(
+				true,
+				PublicRooms.Num() > 0
+					? FString::Printf(TEXT("공개방 %d개를 찾았습니다."), PublicRooms.Num())
+					: TEXT("참가 가능한 공개방이 없습니다.")
+			);
+			return;
+		}
+
 		int32 MatchIndex = 0;
 		if (!PendingJoinCode.IsEmpty())
 		{
@@ -711,7 +1065,15 @@ void UShowDownEosSubsystem::HandleFindSessionsComplete(bool bWasSuccessful)
 			{
 				if (!bPollingLobbyStart)
 				{
+					PendingSessionFlow = ESessionFlow::None;
+					ClearTransientSearchState(false);
+					LobbyCode.Empty();
 					OnSessionResult.Broadcast(false, FString::Printf(TEXT("Room %s was not found."), *PendingJoinCode));
+					PendingJoinCode.Empty();
+				}
+				else
+				{
+					SessionSearch.Reset();
 				}
 				return;
 			}
@@ -737,7 +1099,19 @@ void UShowDownEosSubsystem::HandleFindSessionsComplete(bool bWasSuccessful)
 				PendingStartedGameSearchResult = SessionSearch->SearchResults[MatchIndex];
 				PendingSessionFlow = ESessionFlow::None;
 				SessionSearch.Reset();
-				OnSessionResult.Broadcast(true, TEXT("Host started. Waiting for server travel..."));
+				if (UWorld* World = GetWorld(); World && World->GetNetMode() == NM_Client)
+				{
+					OnSessionResult.Broadcast(true, TEXT("EOS game joined."));
+				}
+				else
+				{
+					OnSessionResult.Broadcast(true, TEXT("Host started. Entering game..."));
+					JoinStartedGameSession();
+				}
+			}
+			else
+			{
+				SessionSearch.Reset();
 			}
 			return;
 		}
@@ -753,11 +1127,17 @@ void UShowDownEosSubsystem::HandleFindSessionsComplete(bool bWasSuccessful)
 		);
 
 		const FOnlineSessionSearchResult& SearchResult = SessionSearch->SearchResults[MatchIndex];
+		int32 AdvertisedExpectedPlayerCount = ShowDownMaxLobbyPlayers;
+		SearchResult.Session.SessionSettings.Get(ShowDownExpectedPlayerCountKey, AdvertisedExpectedPlayerCount);
+		ExpectedLobbyPlayerCount = FMath::Clamp(AdvertisedExpectedPlayerCount, 2, ShowDownMaxLobbyPlayers);
 		if (SearchResult.Session.NumOpenPublicConnections <= 0)
 		{
 			SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(JoinSessionCompleteDelegateHandle);
 			JoinSessionCompleteDelegateHandle.Reset();
 			PendingSessionFlow = ESessionFlow::None;
+			ClearTransientSearchState(false);
+			PendingJoinCode.Empty();
+			LobbyCode.Empty();
 			OnSessionResult.Broadcast(false, TEXT("방이 가득 찼습니다. 최대 4명까지 입장할 수 있습니다."));
 			return;
 		}
@@ -769,6 +1149,9 @@ void UShowDownEosSubsystem::HandleFindSessionsComplete(bool bWasSuccessful)
 			SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(JoinSessionCompleteDelegateHandle);
 			JoinSessionCompleteDelegateHandle.Reset();
 			PendingSessionFlow = ESessionFlow::None;
+			ClearTransientSearchState(false);
+			PendingJoinCode.Empty();
+			LobbyCode.Empty();
 			OnSessionResult.Broadcast(false, TEXT("방 입장 요청을 시작하지 못했습니다. 잠시 후 다시 시도하세요."));
 		}
 	}
@@ -808,6 +1191,13 @@ void UShowDownEosSubsystem::HandleJoinSessionComplete(
 			break;
 		}
 		PendingSessionFlow = ESessionFlow::None;
+		ClearTransientSearchState(false);
+		if (!bJoiningStartedGame)
+		{
+			PendingJoinCode.Empty();
+			LobbyCode.Empty();
+			bInMultiplayerLobby = false;
+		}
 		OnSessionResult.Broadcast(false, FailureMessage);
 		if (bJoiningStartedGame)
 		{
@@ -817,9 +1207,17 @@ void UShowDownEosSubsystem::HandleJoinSessionComplete(
 	}
 
 	FString ConnectString;
-	if (!SessionInterface->GetResolvedConnectString(SessionName, ConnectString) || ConnectString.IsEmpty())
+	if (!SessionInterface->GetResolvedConnectString(SessionName, ConnectString, NAME_GamePort) || ConnectString.IsEmpty())
 	{
 		const bool bJoiningStartedGame = PendingSessionFlow == ESessionFlow::JoinStartedGame;
+		PendingSessionFlow = ESessionFlow::None;
+		ClearTransientSearchState(false);
+		if (!bJoiningStartedGame)
+		{
+			PendingJoinCode.Empty();
+			LobbyCode.Empty();
+			bInMultiplayerLobby = false;
+		}
 		OnSessionResult.Broadcast(false, TEXT("EOS connect string was empty."));
 		if (bJoiningStartedGame)
 		{
@@ -837,13 +1235,29 @@ void UShowDownEosSubsystem::HandleJoinSessionComplete(
 		{
 			LobbyCode = PendingJoinCode;
 		}
+		ClearTransientSearchState(true);
+		PendingJoinCode.Empty();
+		PendingSessionFlow = ESessionFlow::None;
+		if (bJoiningStartedGame)
+		{
+			LobbyCode.Empty();
+		}
 		PlayerController->ClientTravel(ConnectString, TRAVEL_Absolute);
 		OnSessionResult.Broadcast(true, bJoiningStartedGame ? TEXT("EOS game joined.") : TEXT("EOS lobby joined."));
 		return;
 	}
 
+	const bool bJoiningStartedGame = PendingSessionFlow == ESessionFlow::JoinStartedGame;
+	PendingSessionFlow = ESessionFlow::None;
+	ClearTransientSearchState(false);
+	if (!bJoiningStartedGame)
+	{
+		PendingJoinCode.Empty();
+		LobbyCode.Empty();
+		bInMultiplayerLobby = false;
+	}
 	OnSessionResult.Broadcast(false, TEXT("Player controller was unavailable for travel."));
-	if (PendingSessionFlow == ESessionFlow::JoinStartedGame)
+	if (bJoiningStartedGame)
 	{
 		StartLobbyStartPolling();
 	}
@@ -876,11 +1290,12 @@ void UShowDownEosSubsystem::HandleDestroySessionComplete(FName SessionName, bool
 
 		if (!bWasSuccessful)
 		{
+			ClearTransientSearchState(true);
 			OnSessionResult.Broadcast(false, TEXT("이전 방 정리에 실패했습니다."));
 			return;
 		}
 
-		HostLobby(LobbyMapName, GameMapName);
+		HostLobbyWithVisibility(LobbyMapName, GameMapName, bPendingLobbyIsPublic);
 		return;
 	}
 
@@ -895,6 +1310,7 @@ void UShowDownEosSubsystem::HandleDestroySessionComplete(FName SessionName, bool
 		if (!bWasSuccessful)
 		{
 			PendingJoinCode.Empty();
+			ClearTransientSearchState(false);
 			OnSessionResult.Broadcast(false, TEXT("이전 방 정리에 실패했습니다."));
 			return;
 		}
@@ -905,6 +1321,8 @@ void UShowDownEosSubsystem::HandleDestroySessionComplete(FName SessionName, bool
 
 	if (!bWasSuccessful)
 	{
+		PendingSessionFlow = ESessionFlow::None;
+		ClearTransientSearchState(false);
 		OnSessionResult.Broadcast(false, TEXT("Could not refresh EOS session before joining game."));
 		return;
 	}
@@ -920,6 +1338,7 @@ void UShowDownEosSubsystem::CompleteLobbyLeave(bool bSessionDestroyed)
 	LobbyCode.Empty();
 	PendingJoinCode.Empty();
 	PendingSessionFlow = ESessionFlow::None;
+	ClearTransientSearchState(true);
 
 	const FString TravelPath = FString::Printf(TEXT("/Game/Maps/%s"), *PendingHostMapName.ToString());
 	OnSessionResult.Broadcast(
@@ -982,6 +1401,8 @@ void UShowDownEosSubsystem::PollLobbyStart()
 		SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegateHandle);
 		FindSessionsCompleteDelegateHandle.Reset();
 		bLobbyStartPollInFlight = false;
+		PendingSessionFlow = ESessionFlow::None;
+		ClearTransientSearchState(false);
 	}
 }
 
@@ -990,6 +1411,8 @@ void UShowDownEosSubsystem::JoinStartedGameSession()
 	const IOnlineSessionPtr SessionInterface = GetSessionInterface();
 	if (!SessionInterface.IsValid())
 	{
+		PendingSessionFlow = ESessionFlow::None;
+		ClearTransientSearchState(false);
 		OnSessionResult.Broadcast(false, TEXT("EOS session interface is unavailable."));
 		return;
 	}
@@ -1010,6 +1433,7 @@ void UShowDownEosSubsystem::JoinStartedGameSession()
 		{
 			SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(DestroySessionCompleteDelegateHandle);
 			DestroySessionCompleteDelegateHandle.Reset();
+			ClearTransientSearchState(false);
 			OnSessionResult.Broadcast(false, TEXT("Could not refresh EOS session before joining game."));
 			StartLobbyStartPolling();
 		}
@@ -1032,6 +1456,7 @@ void UShowDownEosSubsystem::JoinStartedGameSession()
 	{
 		SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(JoinSessionCompleteDelegateHandle);
 		JoinSessionCompleteDelegateHandle.Reset();
+		ClearTransientSearchState(false);
 		OnSessionResult.Broadcast(false, TEXT("EOS game join could not start."));
 		StartLobbyStartPolling();
 	}
@@ -1054,6 +1479,20 @@ void UShowDownEosSubsystem::TravelHostedGame()
 	}
 
 	bInMultiplayerLobby = false;
+
+	FString CurrentMapName = World->GetMapName();
+	CurrentMapName.RemoveFromStart(World->StreamingLevelsPrefix);
+	const bool bAlreadyOnTargetMap = CurrentMapName.Equals(PendingGameMapName.ToString(), ESearchCase::IgnoreCase);
+	if (bAlreadyOnTargetMap)
+	{
+		if (AShowDownGameModeBase* ShowDownGameMode = Cast<AShowDownGameModeBase>(GameMode))
+		{
+			OnSessionResult.Broadcast(true, TEXT("Starting game..."));
+			ShowDownGameMode->StartMultiplayerGame();
+			return;
+		}
+	}
+
 	const FString TravelPath = FString::Printf(TEXT("/Game/Maps/%s"), *PendingGameMapName.ToString());
 	OnSessionResult.Broadcast(true, TEXT("Traveling to game..."));
 	GameMode->ProcessServerTravel(TravelPath, false);

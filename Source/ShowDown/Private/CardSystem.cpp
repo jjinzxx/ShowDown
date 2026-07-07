@@ -11,11 +11,11 @@ UCardSystem::UCardSystem()
 	PrimaryComponentTick.bCanEverTick = false;
 }
 
-void UCardSystem::ResetDeck()
+void UCardSystem::ResetDeck(int32 CopiesPerRank)
 {
 	Deck.Reset();
 	DiscardPile.Reset();
-	BuildDeck();
+	BuildDeck(CopiesPerRank);
 }
 
 void UCardSystem::ShuffleDeck()
@@ -167,11 +167,12 @@ bool UCardSystem::MoveCardToSlotWithRotationOffset(ACard* Card, USceneComponent*
 	return true;
 }
 
-void UCardSystem::BuildDeck()
+void UCardSystem::BuildDeck(int32 CopiesPerRank)
 {
+	const int32 ClampedCopiesPerRank = FMath::Max(0, CopiesPerRank);
 	for (int32 Rank = 1; Rank <= 7; ++Rank)
 	{
-		for (int32 CopyIndex = 0; CopyIndex < 4; ++CopyIndex)
+		for (int32 CopyIndex = 0; CopyIndex < ClampedCopiesPerRank; ++CopyIndex)
 		{
 			Deck.Add(Rank);
 		}

@@ -14,7 +14,6 @@ class ACard;
 class APlayerPawn;
 class ASDCardPlacementAnchor;
 class ASDPlayerSeat;
-class ASDMultiplayerTable;
 class ASDMultiplayerSeatAnchor;
 class ASDSelfShotGunActor;
 class UCardSystem;
@@ -25,11 +24,16 @@ class URoundResolver;
 class URouletteSystem;
 struct FCollectorBetDecision;
 struct FSDLLMBossContext;
+class AShowDownCharacter;
 class AShowDownGameStateBase;
 class AController;
 class APlayerController;
 class ASDPlayerState;
+class ALevelSequenceActor;
+class ULevelSequence;
+class ULevelSequencePlayer;
 class USceneComponent;
+enum class ESDCardPlacementRole : uint8;
 
 //각 플레이어(콜렉터, 플레이어, 멀티플레이어) 에 대한 값(손패, 이마의 카드, 목숨, 베팅값) 구조체로 저장
 USTRUCT(BlueprintType)
@@ -183,7 +187,7 @@ public:
 	void EventEnd(EShowDownPhase FinishedPhase);
 
 	// 싱글플레이 한 판을 시작합니다. 콜렉터를 찾고 1스테이지부터 진행합니다.
-	// 허브(L_Hub)에서는 싱글플레이 버튼을 눌렀을 때 HubFlowManager가 이 함수를 호출합니다.
+	// 메인 레벨에서는 싱글플레이 버튼을 눌렀을 때 HubFlowManager가 이 함수를 호출합니다.
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Flow")
 	void StartSinglePlayer();
 
@@ -206,9 +210,6 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Camera", meta = (ClampMin = "0.0"))
 	float GameplayCameraLookSensitivity = 0.08f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Camera", meta = (ClampMin = "0.0"))
-	float GameplayFallbackCameraLookSensitivity = 0.08f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Camera")
 	float GameplayCameraMinPitch = -35.0f;
@@ -245,6 +246,27 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation", meta = (ClampMin = "0.0"))
 	float RevealAutoAdvanceSeconds = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro")
+	bool bPlaySinglePlayerIntro = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro", meta = (EditCondition = "bPlaySinglePlayerIntro"))
+	TObjectPtr<ULevelSequence> SinglePlayerIntroSequence = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro", meta = (EditCondition = "bPlaySinglePlayerIntro"))
+	FName SinglePlayerIntroPlayerBindingTag = TEXT("Player");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro", meta = (EditCondition = "bPlaySinglePlayerIntro"))
+	FName SinglePlayerIntroCollectorBindingTag = TEXT("Collector");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro", meta = (EditCondition = "bPlaySinglePlayerIntro"))
+	bool bUseSinglePlayerIntroFallbackWhenNoSequence = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro", meta = (EditCondition = "bPlaySinglePlayerIntro && bUseSinglePlayerIntroFallbackWhenNoSequence", ClampMin = "0.0"))
+	float SinglePlayerIntroFallbackDuration = 1.2f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro", meta = (EditCondition = "bPlaySinglePlayerIntro && bUseSinglePlayerIntroFallbackWhenNoSequence", ClampMin = "0.0"))
+	float SinglePlayerIntroFallbackStartDistance = 280.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Debug")
 	bool bShowGameFlowDebugMessages = true;
@@ -338,16 +360,18 @@ private:
 	TObjectPtr<ASDPlayerState> MultiplayerNextFirstPlayer = nullptr;
 
 	UPROPERTY()
-	TObjectPtr<ASDMultiplayerTable> MultiplayerTable = nullptr;
-
-	UPROPERTY()
 	TArray<TObjectPtr<ASDMultiplayerSeatAnchor>> MultiplayerSeatAnchors;
 
 	UPROPERTY()
 	TObjectPtr<ASDPlayerState> MultiplayerRoundLeader = nullptr;
 
+	UPROPERTY()
 	TSet<TObjectPtr<ASDPlayerState>> MultiplayerFoldedPlayers;
+
+	UPROPERTY()
 	TSet<TObjectPtr<ASDPlayerState>> MultiplayerPlayersActed;
+
+	UPROPERTY()
 	TSet<TObjectPtr<ASDPlayerState>> MultiplayerRestartVotes;
 
 	FTimerHandle MultiplayerStartTimerHandle;
@@ -362,9 +386,44 @@ private:
 	TObjectPtr<ASDSelfShotGunActor> ActiveSelfShotGunActor = nullptr;
 
 	bool bSelfShotGunPresentationInProgress = false;
+	bool bPendingSelfShotRouletteResult = false;
+	bool bPendingSelfShotLiveRound = false;
+	EShowDownSide PendingSelfShotTargetSide = EShowDownSide::Player;
+
+	UPROPERTY()
+	TObjectPtr<ULevelSequencePlayer> ActiveSinglePlayerIntroSequencePlayer = nullptr;
+
+	UPROPERTY()
+	TObjectPtr<ALevelSequenceActor> ActiveSinglePlayerIntroSequenceActor = nullptr;
+
+	UPROPERTY()
+	TObjectPtr<AShowDownCharacter> SinglePlayerIntroPlayerCharacter = nullptr;
+
+	UPROPERTY()
+	TObjectPtr<AShowDownCharacter> SinglePlayerIntroCollectorCharacter = nullptr;
+
+	FTimerHandle SinglePlayerIntroFallbackTimerHandle;
+	FTransform SinglePlayerIntroPlayerStartTransform;
+	FTransform SinglePlayerIntroPlayerTargetTransform;
+	FTransform SinglePlayerIntroCollectorStartTransform;
+	FTransform SinglePlayerIntroCollectorTargetTransform;
+	float SinglePlayerIntroFallbackStartTime = 0.0f;
+	bool bSinglePlayerIntroFallbackActive = false;
+
+	mutable bool bCardPlacementAnchorCacheInitialized = false;
+	mutable TMap<ESDCardPlacementRole, TWeakObjectPtr<ASDCardPlacementAnchor>> CachedCardPlacementAnchors;
+	mutable bool bPlayerSeatCacheInitialized = false;
+	mutable TMap<EShowDownSide, TWeakObjectPtr<ASDPlayerSeat>> CachedPlayerSeats;
+	mutable TWeakObjectPtr<ASDPlayerSeat> CachedFirstPlayerSeat;
 
 	UFUNCTION()
 	void HandleSelfShotGunPresentationFinished();
+
+	UFUNCTION()
+	void HandleSelfShotGunShotResolved();
+
+	UFUNCTION()
+	void HandleSinglePlayerIntroSequenceFinished();
 
 	// 덱을 만들고 섞은 뒤에 플레이어와 콜렉터에게 5장 스폰
 	void DealInitialHand();
@@ -402,9 +461,26 @@ private:
 	void PlayCollectorActionPresentation();
 	void PlayCollectorActionPresentationThen(TFunction<void()>&& Continuation);
 	void FinishCollectorActionPresentation();
+	void BroadcastCardSelectedAction(EShowDownSide Side) const;
+	void BroadcastBetActionCommitted(EShowDownSide Side, EShowDownBetAction Action, int32 TargetBet) const;
+	void BroadcastMultiplayerCardSelectedAction(ASDPlayerState* Player) const;
+	void BroadcastMultiplayerBetActionCommitted(ASDPlayerState* Player, EShowDownBetAction Action, int32 TargetBet) const;
 	void PlaySelfShotGunPresentationThen(EShowDownSide TargetSide, bool bLiveRound, TFunction<void()>&& Continuation);
 	void FinishSelfShotGunPresentation();
+	void BroadcastPendingSelfShotRouletteResult();
 	ASDSelfShotGunActor* FindSelfShotGunActor() const;
+	AShowDownCharacter* FindSingleRouletteCharacter(EShowDownSide TargetSide) const;
+	void PlaySinglePlayerIntroThenStartStage();
+	bool PlaySinglePlayerIntroSequence(AShowDownCharacter* PlayerCharacter, AShowDownCharacter* CollectorCharacter);
+	bool PlaySinglePlayerIntroFallback(AShowDownCharacter* PlayerCharacter, AShowDownCharacter* CollectorCharacter);
+	void UpdateSinglePlayerIntroFallback();
+	void FinishSinglePlayerIntro();
+	TArray<AShowDownCharacter*> GetShowDownCharacters() const;
+	void ConfigureSinglePlayerCharacters();
+	void ConfigureMultiplayerCharacters(const TArray<ASDPlayerState*>& Players);
+	void RefreshMultiplayerCharacterVisibility();
+	float ResolveMultiplayerRouletteResultDelay() const;
+	float ResolveMultiplayerRoulettePresentationDelay(bool bLiveRound) const;
 	FSDCardHandLayoutSettings GetDefaultHandLayoutSettings() const;
 	FSDCardHandLayoutSettings ResolveHandLayoutSettings(EShowDownSide Side) const;
 	void ApplyCardMotionForSide(EShowDownSide Side, const TArray<ACard*>& Cards) const;
@@ -415,7 +491,6 @@ private:
 	void StartMultiplayerMatch(const TArray<ASDPlayerState*>& Players);
 	TArray<ASDPlayerState*> GetConnectedShowDownPlayers() const;
 	ASDPlayerState* GetPlayerStateForController(AController* Controller) const;
-	void EnsureMultiplayerTable();
 	void EnsureMultiplayerSeatAnchors();
 	void EnsureMultiplayerPawns();
 	FTransform GetMultiplayerPawnSpawnTransform(AController* Controller, int32 PlayerIndex);
@@ -428,13 +503,15 @@ private:
 	void StartMultiplayerDuel(ASDPlayerState* FirstPlayer, ASDPlayerState* SecondPlayer);
 	bool AreAllAliveMultiplayerPlayersReadyToReveal() const;
 	bool AreAllActiveMultiplayerPlayersDoneBetting(int32 CurrentBet) const;
+	int32 CountActiveMultiplayerPlayers() const;
+	void HandleMultiplayerPlayerDisconnected(ASDPlayerState* LeavingPlayer);
 	void StartMultiplayerCardSelection(ASDPlayerState* Giver, ASDPlayerState* Receiver);
 	void HandleMultiplayerSelectedCard(ASDPlayerState* SubmittingPlayer, ACard* SelectedCard);
 	void StartMultiplayerBetting();
 	void HandleMultiplayerBetAction(ASDPlayerState* SubmittingPlayer, EShowDownBetAction Action, int32 TargetBet);
 	void FinishMultiplayerRoundByReveal();
 	void FinishMultiplayerRoundByFold(ASDPlayerState* FoldedPlayer);
-	void ApplyMultiplayerRoulette(ASDPlayerState* TargetPlayer, int32 BulletCount);
+	float ApplyMultiplayerRoulette(ASDPlayerState* TargetPlayer, int32 BulletCount, float StartDelay = 0.0f);
 	void EndMultiplayerRound();
 	void ShowMultiplayerFinalRanking(ASDPlayerState* Winner);
 	void SetMultiplayerSelectableHand(ASDPlayerState* Player);
@@ -447,15 +524,22 @@ private:
 	const FShowDownStageRule* GetCurrentStageRule() const;
 	AShowDownGameStateBase* GetShowDownGameState() const;
 	APlayerPawn* GetPrimaryPlayerPawn() const;
+	void RefreshCardPlacementAnchorCache() const;
+	void RefreshPlayerSeatCache() const;
+	ASDCardPlacementAnchor* GetCardPlacementAnchorByRole(ESDCardPlacementRole TargetRole) const;
 	ASDCardPlacementAnchor* GetCardPlacementAnchor(EShowDownSide Side, bool bForeheadSlot) const;
 	ASDCardPlacementAnchor* GetHandAnchorForSide(EShowDownSide Side) const;
 	ASDCardPlacementAnchor* GetForeheadAnchorForSide(EShowDownSide Side) const;
+	ASDCardPlacementAnchor* GetHandAnchorForPlayerSlot(EShowDownPlayerSlot Slot) const;
+	ASDCardPlacementAnchor* GetForeheadAnchorForPlayerSlot(EShowDownPlayerSlot Slot) const;
 	ASDPlayerSeat* GetSeatForSide(EShowDownSide Side) const;
 	ASDPlayerSeat* GetPrimaryPlayerSeat() const;
 	USceneComponent* GetHandSlotForSide(EShowDownSide Side) const;
 	USceneComponent* GetHeadSlotForSide(EShowDownSide Side) const;
 	USceneComponent* GetPlayerHandSlot() const;
 	USceneComponent* GetPlayerHeadSlot() const;
+	FSDCardHandLayoutSettings ResolveHandLayoutSettingsForPlayerState(ASDPlayerState* Player) const;
+	void ApplyCardMotionForPlayerState(ASDPlayerState* Player, const TArray<ACard*>& Cards) const;
 	void ScheduleRevealAutoAdvanceIfNeeded();
 	void ShowEventDebugMessage(const FString& Message) const;
 	

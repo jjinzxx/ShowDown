@@ -107,6 +107,7 @@ void ASDArtToneController::PostEditChangeProperty(FPropertyChangedEvent& Propert
 void ASDArtToneController::ApplyArtTone(const FSDArtToneSettings& NewSettings)
 {
 	CurrentSettings = NewSettings;
+	PostProcessComponent->BlendWeight = 1.0f;
 	ApplyPostProcessSettings(CurrentSettings);
 	ApplyPixelateParameters(CurrentSettings);
 }

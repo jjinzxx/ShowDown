@@ -116,6 +116,93 @@ bool AShowDownGameStateBase::IsMultiplayerMatch() const
 	return MatchMode == EShowDownMatchMode::Multiplayer;
 }
 
+void AShowDownGameStateBase::SetNameTagRoundStatus(
+	int32 LoadedBulletCount,
+	EShowDownSide TurnSide,
+	EShowDownPlayerSlot TurnSlot)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	const int32 ClampedLoadedBulletCount = FMath::Clamp(LoadedBulletCount, 0, 6);
+	if (NameTagLoadedBulletCount == ClampedLoadedBulletCount
+		&& NameTagTurnSide == TurnSide
+		&& NameTagTurnSlot == TurnSlot)
+	{
+		return;
+	}
+
+	NameTagLoadedBulletCount = ClampedLoadedBulletCount;
+	NameTagTurnSide = TurnSide;
+	NameTagTurnSlot = TurnSlot;
+	OnNameTagRoundStatusChanged.Broadcast();
+}
+
+void AShowDownGameStateBase::SetNameTagSingleRoundStatus(
+	int32 PlayerLoadedBulletCount,
+	int32 CollectorLoadedBulletCount,
+	EShowDownSide TurnSide,
+	EShowDownPlayerSlot TurnSlot)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	const int32 ClampedPlayerLoadedBulletCount = FMath::Clamp(PlayerLoadedBulletCount, 0, 6);
+	const int32 ClampedCollectorLoadedBulletCount = FMath::Clamp(CollectorLoadedBulletCount, 0, 6);
+	const int32 ClampedLoadedBulletCount = FMath::Max(ClampedPlayerLoadedBulletCount, ClampedCollectorLoadedBulletCount);
+	if (NameTagPlayerLoadedBulletCount == ClampedPlayerLoadedBulletCount
+		&& NameTagCollectorLoadedBulletCount == ClampedCollectorLoadedBulletCount
+		&& NameTagLoadedBulletCount == ClampedLoadedBulletCount
+		&& NameTagTurnSide == TurnSide
+		&& NameTagTurnSlot == TurnSlot)
+	{
+		return;
+	}
+
+	NameTagPlayerLoadedBulletCount = ClampedPlayerLoadedBulletCount;
+	NameTagCollectorLoadedBulletCount = ClampedCollectorLoadedBulletCount;
+	NameTagLoadedBulletCount = ClampedLoadedBulletCount;
+	NameTagTurnSide = TurnSide;
+	NameTagTurnSlot = TurnSlot;
+	OnNameTagRoundStatusChanged.Broadcast();
+}
+
+void AShowDownGameStateBase::SetNameTagPlayerLoadedBulletCount(
+	EShowDownPlayerSlot Slot,
+	int32 LoadedBulletCount)
+{
+	if (!HasAuthority() || Slot == EShowDownPlayerSlot::None)
+	{
+		return;
+	}
+
+	const int32 ClampedLoadedBulletCount = FMath::Clamp(LoadedBulletCount, 0, 6);
+	for (FShowDownNameTagPlayerBetState& PlayerBet : NameTagPlayerBets)
+	{
+		if (PlayerBet.Slot == Slot)
+		{
+			if (PlayerBet.LoadedBulletCount == ClampedLoadedBulletCount)
+			{
+				return;
+			}
+
+			PlayerBet.LoadedBulletCount = ClampedLoadedBulletCount;
+			OnNameTagRoundStatusChanged.Broadcast();
+			return;
+		}
+	}
+
+	FShowDownNameTagPlayerBetState NewPlayerBet;
+	NewPlayerBet.Slot = Slot;
+	NewPlayerBet.LoadedBulletCount = ClampedLoadedBulletCount;
+	NameTagPlayerBets.Add(NewPlayerBet);
+	OnNameTagRoundStatusChanged.Broadcast();
+}
+
 void AShowDownGameStateBase::EventStart(EShowDownPhase Phase)
 {
 	if (Phase == EShowDownPhase::None)
@@ -227,6 +314,21 @@ void AShowDownGameStateBase::BroadcastMultiplayerRouletteStarted(
 	OnMultiplayerRouletteStarted.Broadcast(TargetSlot, TargetName, BulletCount);
 }
 
+void AShowDownGameStateBase::BroadcastMultiplayerRoulettePresentation(
+	EShowDownPlayerSlot TargetSlot,
+	const FString& TargetName,
+	int32 BulletCount,
+	bool bHit)
+{
+	if (HasAuthority())
+	{
+		MulticastMultiplayerRoulettePresentation(TargetSlot, TargetName, BulletCount, bHit);
+		return;
+	}
+
+	OnMultiplayerRoulettePresentation.Broadcast(TargetSlot, TargetName, BulletCount, bHit);
+}
+
 void AShowDownGameStateBase::BroadcastMultiplayerRouletteResult(
 	EShowDownPlayerSlot TargetSlot,
 	const FString& TargetName,
@@ -268,6 +370,15 @@ void AShowDownGameStateBase::MulticastMultiplayerRouletteStarted_Implementation(
 	OnMultiplayerRouletteStarted.Broadcast(TargetSlot, TargetName, BulletCount);
 }
 
+void AShowDownGameStateBase::MulticastMultiplayerRoulettePresentation_Implementation(
+	EShowDownPlayerSlot TargetSlot,
+	const FString& TargetName,
+	int32 BulletCount,
+	bool bHit)
+{
+	OnMultiplayerRoulettePresentation.Broadcast(TargetSlot, TargetName, BulletCount, bHit);
+}
+
 void AShowDownGameStateBase::MulticastMultiplayerRouletteResult_Implementation(
 	EShowDownPlayerSlot TargetSlot,
 	const FString& TargetName,
@@ -289,6 +400,12 @@ void AShowDownGameStateBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 	DOREPLIFETIME(AShowDownGameStateBase, CurrentRound);
 	DOREPLIFETIME(AShowDownGameStateBase, MatchMode);
 	DOREPLIFETIME(AShowDownGameStateBase, PlayerSlots);
+	DOREPLIFETIME(AShowDownGameStateBase, NameTagLoadedBulletCount);
+	DOREPLIFETIME(AShowDownGameStateBase, NameTagPlayerLoadedBulletCount);
+	DOREPLIFETIME(AShowDownGameStateBase, NameTagCollectorLoadedBulletCount);
+	DOREPLIFETIME(AShowDownGameStateBase, NameTagPlayerBets);
+	DOREPLIFETIME(AShowDownGameStateBase, NameTagTurnSide);
+	DOREPLIFETIME(AShowDownGameStateBase, NameTagTurnSlot);
 }
 
 void AShowDownGameStateBase::OnRep_CurrentPhase()
@@ -307,4 +424,9 @@ void AShowDownGameStateBase::OnRep_MatchMode()
 
 void AShowDownGameStateBase::OnRep_PlayerSlots()
 {
+}
+
+void AShowDownGameStateBase::OnRep_NameTagRoundStatus()
+{
+	OnNameTagRoundStatusChanged.Broadcast();
 }

@@ -3,7 +3,6 @@
 #include "Camera/CameraComponent.h"
 #include "Card.h"
 #include "InputCoreTypes.h"
-#include "Components/StaticMeshComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "GameFramework/PlayerController.h"
@@ -12,6 +11,7 @@
 #include "ShowDownGameModeBase.h"
 #include "ShowDownGameStateBase.h"
 #include "ShowDownChatWidget.h"
+#include "ShowDownCameraAspect.h"
 #include "ShowDownPlayerController.h"
 #include "ShowDownVoiceSubsystem.h"
 #include "SupabaseSubsystem.h"
@@ -52,6 +52,7 @@ APlayerPawn::APlayerPawn()
 	cameraComp = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
 	cameraComp->SetupAttachment(rootComp);
 	cameraComp->bUsePawnControlRotation = true;
+	ApplyDefaultCameraAspect();
 	bUseControllerRotationPitch = true;
 	bUseControllerRotationYaw = true;
 
@@ -64,8 +65,20 @@ APlayerPawn::APlayerPawn()
 	PlayerHeadCard->SetupAttachment(rootComp);
 }
 
+void APlayerPawn::ApplyDefaultCameraAspect()
+{
+	if (!cameraComp)
+	{
+		return;
+	}
+
+	ShowDownCameraAspect::ApplyForced16By9(cameraComp);
+}
+
 void APlayerPawn::PreInitializeComponents()
 {
+	ApplyDefaultCameraAspect();
+
 	// Preserve the authored standalone map behavior, while preventing every
 	// replicated pawn from trying to claim local Player0 in a networked match.
 	if (GetNetMode() != NM_Standalone)
@@ -89,6 +102,7 @@ void APlayerPawn::PreInitializeComponents()
 void APlayerPawn::BeginPlay()
 {
 	Super::BeginPlay();
+	ApplyDefaultCameraAspect();
 
 	if (ToggleChatKey == VoicePushToTalkKey)
 	{
@@ -109,6 +123,7 @@ void APlayerPawn::BeginPlay()
 void APlayerPawn::PossessedBy(AController* NewController)
 {
 	Super::PossessedBy(NewController);
+	ApplyDefaultCameraAspect();
 	if (!IsShowDownControllerHandlingInput(this))
 	{
 		AddInputMappingContext();
@@ -501,7 +516,7 @@ void APlayerPawn::SubmitPlayerBetAction(EShowDownBetAction Action, int32 TargetB
 		break;
 
 	case EShowDownBetAction::Raise:
-		if (TargetBet > 0)
+		if (TargetBet != 0)
 		{
 			ServerPlayerRaiseTo(TargetBet);
 		}
@@ -658,27 +673,27 @@ void APlayerPawn::HandleBettingHotkeys()
 
 	if (PC->WasInputKeyJustPressed(EKeys::One))
 	{
-		RequestPlayerRaiseTo(2);
+		SubmitPlayerBetAction(EShowDownBetAction::Raise, -1);
 	}
 
 	if (PC->WasInputKeyJustPressed(EKeys::Two))
 	{
-		RequestPlayerRaiseTo(3);
+		SubmitPlayerBetAction(EShowDownBetAction::Raise, -2);
 	}
 
 	if (PC->WasInputKeyJustPressed(EKeys::Three))
 	{
-		RequestPlayerRaiseTo(4);
+		SubmitPlayerBetAction(EShowDownBetAction::Raise, -3);
 	}
 
 	if (PC->WasInputKeyJustPressed(EKeys::Four))
 	{
-		RequestPlayerRaiseTo(5);
+		SubmitPlayerBetAction(EShowDownBetAction::Raise, -4);
 	}
 
 	if (PC->WasInputKeyJustPressed(EKeys::Five))
 	{
-		RequestPlayerRaiseTo(6);
+		SubmitPlayerBetAction(EShowDownBetAction::Raise, -5);
 	}
 }
 

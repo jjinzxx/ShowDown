@@ -12,18 +12,19 @@ ASDMultiplayerSeatAnchor::ASDMultiplayerSeatAnchor()
 
 	HandSlot = CreateDefaultSubobject<USceneComponent>(TEXT("HandSlot"));
 	HandSlot->SetupAttachment(SceneRoot);
-	// Cards sit on the near side of the table, not below the camera. The
-	// previous -90 Z offset put the hand beneath the tabletop in this map.
-	HandSlot->SetRelativeLocation(FVector(250.0f, 0.0f, 25.0f));
-	HandSlot->SetRelativeRotation(FRotator(0.0f, 180.0f, 0.0f));
+	HandSlot->SetRelativeLocation(FVector(50.0f, 0.0f, -45.0f));
+	HandSlot->SetRelativeRotation(FRotator(-30.0f, 0.0f, 0.0f));
 
 	ForeheadSlot = CreateDefaultSubobject<USceneComponent>(TEXT("ForeheadSlot"));
 	ForeheadSlot->SetupAttachment(SceneRoot);
-	ForeheadSlot->SetRelativeLocation(FVector(620.0f, 0.0f, -20.0f));
-	ForeheadSlot->SetRelativeRotation(FRotator(0.0f, 180.0f, 0.0f));
+	ForeheadSlot->SetRelativeLocation(FVector(20.0f, 0.0f, 14.0f));
+	ForeheadSlot->SetRelativeRotation(FRotator::ZeroRotator);
 }
 
 void ASDMultiplayerSeatAnchor::ConfigureFromCameraTransform(const FTransform& CameraTransform)
 {
-	SetActorTransform(CameraTransform);
+	const FRotator CameraRotation = CameraTransform.Rotator();
+	SetActorLocationAndRotation(
+		CameraTransform.GetLocation(),
+		FRotator(0.0f, CameraRotation.Yaw, 0.0f));
 }

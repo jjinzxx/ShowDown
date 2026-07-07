@@ -21,6 +21,7 @@ class SHOWDOWN_API APlayerPawn : public APawn
 
 public:
 	APlayerPawn();
+	void ApplyDefaultCameraAspect();
 
 	
 	//루트 컴포넌트
@@ -30,7 +31,6 @@ public:
 	//카메라 컴포넌트 선언 
 	UPROPERTY(VisibleAnywhere, Category = Camera)
 	class UCameraComponent* cameraComp;
-	
 	//손패 카드 슬롯 위치 컴포넌트
 	UPROPERTY(VisibleAnywhere, Category = CardSlot)
 	class USceneComponent* PlayerHandCard;
@@ -116,7 +116,6 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Debug")
 	bool bEnableDebugWinCommand = false;
-	
 	/*
 	//
 	UPROPERTY(VisibleAnywhere, Category="Table")
@@ -193,13 +192,11 @@ public:
 
 	UFUNCTION(Server, Reliable)
 	void ServerPlayerFold();
-
 protected:
 	// Called when the game starts or when spawned
 	virtual void PreInitializeComponents() override;
 	virtual void BeginPlay() override;
 	virtual void PossessedBy(AController* NewController) override;
-
 public:
 	// Called every frame
 	virtual void Tick(float DeltaTime) override;

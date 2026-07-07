@@ -21,12 +21,18 @@ USceneComponent* ASDCardPlacementAnchor::GetSlotComponent() const
 
 bool ASDCardPlacementAnchor::IsHandAnchor() const
 {
-	return PlacementRole == ESDCardPlacementRole::PlayerHand || PlacementRole == ESDCardPlacementRole::OpponentHand;
+	return PlacementRole == ESDCardPlacementRole::PlayerHand
+		|| PlacementRole == ESDCardPlacementRole::OpponentHand
+		|| PlacementRole == ESDCardPlacementRole::Player3Hand
+		|| PlacementRole == ESDCardPlacementRole::Player4Hand;
 }
 
 bool ASDCardPlacementAnchor::IsForeheadAnchor() const
 {
-	return PlacementRole == ESDCardPlacementRole::PlayerForehead || PlacementRole == ESDCardPlacementRole::OpponentForehead;
+	return PlacementRole == ESDCardPlacementRole::PlayerForehead
+		|| PlacementRole == ESDCardPlacementRole::OpponentForehead
+		|| PlacementRole == ESDCardPlacementRole::Player3Forehead
+		|| PlacementRole == ESDCardPlacementRole::Player4Forehead;
 }
 
 #if WITH_EDITOR
@@ -70,4 +76,24 @@ ASDOpponentHandAnchor::ASDOpponentHandAnchor()
 ASDOpponentForeheadAnchor::ASDOpponentForeheadAnchor()
 {
 	PlacementRole = ESDCardPlacementRole::OpponentForehead;
+}
+
+ASDPlayer3HandAnchor::ASDPlayer3HandAnchor()
+{
+	PlacementRole = ESDCardPlacementRole::Player3Hand;
+}
+
+ASDPlayer3ForeheadAnchor::ASDPlayer3ForeheadAnchor()
+{
+	PlacementRole = ESDCardPlacementRole::Player3Forehead;
+}
+
+ASDPlayer4HandAnchor::ASDPlayer4HandAnchor()
+{
+	PlacementRole = ESDCardPlacementRole::Player4Hand;
+}
+
+ASDPlayer4ForeheadAnchor::ASDPlayer4ForeheadAnchor()
+{
+	PlacementRole = ESDCardPlacementRole::Player4Forehead;
 }

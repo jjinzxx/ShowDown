@@ -9,6 +9,7 @@
 class ACard;
 class ACameraActor;
 class APostProcessVolume;
+class AShowDownCharacter;
 class AShowDownGameModeBase;
 class SWidget;
 class UMaterialInstanceDynamic;
@@ -131,6 +132,15 @@ public:
 		float BlendInTime);
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Camera")
+	void SetPawnCameraMouseLook(
+		float Sensitivity,
+		float MinPitchDegrees,
+		float MaxPitchDegrees,
+		float MinYawOffsetDegrees,
+		float MaxYawOffsetDegrees,
+		bool bInvertY);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Camera")
 	void PlayFixedCameraSteppedShake(
 		float HoldDuration,
 		float BlendOutTime,
@@ -218,6 +228,18 @@ public:
 	bool bRequireRightMouseForPawnCameraLook = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Camera")
+	bool bInvertPawnCameraMouseY = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Camera|Character")
+	bool bUseCharacterPlayerCamera = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Camera|Character")
+	bool bReplicateCharacterHeadLook = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Camera|Character", meta = (ClampMin = "0.0"))
+	float CharacterPlayerCameraRetryInterval = 0.25f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Camera")
 	float LookSensitivity = 0.08f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Camera")
@@ -292,6 +314,9 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerRequestMultiplayerRestart();
 
+	UFUNCTION(Server, Unreliable)
+	void ServerUpdateCharacterHeadLookRotation(FRotator LookRotation);
+
 	UFUNCTION(Client, Reliable)
 	void ClientShowStatusMessage(const FString& Message);
 
@@ -302,12 +327,11 @@ public:
 	UFUNCTION(Client, Reliable)
 	void ClientEnterMultiplayerGameplay();
 
-	// Selects one of the level-placed multiplayer seat cameras by its zero-based index.
+	// Applies the local multiplayer player's character head camera by zero-based seat index.
 	UFUNCTION(Client, Reliable)
 	void ClientUseMultiplayerSeatCamera(
 		int32 SeatIndex,
 		float SeatCameraLookSensitivity,
-		float FallbackSeatCameraLookSensitivity,
 		float MinPitchDegrees,
 		float MaxPitchDegrees,
 		float MinYawOffsetDegrees,
@@ -344,7 +368,10 @@ private:
 	void SelectCard(ACard* SelectedCard);
 	void SubmitPlayerBetAction(EShowDownBetAction Action, int32 TargetBet);
 	void ApplyPawnCameraInput(float YawInput, float PitchInput);
+	AShowDownCharacter* FindLocalCharacterForPlayerCamera() const;
+	void UpdateCharacterPlayerCamera(float DeltaTime);
 	void UpdateFixedCameraMouseLook(float DeltaTime);
+	void SubmitCharacterHeadLookRotation(const FRotator& LookRotation, float DeltaTime);
 	void RestoreFixedCameraBaseTransform();
 	FRotator GetBreathingSwayRotationOffset(float Strength) const;
 	FVector GetBreathingSwayLocationOffset(const FRotator& CameraRotation, float Strength) const;
@@ -355,7 +382,7 @@ private:
 	void EnsureChatWidget();
 	void EnsureLeaveConfirmWidget();
 	bool TryApplyPendingMultiplayerSeatCamera();
-	bool UseFallbackMultiplayerSeatCamera(int32 SeatIndex);
+	bool TryApplyPendingMultiplayerCharacterCamera();
 	void RestoreMultiplayerGameplayInput();
 	void ApplyChatInputMode(bool bOpen);
 	void CreateCenterCrosshairWidget();
@@ -405,19 +432,18 @@ private:
 	UPROPERTY()
 	TObjectPtr<USceneComponent> FixedCameraMouseLookTarget = nullptr;
 
-	// Created only on a local client when the map does not contain an authored
-	// MP_SeatCamera_* actor. It is deliberately non-replicated: every player
-	// must keep an independent, slot-specific view of the shared table.
-	TObjectPtr<ACameraActor> LocalFallbackSeatCamera = nullptr;
+	UPROPERTY()
+	TObjectPtr<AShowDownCharacter> LocalPlayerCameraCharacterTarget = nullptr;
 
 	TSharedPtr<SWidget> CenterCrosshairWidget;
 	TArray<FSDPrimitiveCustomDepthState> FocusedPrimitiveStates;
 
 	bool bChatOpen = false;
+	FString LastSubmittedMultiplayerDisplayName;
+	float LastMultiplayerDisplayNameSubmitTime = -1000.0f;
 	bool bPendingMultiplayerSeatCamera = false;
 	int32 PendingMultiplayerSeatIndex = INDEX_NONE;
 	float PendingMultiplayerSeatCameraLookSensitivity = 0.08f;
-	float PendingMultiplayerFallbackSeatCameraLookSensitivity = 0.08f;
 	float PendingMultiplayerCameraMinPitch = -35.0f;
 	float PendingMultiplayerCameraMaxPitch = 35.0f;
 	float PendingMultiplayerCameraMinYawOffset = -45.0f;
@@ -447,6 +473,9 @@ private:
 	float CameraSteppedShakeSeed = 0.0f;
 	FRotator CameraSteppedShakeRotationAmplitude = FRotator::ZeroRotator;
 	FVector CameraSteppedShakeLocationAmplitude = FVector::ZeroVector;
+	float CharacterPlayerCameraRetryElapsedTime = 0.0f;
+	float CharacterHeadLookReplicationElapsedTime = 0.0f;
+	FRotator LastSubmittedCharacterHeadLookRotation = FRotator::ZeroRotator;
 	bool bFixedCameraInvertMouseY = true;
 	bool bVoiceChatEventsBound = false;
 	bool bVoiceSubsystemEventsBound = false;

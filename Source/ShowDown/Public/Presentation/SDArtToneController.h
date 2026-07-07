@@ -16,10 +16,10 @@ struct FSDArtToneSettings
 	GENERATED_BODY()
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Pixelate", meta = (ClampMin = "1.0"))
-	float PixelCount = 320.0f;
+	float PixelCount = 8192.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Pixelate", meta = (ClampMin = "1.0"))
-	float ColorSteps = 6.0f;
+	float ColorSteps = 256.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Halftone", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float HalftoneStrength = 0.0f;
@@ -37,28 +37,28 @@ struct FSDArtToneSettings
 	float HalftoneShape = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Color")
-	float ExposureCompensation = 1.0f;
+	float ExposureCompensation = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Color", meta = (ClampMin = "0.0"))
-	float Saturation = 0.7f;
+	float Saturation = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Color", meta = (ClampMin = "0.0"))
-	float Contrast = 0.8f;
+	float Contrast = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Lens", meta = (ClampMin = "0.0"))
-	float VignetteIntensity = 0.55f;
+	float VignetteIntensity = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Lens", meta = (ClampMin = "0.0"))
-	float FilmGrainIntensity = 0.2f;
+	float FilmGrainIntensity = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Lens", meta = (ClampMin = "0.0"))
-	float ChromaticAberrationIntensity = 0.2f;
+	float ChromaticAberrationIntensity = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bloom", meta = (ClampMin = "0.0"))
-	float BloomIntensity = 0.3f;
+	float BloomIntensity = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bloom", meta = (ClampMin = "0.0"))
-	float BloomThreshold = 0.5f;
+	float BloomThreshold = 1.0f;
 };
 
 UCLASS(Blueprintable)

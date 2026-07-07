@@ -31,7 +31,7 @@ private:
 public:
 	//덱을 초기화하고 새 덱을 생성
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Card")
-	void ResetDeck();
+	void ResetDeck(int32 CopiesPerRank = 4);
 	//덱을 무작위로 섞음
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Card")
 	void ShuffleDeck();
@@ -77,7 +77,7 @@ public:
 	bool MoveCardToSlotWithRotationOffset(ACard* Card, USceneComponent* Slot, bool bFaceUp, FRotator RotationOffset);
 
 private:
-	void BuildDeck();
+	void BuildDeck(int32 CopiesPerRank);
 	FTransform BuildHandCardTransform(
 		USceneComponent* HandRoot,
 		const FSDCardHandLayoutSettings& HandLayoutSettings,

@@ -9,6 +9,8 @@ class FLifetimeProperty;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FShowDownPhaseChangedSignature, EShowDownPhase, NewPhase);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FShowDownGameStateBetChangedSignature, EShowDownSide, Side, int32, BulletCount);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FShowDownCardSelectedSignature, EShowDownSide, Side);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FShowDownBetActionCommittedSignature, EShowDownSide, Side, EShowDownBetAction, Action, int32, TargetBet);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FShowDownCardsRevealedSignature, int32, PlayerCard, int32, CollectorCard);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FShowDownRoundResolvedSignature, EShowDownRoundResult, Result);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FShowDownRouletteStartedSignature, EShowDownSide, Target, int32, BulletCount);
@@ -21,8 +23,24 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FShowDownCollectorDialogueSignature
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FShowDownCollectorLLMDecisionSignature, const FString&, Dialogue, const FString&, Intent, EShowDownBetAction, Action, int32, TargetBet);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FShowDownCollectorLLMStatusSignature, bool, bSuccess, const FString&, Message);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FShowDownChatMessageSignature, const FString&, SenderName, const FString&, Message);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FShowDownMultiplayerCardSelectedSignature, EShowDownPlayerSlot, PlayerSlot);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FShowDownMultiplayerBetActionCommittedSignature, EShowDownPlayerSlot, PlayerSlot, EShowDownBetAction, Action, int32, TargetBet);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FShowDownMultiplayerRouletteStartedSignature, EShowDownPlayerSlot, TargetSlot, const FString&, TargetName, int32, BulletCount);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FShowDownMultiplayerRoulettePresentationSignature, EShowDownPlayerSlot, TargetSlot, const FString&, TargetName, int32, BulletCount, bool, bHit);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FiveParams(FShowDownMultiplayerRouletteResultSignature, EShowDownPlayerSlot, TargetSlot, const FString&, TargetName, int32, BulletCount, bool, bHit, int32, RemainingLives);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FShowDownNameTagRoundStatusChangedSignature);
+
+USTRUCT(BlueprintType)
+struct FShowDownNameTagPlayerBetState
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Name Tag")
+	EShowDownPlayerSlot Slot = EShowDownPlayerSlot::None;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Name Tag")
+	int32 LoadedBulletCount = 0;
+};
 
 UCLASS()
 class SHOWDOWN_API AShowDownGameStateBase : public AGameStateBase
@@ -37,6 +55,12 @@ public:
 	//베팅 값이 바뀔 때 UI/연출에 알리는 이벤트
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Events")
 	FShowDownGameStateBetChangedSignature OnBetChanged;
+
+	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Events")
+	FShowDownCardSelectedSignature OnCardSelected;
+
+	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Events")
+	FShowDownBetActionCommittedSignature OnBetActionCommitted;
 
 	//양쪽 카드가 공개될 때 UI/연출에 알리는 이벤트
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Events")
@@ -87,10 +111,22 @@ public:
 	FShowDownChatMessageSignature OnChatMessageReceived;
 
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Events|Multiplayer")
+	FShowDownMultiplayerCardSelectedSignature OnMultiplayerCardSelected;
+
+	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Events|Multiplayer")
+	FShowDownMultiplayerBetActionCommittedSignature OnMultiplayerBetActionCommitted;
+
+	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Events|Multiplayer")
 	FShowDownMultiplayerRouletteStartedSignature OnMultiplayerRouletteStarted;
 
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Events|Multiplayer")
+	FShowDownMultiplayerRoulettePresentationSignature OnMultiplayerRoulettePresentation;
+
+	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Events|Multiplayer")
 	FShowDownMultiplayerRouletteResultSignature OnMultiplayerRouletteResult;
+
+	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Events|Name Tag")
+	FShowDownNameTagRoundStatusChangedSignature OnNameTagRoundStatusChanged;
 
 	//현재 게임 진행 단계
 	UPROPERTY(ReplicatedUsing = OnRep_CurrentPhase, BlueprintReadOnly, Category = "ShowDown|State")
@@ -118,6 +154,24 @@ public:
 	UPROPERTY(ReplicatedUsing = OnRep_PlayerSlots, BlueprintReadOnly, Category = "ShowDown|Multiplayer")
 	TArray<FShowDownNetworkPlayerSlot> PlayerSlots;
 
+	UPROPERTY(ReplicatedUsing = OnRep_NameTagRoundStatus, BlueprintReadOnly, Category = "ShowDown|Name Tag")
+	int32 NameTagLoadedBulletCount = 0;
+
+	UPROPERTY(ReplicatedUsing = OnRep_NameTagRoundStatus, BlueprintReadOnly, Category = "ShowDown|Name Tag")
+	int32 NameTagPlayerLoadedBulletCount = 0;
+
+	UPROPERTY(ReplicatedUsing = OnRep_NameTagRoundStatus, BlueprintReadOnly, Category = "ShowDown|Name Tag")
+	int32 NameTagCollectorLoadedBulletCount = 0;
+
+	UPROPERTY(ReplicatedUsing = OnRep_NameTagRoundStatus, BlueprintReadOnly, Category = "ShowDown|Name Tag")
+	TArray<FShowDownNameTagPlayerBetState> NameTagPlayerBets;
+
+	UPROPERTY(ReplicatedUsing = OnRep_NameTagRoundStatus, BlueprintReadOnly, Category = "ShowDown|Name Tag")
+	EShowDownSide NameTagTurnSide = EShowDownSide::Player;
+
+	UPROPERTY(ReplicatedUsing = OnRep_NameTagRoundStatus, BlueprintReadOnly, Category = "ShowDown|Name Tag")
+	EShowDownPlayerSlot NameTagTurnSlot = EShowDownPlayerSlot::None;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Debug")
 	bool bShowPresentationDebugMessages = false;
 
@@ -136,6 +190,15 @@ public:
 
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "ShowDown|Multiplayer")
 	bool IsMultiplayerMatch() const;
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Name Tag")
+	void SetNameTagRoundStatus(int32 LoadedBulletCount, EShowDownSide TurnSide, EShowDownPlayerSlot TurnSlot);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Name Tag")
+	void SetNameTagSingleRoundStatus(int32 PlayerLoadedBulletCount, int32 CollectorLoadedBulletCount, EShowDownSide TurnSide, EShowDownPlayerSlot TurnSlot);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Name Tag")
+	void SetNameTagPlayerLoadedBulletCount(EShowDownPlayerSlot Slot, int32 LoadedBulletCount);
 
 	//연출 시작 알림
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Presentation", meta = (DisplayName = "eventStart"))
@@ -169,6 +232,9 @@ public:
 	void BroadcastMultiplayerRouletteStarted(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount);
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Multiplayer|Presentation")
+	void BroadcastMultiplayerRoulettePresentation(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount, bool bHit);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Multiplayer|Presentation")
 	void BroadcastMultiplayerRouletteResult(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount, bool bHit, int32 RemainingLives);
 
 	UFUNCTION(NetMulticast, Reliable)
@@ -182,6 +248,9 @@ public:
 
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastMultiplayerRouletteStarted(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount);
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastMultiplayerRoulettePresentation(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount, bool bHit);
 
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastMultiplayerRouletteResult(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount, bool bHit, int32 RemainingLives);
@@ -201,5 +270,8 @@ private:
 
 	UFUNCTION()
 	void OnRep_PlayerSlots();
+
+	UFUNCTION()
+	void OnRep_NameTagRoundStatus();
 	
 };

@@ -1,6 +1,7 @@
 #include "ShowDownHubFlowManager.h"
 
 #include "Camera/CameraActor.h"
+#include "Camera/CameraComponent.h"
 #include "Blueprint/UserWidget.h"
 #include "Engine/GameInstance.h"
 #include "GameFramework/PlayerController.h"
@@ -10,6 +11,7 @@
 #include "TimerManager.h"
 #include "ShowDownGameModeBase.h"
 #include "ShowDownGameStateBase.h"
+#include "ShowDownCameraAspect.h"
 #include "ShowDownEosSubsystem.h"
 #include "ShowDownLobbyWidget.h"
 #include "ShowDownLoginWidget.h"
@@ -67,7 +69,7 @@ void AShowDownHubFlowManager::BeginPlay()
 		&& GetNetMode() == NM_Standalone;
 #endif
 
-	PlayCamera(bShouldDeveloperAutoStart ? GameCamera : (bHasSession ? MainMenuCamera : LoginCamera), true);
+	PlayCamera(bShouldDeveloperAutoStart ? MainMenuCamera : (bHasSession ? MainMenuCamera : LoginCamera), true);
 
 	// 게임 종료(승/패)를 받아 허브로 복귀하기 위해 GameState 이벤트를 구독합니다.
 	if (UWorld* World = GetWorld())
@@ -256,7 +258,10 @@ void AShowDownHubFlowManager::ShowMultiplayerMenu()
 	}
 
 	MultiplayerWidget->OnHostRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleHostMultiplayerRequested);
+	MultiplayerWidget->OnPrivateHostRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleHostPrivateMultiplayerRequested);
 	MultiplayerWidget->OnJoinRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleJoinMultiplayerRequested);
+	MultiplayerWidget->OnRefreshRoomsRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleRefreshPublicRoomsRequested);
+	MultiplayerWidget->OnJoinPublicRoomRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleJoinPublicRoomRequested);
 	MultiplayerWidget->OnBackRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleMultiplayerBackRequested);
 
 	SetActiveWidget(MultiplayerWidget);
@@ -294,6 +299,7 @@ void AShowDownHubFlowManager::ShowLobby()
 			LobbyWidget->SetLobbyInfo(EosSubsystem->GetLobbyCode(), EosSubsystem->IsLobbyHost());
 			EosSubsystem->OnSessionResult.RemoveDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
 			EosSubsystem->OnSessionResult.AddDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
+			EosSubsystem->OnPublicRoomsUpdated.RemoveDynamic(this, &AShowDownHubFlowManager::HandlePublicRoomsUpdated);
 			if (EosSubsystem->IsLobbyHost())
 			{
 				EosSubsystem->StopLobbyStartPolling();
@@ -344,76 +350,56 @@ void AShowDownHubFlowManager::ShowSinglePlayPreviewInternal(bool bAllowOnlineRew
 	SetActiveWidget(nullptr);
 
 	APlayerController* PlayerController = GetPrimaryPlayerController();
-
-	const bool bPlayedGameCamera = PlayCamera(GameCamera);
-	if (!bPlayedGameCamera && PlayerController && PlayerController->GetPawn())
+	if (AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(PlayerController))
 	{
-		PlayerController->SetViewTargetWithBlend(PlayerController->GetPawn(), CameraBlendTime);
+		ShowDownController->bUseCharacterPlayerCamera = true;
+
+		float LookSensitivity = 0.08f;
+		float MinPitch = -35.0f;
+		float MaxPitch = 35.0f;
+		float MinYawOffset = -45.0f;
+		float MaxYawOffset = 45.0f;
+		bool bInvertMouseY = true;
+		if (UWorld* World = GetWorld())
+		{
+			if (const AShowDownGameModeBase* GameMode = World->GetAuthGameMode<AShowDownGameModeBase>())
+			{
+				LookSensitivity = GameMode->GameplayCameraLookSensitivity;
+				MinPitch = GameMode->GameplayCameraMinPitch;
+				MaxPitch = GameMode->GameplayCameraMaxPitch;
+				MinYawOffset = GameMode->GameplayCameraMinYawOffset;
+				MaxYawOffset = GameMode->GameplayCameraMaxYawOffset;
+				bInvertMouseY = GameMode->bInvertGameplayCameraMouseY;
+			}
+		}
+
+		ShowDownController->ClearFixedCameraMouseLook();
+		ShowDownController->SetPawnCameraMouseLook(
+			LookSensitivity,
+			MinPitch,
+			MaxPitch,
+			MinYawOffset,
+			MaxYawOffset,
+			bInvertMouseY);
+		ShowDownController->bEnablePawnCameraMouseLook = true;
+		ShowDownController->bRequireRightMouseForPawnCameraLook = false;
+	}
+
+	if (PlayerController && PlayerController->GetPawn())
+	{
+		PlayerController->SetViewTargetWithBlend(
+			PlayerController->GetPawn(),
+			CameraBlendTime,
+			VTBlend_EaseInOut,
+			CameraBlendEaseExponent);
 	}
 
 	// 카드 커서 트레이스·카메라 조작·베팅 핫키가 모두 폰에 전달되도록 게임 입력 모드로 전환합니다.
 	if (PlayerController)
 	{
-		const bool bUseGameCameraLook = bEnableGameCameraMouseLook && bPlayedGameCamera && GameCamera;
 		if (AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(PlayerController))
 		{
 			ShowDownController->bHandleShowDownGameplayInput = true;
-		}
-
-		if (bUseGameCameraLook)
-		{
-			if (AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(PlayerController))
-			{
-				float LookSensitivity = GameCameraLookSensitivity;
-				float MinPitch = GameCameraMinPitch;
-				float MaxPitch = GameCameraMaxPitch;
-				float MinYawOffset = GameCameraMinYawOffset;
-				float MaxYawOffset = GameCameraMaxYawOffset;
-				bool bInvertMouseY = bInvertGameCameraMouseY;
-				bool bEnableBreathingSway = bEnableGameCameraBreathingSway;
-				float BreathingSwaySpeed = GameCameraBreathingSwaySpeed;
-				FRotator BreathingSwayRotationAmplitude = GameCameraBreathingSwayRotationAmplitude;
-				FVector BreathingSwayLocationAmplitude = GameCameraBreathingSwayLocationAmplitude;
-				float BreathingSwayBlendInTime = GameCameraBreathingSwayBlendInTime;
-
-				if (UWorld* World = GetWorld())
-				{
-					if (const AShowDownGameModeBase* GameMode = World->GetAuthGameMode<AShowDownGameModeBase>())
-					{
-						LookSensitivity = GameMode->GameplayCameraLookSensitivity;
-						MinPitch = GameMode->GameplayCameraMinPitch;
-						MaxPitch = GameMode->GameplayCameraMaxPitch;
-						MinYawOffset = GameMode->GameplayCameraMinYawOffset;
-						MaxYawOffset = GameMode->GameplayCameraMaxYawOffset;
-						bInvertMouseY = GameMode->bInvertGameplayCameraMouseY;
-						bEnableBreathingSway = GameMode->bEnableGameplayCameraBreathingSway;
-						BreathingSwaySpeed = GameMode->GameplayCameraBreathingSwaySpeed;
-						BreathingSwayRotationAmplitude = GameMode->GameplayCameraBreathingSwayRotationAmplitude;
-						BreathingSwayLocationAmplitude = GameMode->GameplayCameraBreathingSwayLocationAmplitude;
-						BreathingSwayBlendInTime = GameMode->GameplayCameraBreathingSwayBlendInTime;
-					}
-				}
-
-				ShowDownController->SetFixedCameraMouseLook(
-					GameCamera,
-					LookSensitivity,
-					MinPitch,
-					MaxPitch,
-					MinYawOffset,
-					MaxYawOffset,
-					bInvertMouseY);
-				ShowDownController->SetFixedCameraBreathingSway(
-					bEnableBreathingSway,
-					BreathingSwaySpeed,
-					BreathingSwayRotationAmplitude,
-					BreathingSwayLocationAmplitude,
-					BreathingSwayBlendInTime);
-			}
-
-		}
-		else
-		{
-			ClearGameplayCameraLook();
 		}
 
 		FInputModeGameOnly InputMode;
@@ -430,7 +416,7 @@ void AShowDownHubFlowManager::ShowSinglePlayPreviewInternal(bool bAllowOnlineRew
 		}
 		else
 		{
-			UE_LOG(LogTemp, Warning, TEXT("L_Hub GameMode is not AShowDownGameModeBase. Single play cannot start."));
+			UE_LOG(LogTemp, Warning, TEXT("Main level GameMode is not AShowDownGameModeBase. Single play cannot start."));
 		}
 	}
 
@@ -444,8 +430,8 @@ void AShowDownHubFlowManager::ApplySinglePlayerVoiceSettings()
 		? GetGameInstance()->GetSubsystem<UShowDownVoiceSubsystem>()
 		: nullptr)
 	{
-		VoiceSubsystem->TTSPlaybackSpeed = FMath::Clamp(GameCameraVoiceSpeed, 0.5f, 2.0f);
-		VoiceSubsystem->TTSPlaybackPitch = FMath::Clamp(GameCameraVoicePitch, 0.5f, 2.0f);
+		VoiceSubsystem->TTSPlaybackSpeed = FMath::Clamp(SinglePlayerVoiceSpeed, 0.5f, 2.0f);
+		VoiceSubsystem->TTSPlaybackPitch = FMath::Clamp(SinglePlayerVoicePitch, 0.5f, 2.0f);
 	}
 }
 
@@ -514,6 +500,7 @@ void AShowDownHubFlowManager::SetUiOnlyInput(UUserWidget* FocusWidget)
 
 bool AShowDownHubFlowManager::PlayCamera(ACameraActor* Camera, bool bCut)
 {
+	ShowDownCameraAspect::ApplyForced16By9(Camera);
 	return PlayViewTarget(Camera, bCut);
 }
 
@@ -526,13 +513,22 @@ bool AShowDownHubFlowManager::PlayViewTarget(AActor* ViewTarget, bool bCut)
 
 	if (APlayerController* PlayerController = GetPrimaryPlayerController())
 	{
+		if (ACameraActor* CameraActor = Cast<ACameraActor>(ViewTarget))
+		{
+			ShowDownCameraAspect::ApplyForced16By9(CameraActor);
+		}
+
 		if (bCut || CameraBlendTime <= 0.0f)
 		{
 			PlayerController->SetViewTarget(ViewTarget);
 		}
 		else
 		{
-			PlayerController->SetViewTargetWithBlend(ViewTarget, CameraBlendTime);
+			PlayerController->SetViewTargetWithBlend(
+				ViewTarget,
+				CameraBlendTime,
+				VTBlend_EaseInOut,
+				CameraBlendEaseExponent);
 		}
 		return true;
 	}
@@ -661,6 +657,25 @@ void AShowDownHubFlowManager::HandleHostMultiplayerRequested()
 	}
 }
 
+void AShowDownHubFlowManager::HandleHostPrivateMultiplayerRequested()
+{
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
+		{
+			EosSubsystem->OnSessionResult.RemoveDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
+			EosSubsystem->OnSessionResult.AddDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
+			EosSubsystem->HostPrivateLobby(MultiplayerLobbyLevelName, MultiplayerLevelName);
+			return;
+		}
+	}
+
+	if (MultiplayerWidget)
+	{
+		MultiplayerWidget->ShowStatusMessage(TEXT("EOS subsystem is unavailable."), FLinearColor::Red);
+	}
+}
+
 void AShowDownHubFlowManager::HandleJoinMultiplayerRequested(const FString& RoomCode)
 {
 	if (UGameInstance* GameInstance = GetGameInstance())
@@ -680,6 +695,59 @@ void AShowDownHubFlowManager::HandleJoinMultiplayerRequested(const FString& Room
 	}
 }
 
+void AShowDownHubFlowManager::HandleRefreshPublicRoomsRequested()
+{
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
+		{
+			EosSubsystem->OnSessionResult.RemoveDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
+			EosSubsystem->OnSessionResult.AddDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
+			EosSubsystem->OnPublicRoomsUpdated.RemoveDynamic(this, &AShowDownHubFlowManager::HandlePublicRoomsUpdated);
+			EosSubsystem->OnPublicRoomsUpdated.AddDynamic(this, &AShowDownHubFlowManager::HandlePublicRoomsUpdated);
+			EosSubsystem->FindPublicLobbies();
+			return;
+		}
+	}
+
+	if (MultiplayerWidget)
+	{
+		MultiplayerWidget->ShowStatusMessage(TEXT("EOS subsystem is unavailable."), FLinearColor::Red);
+		MultiplayerWidget->SetPublicRooms(TArray<FShowDownPublicRoomInfo>());
+	}
+}
+
+void AShowDownHubFlowManager::HandleJoinPublicRoomRequested(int32 SearchResultIndex)
+{
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
+		{
+			EosSubsystem->OnSessionResult.RemoveDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
+			EosSubsystem->OnSessionResult.AddDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
+			EosSubsystem->JoinPublicLobbyByIndex(SearchResultIndex);
+			return;
+		}
+	}
+
+	if (MultiplayerWidget)
+	{
+		MultiplayerWidget->ShowStatusMessage(TEXT("EOS subsystem is unavailable."), FLinearColor::Red);
+	}
+}
+
+void AShowDownHubFlowManager::HandlePublicRoomsUpdated(bool bSuccess, const TArray<FShowDownPublicRoomInfo>& Rooms)
+{
+	if (MultiplayerWidget)
+	{
+		MultiplayerWidget->SetPublicRooms(Rooms);
+		if (!bSuccess)
+		{
+			MultiplayerWidget->ShowStatusMessage(TEXT("공개방 목록을 불러오지 못했습니다."), FLinearColor::Red);
+		}
+	}
+}
+
 void AShowDownHubFlowManager::HandleMultiplayerBackRequested()
 {
 	if (UGameInstance* GameInstance = GetGameInstance())
@@ -687,6 +755,7 @@ void AShowDownHubFlowManager::HandleMultiplayerBackRequested()
 		if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
 		{
 			EosSubsystem->OnSessionResult.RemoveDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
+			EosSubsystem->OnPublicRoomsUpdated.RemoveDynamic(this, &AShowDownHubFlowManager::HandlePublicRoomsUpdated);
 		}
 	}
 
@@ -747,7 +816,7 @@ void AShowDownHubFlowManager::HandleLobbyLeaveRequested()
 	{
 		if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
 		{
-			EosSubsystem->LeaveLobby(FName(TEXT("L_Hub")));
+			EosSubsystem->LeaveLobby(FName(TEXT("L_ShowdownMain")));
 			return;
 		}
 	}
@@ -782,6 +851,13 @@ void AShowDownHubFlowManager::HandleRankBackRequested()
 
 void AShowDownHubFlowManager::HandleGameOver(EShowDownSide Winner)
 {
+	if (UWorld* World = GetWorld(); World && World->GetNetMode() != NM_Standalone)
+	{
+		UE_LOG(LogTemp, Log, TEXT("Ignoring hub auto-return for multiplayer game over."));
+		World->GetTimerManager().ClearTimer(ReturnToHubTimerHandle);
+		return;
+	}
+
 	UE_LOG(LogTemp, Log, TEXT("Game over. Winner: %s. Returning to hub in %.1fs."),
 		Winner == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
 		ReturnToHubDelay);

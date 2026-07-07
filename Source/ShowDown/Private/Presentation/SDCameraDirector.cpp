@@ -5,6 +5,7 @@
 #include "Camera/PlayerCameraManager.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
+#include "ShowDownCameraAspect.h"
 
 ASDCameraDirector::ASDCameraDirector()
 {
@@ -62,6 +63,7 @@ bool ASDCameraDirector::ApplyShot(FName ShotId, bool bCut)
 
 	ActiveShotId = ShotId;
 	ActiveCamera = Shot->Camera;
+	ShowDownCameraAspect::ApplyForced16By9(ActiveCamera);
 	ActiveShotBaseRotation = ActiveCamera->GetActorRotation();
 	bForceActiveMouseLook = Shot->bEnableMouseLook;
 
@@ -101,10 +103,18 @@ void ASDCameraDirector::ReturnToGameplayCamera(float BlendTime)
 
 	if (BlendTime <= 0.0f)
 	{
+		if (ACameraActor* CameraActor = Cast<ACameraActor>(GameplayViewTarget))
+		{
+			ShowDownCameraAspect::ApplyForced16By9(CameraActor);
+		}
 		PlayerController->SetViewTarget(GameplayViewTarget);
 	}
 	else
 	{
+		if (ACameraActor* CameraActor = Cast<ACameraActor>(GameplayViewTarget))
+		{
+			ShowDownCameraAspect::ApplyForced16By9(CameraActor);
+		}
 		PlayerController->SetViewTargetWithBlend(GameplayViewTarget, BlendTime);
 	}
 
