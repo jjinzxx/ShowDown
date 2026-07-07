@@ -385,6 +385,29 @@ void AShowDownGameModeBase::RefreshMultiplayerLobbyPlayers()
 	}
 }
 
+void AShowDownGameModeBase::SetMultiplayerVoiceTalking(AController* RequestingController, bool bIsTalking)
+{
+	if (!HasAuthority() || GetNetMode() == NM_Standalone || !RequestingController)
+	{
+		return;
+	}
+
+	const ASDPlayerState* TalkingPlayer = RequestingController->GetPlayerState<ASDPlayerState>();
+	if (!TalkingPlayer || TalkingPlayer->ShowDownSlot == EShowDownPlayerSlot::None)
+	{
+		return;
+	}
+
+	for (AShowDownCharacter* Character : GetShowDownCharacters())
+	{
+		if (IsValid(Character) && Character->GetPlayerSlot() == TalkingPlayer->ShowDownSlot)
+		{
+			Character->SetVoiceTalking(bIsTalking);
+			break;
+		}
+	}
+}
+
 void AShowDownGameModeBase::PostLogin(APlayerController* NewPlayer)
 {
 	Super::PostLogin(NewPlayer);
@@ -1997,7 +2020,7 @@ void AShowDownGameModeBase::TryRequestBossChatReply(const FString& PlayerDialogu
 	{
 		if (USDLLMSubsystem* LLMSubsystem = GameInstance->GetSubsystem<USDLLMSubsystem>())
 		{
-			if (!LLMSubsystem->bEnableInstantBossChatReply || !LLMSubsystem->IsConfigured())
+			if (!LLMSubsystem->bEnableInstantBossChatReply || !LLMSubsystem->CanMakeRequests())
 			{
 				return;
 			}
@@ -2178,7 +2201,7 @@ void AShowDownGameModeBase::ResolveCollectorBetResponse()
 	{
 		if (USDLLMSubsystem* LLMSubsystem = GameInstance->GetSubsystem<USDLLMSubsystem>())
 		{
-			if (LLMSubsystem->IsConfigured())
+			if (LLMSubsystem->CanMakeRequests())
 			{
 				if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 				{
@@ -2760,7 +2783,7 @@ void AShowDownGameModeBase::BroadcastBossResultReaction(EShowDownRoundResult Res
 
 	UGameInstance* GameInstance = GetGameInstance();
 	USDLLMSubsystem* LLMSubsystem = GameInstance ? GameInstance->GetSubsystem<USDLLMSubsystem>() : nullptr;
-	if (!LLMSubsystem || !LLMSubsystem->IsConfigured())
+	if (!LLMSubsystem || !LLMSubsystem->CanMakeRequests())
 	{
 		// LLM 비활성/미설정 → 정적 대사로 대체
 		AppendRecentDialogueLine(TEXT("Collector"), FallbackLine);

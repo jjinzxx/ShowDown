@@ -195,6 +195,7 @@ public:
 	void StartMultiplayerGame();
 
 	void RefreshMultiplayerLobbyPlayers();
+	void SetMultiplayerVoiceTalking(AController* RequestingController, bool bIsTalking);
 
 	void RequestMultiplayerRestartFromController(AController* RequestingController);
 

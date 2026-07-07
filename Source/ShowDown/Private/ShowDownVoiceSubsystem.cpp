@@ -2,6 +2,7 @@
 
 #include "Async/Async.h"
 #include "Components/AudioComponent.h"
+#include "Dom/JsonValue.h"
 #include "Engine/World.h"
 #include "HAL/FileManager.h"
 #include "HttpModule.h"
@@ -786,10 +787,11 @@ void UShowDownVoiceSubsystem::RequestSpeech(const FString& Text)
 		RootObject->SetStringField(TEXT("instructions"), TTSInstructions);
 	}
 	RootObject->SetStringField(TEXT("response_format"), TEXT("wav"));
-	const float SafePlaybackPitch = FMath::Clamp(TTSPlaybackPitch, 0.5f, 2.0f);
-	const float RawApiSpeechSpeed = FMath::Clamp(TTSPlaybackSpeed / SafePlaybackPitch, 0.25f, 4.0f);
-	const float ApiSpeechSpeed = FMath::RoundToFloat(RawApiSpeechSpeed * 100.0f) / 100.0f;
-	RootObject->SetNumberField(TEXT("speed"), ApiSpeechSpeed);
+	const double SafePlaybackPitch = FMath::Clamp(static_cast<double>(TTSPlaybackPitch), 0.5, 2.0);
+	const double RawApiSpeechSpeed = FMath::Clamp(static_cast<double>(TTSPlaybackSpeed) / SafePlaybackPitch, 0.25, 4.0);
+	const double ApiSpeechSpeed = FMath::RoundToDouble(RawApiSpeechSpeed * 100.0) / 100.0;
+	const FString ApiSpeechSpeedJson = FString::Printf(TEXT("%.2f"), ApiSpeechSpeed);
+	RootObject->SetField(TEXT("speed"), MakeShared<FJsonValueNumberString>(ApiSpeechSpeedJson));
 	UE_LOG(
 		LogTemp,
 		Log,

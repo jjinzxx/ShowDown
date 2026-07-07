@@ -110,7 +110,7 @@ public:
 	float RequestTimeoutSeconds = 6.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|LLM")
-	FString BossSpeechStylePrompt = TEXT("Use short Korean analog-horror boss dialogue. Sound calm, ominous, and psychologically pressuring.");
+	FString BossSpeechStylePrompt = TEXT("Speak in short, natural Korean banmal with the loose swagger of an underground street punk. Always understand and answer the player's latest line directly before adding attitude. For greetings, casual remarks, or neutral questions, respond casually without profanity or hostility. Use mild profanity only rarely and only when the player insults, provokes, threatens, applies strong pressure, or when a tense game result genuinely calls for it. Never insert profanity as filler, never open a reply with unrelated profanity, and never copy stock examples. Keep the confidence relaxed and streetwise rather than constantly angry. No anonymous-board slang, \"ㅋㅋ\", random memes, repetitive catchphrases, hate slurs, sexual insults, threats of real violence, or real-person references.");
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|LLM")
 	bool bEnableInstantBossChatReply = true;
@@ -122,6 +122,7 @@ public:
 	float BossChatReplyCooldownSeconds = 3.0f;
 
 	bool IsConfigured() const;
+	bool CanMakeRequests() const;
 	void RequestBossResponse(const FSDLLMBossContext& Context, FSDLLMBossResponseCallback Callback);
 	void RequestBossChatReply(const FSDLLMBossContext& Context, FSDLLMBossChatCallback Callback);
 	void RequestBossResultReaction(const FSDLLMBossContext& Context, FSDLLMBossChatCallback Callback);

@@ -140,6 +140,7 @@ void AShowDownCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	DOREPLIFETIME(AShowDownCharacter, CharacterRole);
 	DOREPLIFETIME(AShowDownCharacter, PlayerSlot);
 	DOREPLIFETIME(AShowDownCharacter, CharacterDisplayName);
+	DOREPLIFETIME(AShowDownCharacter, bVoiceTalking);
 	DOREPLIFETIME(AShowDownCharacter, ReplicatedPlayerViewRotation);
 	DOREPLIFETIME(AShowDownCharacter, bCharacterSceneActive);
 }
@@ -314,6 +315,18 @@ void AShowDownCharacter::SetPlayerSlot(EShowDownPlayerSlot NewPlayerSlot)
 void AShowDownCharacter::SetCharacterDisplayName(const FString& NewDisplayName)
 {
 	SetCharacterIdentity(CharacterRole, PlayerSlot, NewDisplayName);
+}
+
+void AShowDownCharacter::SetVoiceTalking(bool bNewVoiceTalking)
+{
+	if (!HasAuthority() || bVoiceTalking == bNewVoiceTalking)
+	{
+		return;
+	}
+
+	bVoiceTalking = bNewVoiceTalking;
+	RefreshNameTag();
+	ForceNetUpdate();
 }
 
 EShowDownPlayerSlot AShowDownCharacter::GetLocalPlayerSlot() const
@@ -1118,7 +1131,10 @@ void AShowDownCharacter::RefreshNameTag()
 		return;
 	}
 
-	const FString DisplayName = ResolveNameTagDisplayName();
+	const FString BaseDisplayName = ResolveNameTagDisplayName();
+	const FString DisplayName = bVoiceTalking && !BaseDisplayName.IsEmpty()
+		? FString::Printf(TEXT("🎙 %s"), *BaseDisplayName)
+		: BaseDisplayName;
 	NameTagWidgetComponent->InitWidget();
 	if (UShowDownNameTagWidget* NameTagWidget = Cast<UShowDownNameTagWidget>(NameTagWidgetComponent->GetUserWidgetObject()))
 	{

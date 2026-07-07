@@ -699,7 +699,7 @@ void APlayerPawn::HandleBettingHotkeys()
 
 void APlayerPawn::HandleVoicePushToTalkInput()
 {
-	if (!bEnableVoicePushToTalk)
+	if (!bEnableVoicePushToTalk || (GetWorld() && GetWorld()->GetNetMode() != NM_Standalone))
 	{
 		return;
 	}

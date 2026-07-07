@@ -4,6 +4,7 @@
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/PlayerController.h"
 #include "Interfaces/OnlineIdentityInterface.h"
+#include "IOnlineSubsystemEOS.h"
 #include "Kismet/GameplayStatics.h"
 #include "Online/OnlineSessionNames.h"
 #include "OnlineSessionSettings.h"
@@ -12,6 +13,7 @@
 #include "ShowDownGameStateBase.h"
 #include "ShowDownPlayerController.h"
 #include "SupabaseSubsystem.h"
+#include "VoiceChat.h"
 
 namespace
 {
@@ -44,6 +46,8 @@ FString MakeDefaultRoomName(const USupabaseSubsystem* SupabaseSubsystem, const F
 
 void UShowDownEosSubsystem::Deinitialize()
 {
+	EndVoiceTransmission();
+	UnbindVoiceChat();
 	StopLobbyStartPolling();
 	ClearOnlineDelegateHandles();
 
@@ -56,6 +60,99 @@ void UShowDownEosSubsystem::Deinitialize()
 	bLobbyHost = false;
 
 	Super::Deinitialize();
+}
+
+bool UShowDownEosSubsystem::EnsureVoiceChatReady()
+{
+	if (VoiceChatUser)
+	{
+		return VoiceChatUser->IsLoggedIn();
+	}
+
+	IOnlineSubsystem* OnlineSubsystem = GetEosSubsystem();
+	const IOnlineIdentityPtr IdentityInterface = GetIdentityInterface();
+	const FUniqueNetIdPtr LocalUserId = IdentityInterface.IsValid()
+		? IdentityInterface->GetUniquePlayerId(LocalUserNum)
+		: nullptr;
+	IOnlineSubsystemEOS* EosSubsystem = OnlineSubsystem
+		? static_cast<IOnlineSubsystemEOS*>(OnlineSubsystem)
+		: nullptr;
+	if (!EosSubsystem || !LocalUserId.IsValid())
+	{
+		return false;
+	}
+
+	VoiceChatUser = EosSubsystem->GetVoiceChatUserInterface(*LocalUserId);
+	if (!VoiceChatUser)
+	{
+		return false;
+	}
+
+	VoiceTalkingUpdatedDelegateHandle = VoiceChatUser->OnVoiceChatPlayerTalkingUpdated().AddUObject(
+		this,
+		&UShowDownEosSubsystem::HandleVoicePlayerTalkingUpdated);
+	VoiceChatUser->SetAudioInputDeviceMuted(false);
+	VoiceChatUser->SetAudioOutputDeviceMuted(false);
+	VoiceChatUser->TransmitToNoChannels();
+	UE_LOG(LogTemp, Log, TEXT("EOS voice chat initialized for %s."), *VoiceChatUser->GetLoggedInPlayerName());
+	return VoiceChatUser->IsLoggedIn();
+}
+
+bool UShowDownEosSubsystem::BeginVoiceTransmission()
+{
+	if (!EnsureVoiceChatReady() || !VoiceChatUser || VoiceChatUser->GetChannels().IsEmpty())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("EOS voice transmission could not start: voice room is not ready."));
+		return false;
+	}
+
+	bVoiceTransmissionRequested = true;
+	VoiceChatUser->TransmitToAllChannels();
+	UE_LOG(LogTemp, Log, TEXT("EOS voice transmission started. channels=%d"), VoiceChatUser->GetChannels().Num());
+	return true;
+}
+
+void UShowDownEosSubsystem::EndVoiceTransmission()
+{
+	bVoiceTransmissionRequested = false;
+	if (VoiceChatUser)
+	{
+		VoiceChatUser->TransmitToNoChannels();
+	}
+
+	if (bLocalVoiceTalking)
+	{
+		bLocalVoiceTalking = false;
+		OnLocalVoiceTalkingChanged.Broadcast(false);
+	}
+}
+
+void UShowDownEosSubsystem::UnbindVoiceChat()
+{
+	if (VoiceChatUser && VoiceTalkingUpdatedDelegateHandle.IsValid())
+	{
+		VoiceChatUser->OnVoiceChatPlayerTalkingUpdated().Remove(VoiceTalkingUpdatedDelegateHandle);
+	}
+	VoiceTalkingUpdatedDelegateHandle.Reset();
+	VoiceChatUser = nullptr;
+	bLocalVoiceTalking = false;
+	bVoiceTransmissionRequested = false;
+}
+
+void UShowDownEosSubsystem::HandleVoicePlayerTalkingUpdated(
+	const FString& ChannelName,
+	const FString& PlayerName,
+	bool bIsTalking)
+{
+	const bool bEffectiveTalking = bVoiceTransmissionRequested && bIsTalking;
+	if (!VoiceChatUser || PlayerName != VoiceChatUser->GetLoggedInPlayerName() || bLocalVoiceTalking == bEffectiveTalking)
+	{
+		return;
+	}
+
+	bLocalVoiceTalking = bEffectiveTalking;
+	UE_LOG(LogTemp, Verbose, TEXT("EOS local voice talking=%s channel=%s"), bEffectiveTalking ? TEXT("true") : TEXT("false"), *ChannelName);
+	OnLocalVoiceTalkingChanged.Broadcast(bEffectiveTalking);
 }
 
 IOnlineSubsystem* UShowDownEosSubsystem::GetEosSubsystem() const
@@ -258,6 +355,7 @@ void UShowDownEosSubsystem::HostSession(FName MapName)
 	Settings.bUsesPresence = true;
 	Settings.bAllowJoinViaPresence = true;
 	Settings.bUseLobbiesIfAvailable = true;
+	Settings.bUseLobbiesVoiceChatIfAvailable = true;
 	Settings.Set(SETTING_MAPNAME, PendingHostMapName.ToString(), EOnlineDataAdvertisementType::ViaOnlineService);
 
 	OnSessionResult.Broadcast(false, TEXT("Creating EOS session..."));
@@ -365,6 +463,7 @@ void UShowDownEosSubsystem::HostLobbyWithVisibility(FName LobbyMapName, FName Ga
 	Settings.bUsesPresence = true;
 	Settings.bAllowJoinViaPresence = true;
 	Settings.bUseLobbiesIfAvailable = true;
+	Settings.bUseLobbiesVoiceChatIfAvailable = true;
 	Settings.Set(SETTING_MAPNAME, PendingHostMapName.ToString(), EOnlineDataAdvertisementType::ViaOnlineService);
 	Settings.Set(ShowDownRoomCodeKey, LobbyCode, EOnlineDataAdvertisementType::ViaOnlineService);
 	Settings.Set(ShowDownRoomNameKey, RoomName, EOnlineDataAdvertisementType::ViaOnlineService);
@@ -894,6 +993,7 @@ void UShowDownEosSubsystem::HandleCreateSessionComplete(FName SessionName, bool 
 	}
 
 	const bool bOpeningLobby = PendingSessionFlow == ESessionFlow::HostLobby;
+	EnsureVoiceChatReady();
 	OnSessionResult.Broadcast(
 		true,
 		bOpeningLobby
@@ -1228,6 +1328,7 @@ void UShowDownEosSubsystem::HandleJoinSessionComplete(
 
 	if (APlayerController* PlayerController = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
 	{
+		EnsureVoiceChatReady();
 		const bool bJoiningStartedGame = PendingSessionFlow == ESessionFlow::JoinStartedGame;
 		bInMultiplayerLobby = !bJoiningStartedGame && (PendingSessionFlow == ESessionFlow::JoinLobby || bInMultiplayerLobby);
 		bLobbyHost = false;
@@ -1332,6 +1433,7 @@ void UShowDownEosSubsystem::HandleDestroySessionComplete(FName SessionName, bool
 
 void UShowDownEosSubsystem::CompleteLobbyLeave(bool bSessionDestroyed)
 {
+	EndVoiceTransmission();
 	StopLobbyStartPolling();
 	bInMultiplayerLobby = false;
 	bLobbyHost = false;

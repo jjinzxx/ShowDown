@@ -312,6 +312,9 @@ public:
 	void ServerSetMultiplayerDisplayName(const FString& DisplayName);
 
 	UFUNCTION(Server, Reliable)
+	void ServerSetMultiplayerVoiceTalking(bool bIsTalking);
+
+	UFUNCTION(Server, Reliable)
 	void ServerRequestMultiplayerRestart();
 
 	UFUNCTION(Server, Unreliable)
@@ -400,6 +403,8 @@ private:
 	void HandleChatMessageReceived(const FString& SenderName, const FString& Message);
 	UFUNCTION()
 	void HandleVoiceStatus(bool bSuccess, const FString& Message);
+	UFUNCTION()
+	void HandleLocalVoiceTalkingChanged(bool bIsTalking);
 	AShowDownGameModeBase* ResolveGameMode() const;
 
 	UPROPERTY()
@@ -479,5 +484,6 @@ private:
 	bool bFixedCameraInvertMouseY = true;
 	bool bVoiceChatEventsBound = false;
 	bool bVoiceSubsystemEventsBound = false;
+	bool bEosVoiceEventsBound = false;
 	TWeakObjectPtr<class AShowDownGameStateBase> VoiceBoundGameState;
 };
