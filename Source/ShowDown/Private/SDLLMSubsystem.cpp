@@ -1,5 +1,6 @@
 #include "SDLLMSubsystem.h"
 
+#include "Engine/World.h"
 #include "HttpModule.h"
 #include "Interfaces/IHttpResponse.h"
 #include "JsonObjectConverter.h"
@@ -16,9 +17,15 @@ bool USDLLMSubsystem::IsConfigured() const
 	return bEnableOpenAI && !ResolveApiKey().IsEmpty();
 }
 
+bool USDLLMSubsystem::CanMakeRequests() const
+{
+	const UWorld* World = GetWorld();
+	return IsConfigured() && World && World->GetNetMode() == NM_Standalone;
+}
+
 void USDLLMSubsystem::RequestBossResponse(const FSDLLMBossContext& Context, FSDLLMBossResponseCallback Callback)
 {
-	if (!IsConfigured())
+	if (!CanMakeRequests())
 	{
 		Callback.ExecuteIfBound(false, FSDLLMBossResponse());
 		return;
@@ -62,7 +69,7 @@ void USDLLMSubsystem::RequestBossResponse(const FSDLLMBossContext& Context, FSDL
 
 void USDLLMSubsystem::RequestBossChatReply(const FSDLLMBossContext& Context, FSDLLMBossChatCallback Callback)
 {
-	if (!IsConfigured())
+	if (!CanMakeRequests())
 	{
 		Callback.ExecuteIfBound(false, FString(), FString());
 		return;
@@ -107,7 +114,7 @@ void USDLLMSubsystem::RequestBossChatReply(const FSDLLMBossContext& Context, FSD
 
 void USDLLMSubsystem::RequestBossResultReaction(const FSDLLMBossContext& Context, FSDLLMBossChatCallback Callback)
 {
-	if (!IsConfigured())
+	if (!CanMakeRequests())
 	{
 		Callback.ExecuteIfBound(false, FString(), FString());
 		return;

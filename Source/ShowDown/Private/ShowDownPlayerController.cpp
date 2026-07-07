@@ -206,9 +206,19 @@ void AShowDownPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason
 	{
 		VoiceSubsystem->OnVoiceStatus.RemoveDynamic(this, &AShowDownPlayerController::HandleVoiceStatus);
 	}
+	if (UShowDownEosSubsystem* EosSubsystem = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<UShowDownEosSubsystem>()
+		: nullptr)
+	{
+		EosSubsystem->EndVoiceTransmission();
+		EosSubsystem->OnLocalVoiceTalkingChanged.RemoveDynamic(
+			this,
+			&AShowDownPlayerController::HandleLocalVoiceTalkingChanged);
+	}
 	VoiceBoundGameState.Reset();
 	bVoiceChatEventsBound = false;
 	bVoiceSubsystemEventsBound = false;
+	bEosVoiceEventsBound = false;
 
 	SetFocusedInteractable(nullptr);
 	if (InteractionOutlinePostProcessVolume)
@@ -1968,6 +1978,27 @@ void AShowDownPlayerController::HandleVoicePushToTalkInput()
 		return;
 	}
 
+	if (IsMultiplayerGameMap(GetWorld()))
+	{
+		UShowDownEosSubsystem* EosSubsystem = GetGameInstance()
+			? GetGameInstance()->GetSubsystem<UShowDownEosSubsystem>()
+			: nullptr;
+		if (!EosSubsystem)
+		{
+			return;
+		}
+
+		if (WasInputKeyJustPressed(VoicePushToTalkKey))
+		{
+			EosSubsystem->BeginVoiceTransmission();
+		}
+		if (WasInputKeyJustReleased(VoicePushToTalkKey))
+		{
+			EosSubsystem->EndVoiceTransmission();
+		}
+		return;
+	}
+
 	UShowDownVoiceSubsystem* VoiceSubsystem = GetGameInstance()
 		? GetGameInstance()->GetSubsystem<UShowDownVoiceSubsystem>()
 		: nullptr;
@@ -2169,7 +2200,8 @@ void AShowDownPlayerController::TryBindVoiceChatEvents()
 	if (ShowDownGameState
 		&& VoiceBoundGameState.Get() == ShowDownGameState
 		&& bVoiceChatEventsBound
-		&& bVoiceSubsystemEventsBound)
+		&& bVoiceSubsystemEventsBound
+		&& (!IsMultiplayerGameMap(GetWorld()) || bEosVoiceEventsBound))
 	{
 		return;
 	}
@@ -2195,6 +2227,26 @@ void AShowDownPlayerController::TryBindVoiceChatEvents()
 			VoiceSubsystem->OnVoiceStatus.RemoveDynamic(this, &AShowDownPlayerController::HandleVoiceStatus);
 			VoiceSubsystem->OnVoiceStatus.AddDynamic(this, &AShowDownPlayerController::HandleVoiceStatus);
 			bVoiceSubsystemEventsBound = true;
+		}
+	}
+
+	if (IsMultiplayerGameMap(GetWorld()))
+	{
+		if (UShowDownEosSubsystem* EosSubsystem = GetGameInstance()
+			? GetGameInstance()->GetSubsystem<UShowDownEosSubsystem>()
+			: nullptr)
+		{
+			if (!bEosVoiceEventsBound)
+			{
+				EosSubsystem->OnLocalVoiceTalkingChanged.RemoveDynamic(
+					this,
+					&AShowDownPlayerController::HandleLocalVoiceTalkingChanged);
+				EosSubsystem->OnLocalVoiceTalkingChanged.AddDynamic(
+					this,
+					&AShowDownPlayerController::HandleLocalVoiceTalkingChanged);
+				EosSubsystem->EnsureVoiceChatReady();
+				bEosVoiceEventsBound = true;
+			}
 		}
 	}
 }
@@ -2227,6 +2279,14 @@ void AShowDownPlayerController::HandleChatMessageReceived(const FString& SenderN
 void AShowDownPlayerController::HandleVoiceStatus(bool bSuccess, const FString& Message)
 {
 	BroadcastLocalCollectorStatus(bSuccess, Message);
+}
+
+void AShowDownPlayerController::HandleLocalVoiceTalkingChanged(bool bIsTalking)
+{
+	if (IsLocalController() && IsMultiplayerGameMap(GetWorld()))
+	{
+		ServerSetMultiplayerVoiceTalking(bIsTalking);
+	}
 }
 
 void AShowDownPlayerController::SubmitLocalMultiplayerDisplayName()
@@ -2291,6 +2351,14 @@ void AShowDownPlayerController::ServerSubmitDialogueInput_Implementation(const F
 		{
 			GameMode->SubmitPlayerDialogueInputFromPlayer(TrimmedText, SenderName);
 		}
+	}
+}
+
+void AShowDownPlayerController::ServerSetMultiplayerVoiceTalking_Implementation(bool bIsTalking)
+{
+	if (AShowDownGameModeBase* GameMode = ResolveGameMode())
+	{
+		GameMode->SetMultiplayerVoiceTalking(this, bIsTalking);
 	}
 }
 

@@ -136,13 +136,13 @@ private:
 		EditAnywhere,
 		Category = "ShowDown|Single Player|Voice",
 		meta = (DisplayName = "Voice Speed", ClampMin = "0.5", ClampMax = "2.0", UIMin = "0.5", UIMax = "2.0"))
-	float SinglePlayerVoiceSpeed = 1.0f;
+	float SinglePlayerVoiceSpeed = 1.2f;
 
 	UPROPERTY(
 		EditAnywhere,
 		Category = "ShowDown|Single Player|Voice",
 		meta = (DisplayName = "Voice Pitch", ClampMin = "0.5", ClampMax = "2.0", UIMin = "0.5", UIMax = "2.0"))
-	float SinglePlayerVoicePitch = 1.0f;
+	float SinglePlayerVoicePitch = 1.25f;
 
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Developer")
 	bool bDeveloperAutoStartSinglePlayer = true;

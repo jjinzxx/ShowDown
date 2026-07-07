@@ -45,7 +45,10 @@ public:
 	FString TTSModel = TEXT("gpt-4o-mini-tts");
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice")
-	FString TTSVoice = TEXT("ash");
+	FString TTSVoice = TEXT("echo");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice", meta = (MultiLine = "true"))
+	FString TTSInstructions = TEXT("Identity: A robot. Affect: Monotone, mechanical, and neutral, reflecting the robotic nature of the customer service agent. Tone: Efficient, direct, and formal, with a focus on delivering information clearly and without emotion. Emotion: Neutral and impersonal, with no emotional inflection, as the robot voice is focused purely on functionality. Pauses: Brief and purposeful, allowing for processing and separating key pieces of information, such as confirming the return and refund details. Pronunciation: Clear, precise, and consistent, with each word spoken distinctly to ensure the customer can easily follow the automated process.");
 
 	UPROPERTY(
 		EditAnywhere,
@@ -53,7 +56,7 @@ public:
 		Config,
 		Category = "ShowDown|Voice",
 		meta = (DisplayName = "Voice Speed", ClampMin = "0.5", ClampMax = "2.0", UIMin = "0.5", UIMax = "2.0"))
-	float TTSPlaybackSpeed = 1.0f;
+	float TTSPlaybackSpeed = 1.2f;
 
 	UPROPERTY(
 		EditAnywhere,
@@ -61,7 +64,7 @@ public:
 		Config,
 		Category = "ShowDown|Voice",
 		meta = (DisplayName = "Voice Pitch", ClampMin = "0.5", ClampMax = "2.0", UIMin = "0.5", UIMax = "2.0"))
-	float TTSPlaybackPitch = 1.0f;
+	float TTSPlaybackPitch = 1.25f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice")
 	FString TranscriptionLanguage = TEXT("ko");

@@ -8,12 +8,20 @@
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "ShowDownEosSubsystem.generated.h"
 
+class IVoiceChatUser;
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	FOnShowDownEosResult,
 	bool,
 	bSuccess,
 	const FString&,
 	Message
+);
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
+	FOnShowDownLocalVoiceTalkingChanged,
+	bool,
+	bIsTalking
 );
 
 USTRUCT(BlueprintType)
@@ -61,6 +69,9 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|EOS")
 	FOnShowDownPublicRoomsUpdated OnPublicRoomsUpdated;
+
+	UPROPERTY(BlueprintAssignable, Category = "ShowDown|EOS|Voice")
+	FOnShowDownLocalVoiceTalkingChanged OnLocalVoiceTalkingChanged;
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|EOS")
 	bool IsEosLoggedIn() const;
@@ -116,6 +127,10 @@ public:
 
 	int32 GetExpectedLobbyPlayerCount() const { return ExpectedLobbyPlayerCount; }
 
+	bool EnsureVoiceChatReady();
+	bool BeginVoiceTransmission();
+	void EndVoiceTransmission();
+
 private:
 	enum class ESessionFlow
 	{
@@ -152,6 +167,10 @@ private:
 	bool bInMultiplayerLobby = false;
 	bool bLobbyHost = false;
 	bool bPendingLobbyIsPublic = true;
+	IVoiceChatUser* VoiceChatUser = nullptr;
+	FDelegateHandle VoiceTalkingUpdatedDelegateHandle;
+	bool bLocalVoiceTalking = false;
+	bool bVoiceTransmissionRequested = false;
 
 	class IOnlineSubsystem* GetEosSubsystem() const;
 	IOnlineIdentityPtr GetIdentityInterface() const;
@@ -171,4 +190,6 @@ private:
 	void HostLobbyWithVisibility(FName LobbyMapName, FName GameMapName, bool bPublicRoom);
 	void ClearOnlineDelegateHandles();
 	void ClearTransientSearchState(bool bClearPublicRooms);
+	void UnbindVoiceChat();
+	void HandleVoicePlayerTalkingUpdated(const FString& ChannelName, const FString& PlayerName, bool bIsTalking);
 };
