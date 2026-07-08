@@ -264,7 +264,7 @@ AShowDownGameModeBase::AShowDownGameModeBase()
 	PlayerStateClass = ASDPlayerState::StaticClass();
 	PlayerControllerClass = AShowDownPlayerController::StaticClass();
 	DefaultPawnClass = nullptr;
-	SpawnCollisionHandlingMethod = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+	SpawnCollisionHandlingMethod = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	bUseSeamlessTravel = true;
 	CardClass = ACard::StaticClass();
 
@@ -3550,7 +3550,7 @@ void AShowDownGameModeBase::EnsureMultiplayerPawns()
 		if (APlayerPawn* ExistingPawn = Cast<APlayerPawn>(PlayerController->GetPawn()))
 		{
 			ExistingPawn->SetOwner(PlayerController);
-			ExistingPawn->SetActorTransform(SpawnTransform);
+			ExistingPawn->SetActorTransform(SpawnTransform, false, nullptr, ETeleportType::TeleportPhysics);
 			PlayerController->SetControlRotation(GameplayViewRotation);
 			if (AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(PlayerController))
 			{
@@ -3578,7 +3578,7 @@ void AShowDownGameModeBase::EnsureMultiplayerPawns()
 
 		FActorSpawnParameters SpawnParams;
 		SpawnParams.Owner = PlayerController;
-		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
 		APlayerPawn* SpawnedPawn = World->SpawnActor<APlayerPawn>(
 			APlayerPawn::StaticClass(),

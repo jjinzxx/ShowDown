@@ -102,6 +102,7 @@ AShowDownCharacter::AShowDownCharacter()
 	MovementComponent->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
 	MovementComponent->MaxWalkSpeed = 240.0f;
 	MovementComponent->bEnablePhysicsInteraction = false;
+	MovementComponent->DisableMovement();
 }
 
 void AShowDownCharacter::PostInitializeComponents()
@@ -881,12 +882,12 @@ void AShowDownCharacter::StopRagdoll()
 	GetMesh()->SetSimulatePhysics(false);
 	GetMesh()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	GetMesh()->SetRelativeLocationAndRotation(BaseMeshRelativeLocation, BaseMeshRelativeRotation);
-	GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	ApplyPresentationCollisionSettings();
 
 	if (UCharacterMovementComponent* MovementComponent = GetCharacterMovement())
 	{
-		MovementComponent->SetMovementMode(MOVE_Walking);
+		MovementComponent->DisableMovement();
 	}
 
 	bRagdollActive = false;
@@ -1098,7 +1099,7 @@ void AShowDownCharacter::ApplyCharacterSceneActive()
 
 	if (UCapsuleComponent* Capsule = GetCapsuleComponent())
 	{
-		Capsule->SetCollisionEnabled(bActive ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
+		Capsule->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		ApplyPresentationCollisionSettings();
 	}
 
@@ -1121,14 +1122,7 @@ void AShowDownCharacter::ApplyCharacterSceneActive()
 
 	if (UCharacterMovementComponent* MovementComponent = GetCharacterMovement())
 	{
-		if (bActive && !bRagdollActive)
-		{
-			MovementComponent->SetMovementMode(MOVE_Walking);
-		}
-		else if (!bActive)
-		{
-			MovementComponent->DisableMovement();
-		}
+		MovementComponent->DisableMovement();
 	}
 
 	RefreshNameTag();
@@ -1143,7 +1137,8 @@ void AShowDownCharacter::ApplyPresentationCollisionSettings()
 	}
 
 	Capsule->SetCollisionObjectType(ECC_Pawn);
-	Capsule->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+	Capsule->SetCollisionResponseToAllChannels(ECR_Ignore);
+	Capsule->SetGenerateOverlapEvents(false);
 }
 
 void AShowDownCharacter::RefreshNameTag()
