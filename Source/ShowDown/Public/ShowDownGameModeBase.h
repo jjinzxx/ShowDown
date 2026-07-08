@@ -30,6 +30,7 @@ class AController;
 class APlayerController;
 class ASDPlayerState;
 class ALevelSequenceActor;
+class ASDBetBulletPresentationActor;
 class ULevelSequence;
 class ULevelSequencePlayer;
 class USceneComponent;
@@ -248,6 +249,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation", meta = (ClampMin = "0.0"))
 	float RevealAutoAdvanceSeconds = 0.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Bullets")
+	bool bUseBetBulletPresentation = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Bullets")
+	TSubclassOf<ASDBetBulletPresentationActor> BetBulletPresentationClass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Bullets", meta = (ClampMin = "0.0"))
+	float BetBulletLaneDistanceFromCenter = 168.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Bullets")
+	float BetBulletLaneHeightOffset = 58.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal")
 	bool bUseCardRevealPresentation = true;
 
@@ -408,11 +421,26 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<ASDSelfShotGunActor> ActiveSelfShotGunActor = nullptr;
+	UPROPERTY()
+	TObjectPtr<ASDBetBulletPresentationActor> BetBulletPresentationActor = nullptr;
 
 	bool bSelfShotGunPresentationInProgress = false;
 	bool bPendingSelfShotRouletteResult = false;
 	bool bPendingSelfShotLiveRound = false;
 	EShowDownSide PendingSelfShotTargetSide = EShowDownSide::Player;
+	int32 BetBulletPresentationRevision = 0;
+	bool bHasBetBulletAction = false;
+	bool bBetBulletActionIsMultiplayer = false;
+	EShowDownSide BetBulletActionSide = EShowDownSide::Player;
+	EShowDownPlayerSlot BetBulletActionSlot = EShowDownPlayerSlot::None;
+	EShowDownBetAction BetBulletAction = EShowDownBetAction::Check;
+	int32 BetBulletActionPreviousBet = 0;
+	int32 BetBulletActionTargetBet = 0;
+	bool bHasBetBulletRouletteTarget = false;
+	bool bBetBulletRouletteTargetIsMultiplayer = false;
+	EShowDownSide BetBulletRouletteTargetSide = EShowDownSide::Player;
+	EShowDownPlayerSlot BetBulletRouletteTargetSlot = EShowDownPlayerSlot::None;
+	int32 BetBulletRouletteBulletCount = 0;
 
 	UPROPERTY()
 	TObjectPtr<ULevelSequencePlayer> ActiveSinglePlayerIntroSequencePlayer = nullptr;
@@ -475,6 +503,20 @@ private:
 	void ResolveFold(EShowDownSide FoldedSide);
 	void ContinueRoundAfterReveal(EShowDownRoundResult Result);
 	void ContinueFoldAfterReveal(EShowDownSide FoldedSide, int32 LoadCount);
+	void ClearBetBulletPresentation();
+	void RefreshBetBulletPresentation(const FString& StatusText);
+	ASDBetBulletPresentationActor* EnsureBetBulletPresentationActor();
+	FTransform BuildBetBulletLaneTransformForSide(EShowDownSide Side) const;
+	FTransform BuildBetBulletLaneTransformForPlayer(const ASDPlayerState* Player) const;
+	FTransform BuildBetBulletLaneTransformFromLocation(const FVector& SourceLocation, int32 FallbackOrderIndex) const;
+	FString BuildSingleBetBulletStatusText(EShowDownSide TurnSide) const;
+	FString BuildMultiplayerBetBulletStatusText(const ASDPlayerState* TurnPlayer) const;
+	void RecordSingleBetBulletAction(EShowDownSide Side, EShowDownBetAction Action, int32 PreviousBet, int32 TargetBet);
+	void RecordMultiplayerBetBulletAction(ASDPlayerState* Player, EShowDownBetAction Action, int32 PreviousBet, int32 TargetBet);
+	void MarkSingleBetBulletRouletteTarget(EShowDownSide TargetSide, int32 BulletCount);
+	void MarkMultiplayerBetBulletRouletteTarget(ASDPlayerState* TargetPlayer, int32 BulletCount);
+	void ClearBetBulletTransientState();
+	FString BuildBetBulletActionText(EShowDownBetAction Action, int32 PreviousBet, int32 TargetBet) const;
 	float PlaySinglePlayerCardRevealPresentation();
 	float PlayMultiplayerCardRevealPresentation(const TArray<ASDPlayerState*>& RevealedPlayers);
 	float PlayCardRevealPresentation(const TArray<ACard*>& Cards, const FVector& FocusLocation);

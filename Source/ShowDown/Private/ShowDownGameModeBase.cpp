@@ -21,6 +21,7 @@
 #include "LevelSequencePlayer.h"
 #include "MovieSceneSequencePlaybackSettings.h"
 #include "PlayerPawn.h"
+#include "Presentation/SDBetBulletPresentationActor.h"
 #include "Presentation/SDSelfShotGunActor.h"
 #include "SDPlayerSeat.h"
 #include "SDPlayerState.h"
@@ -536,6 +537,7 @@ void AShowDownGameModeBase::ResetForHubReturn()
 	GetWorldTimerManager().ClearTimer(RevealDelayHandle);
 	GetWorldTimerManager().ClearTimer(CollectorActionPresentationTimerHandle);
 	ClearCardRevealPresentationTimers();
+	ClearBetBulletPresentation();
 	if (ActiveSelfShotGunActor)
 	{
 		ActiveSelfShotGunActor->OnGunPresentationFinished.RemoveDynamic(
@@ -1820,6 +1822,11 @@ void AShowDownGameModeBase::StartBettingPhase()
 			CurrentRoundFirstSide,
 			EShowDownPlayerSlot::Player1);
 	}
+	ClearBetBulletTransientState();
+	RefreshBetBulletPresentation(FString::Printf(
+		TEXT("BASE BET %d | %s TURN"),
+		StageRule->MinimumBet,
+		CurrentRoundFirstSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector")));
 	ShowEventDebugMessage(FString::Printf(TEXT("베팅 시작: 기본 %d발"), StageRule->MinimumBet));
 
 	UE_LOG(LogTemp, Log, TEXT("Betting phase started. Stage %d, MinimumBet %d. Q=Check/Call, 1~5=Raise extra bullets, R=Fold"),
@@ -1845,6 +1852,7 @@ void AShowDownGameModeBase::PlayerCheck()
 	}
 
 	const int32 CurrentBet = BettingSystem->GetCurrentBet();
+	const int32 PreviousPlayerBet = PlayerState.CurrentBet;
 	if (CurrentBet > PlayerState.CurrentBet)
 	{
 		BettingSystem->Call(EShowDownSide::Player);
@@ -1861,6 +1869,8 @@ void AShowDownGameModeBase::PlayerCheck()
 				EShowDownPlayerSlot::None);
 		}
 		BroadcastBetActionCommitted(EShowDownSide::Player, EShowDownBetAction::Call, PlayerState.CurrentBet);
+		RecordSingleBetBulletAction(EShowDownSide::Player, EShowDownBetAction::Call, PreviousPlayerBet, PlayerState.CurrentBet);
+		RefreshBetBulletPresentation(TEXT("Player CALL | reveal ready"));
 		RecordCurrentRoundAction(FString::Printf(TEXT("Player called to %d."), PlayerState.CurrentBet));
 		ShowEventDebugMessage(FString::Printf(TEXT("플레이어 콜: %d발"), PlayerState.CurrentBet));
 		UE_LOG(LogTemp, Log, TEXT("Player Call %d"), CurrentBet);
@@ -1879,6 +1889,7 @@ void AShowDownGameModeBase::PlayerCheck()
 		ShowDownGameState->OnBetChanged.Broadcast(EShowDownSide::Player, PlayerState.CurrentBet);
 	}
 	BroadcastBetActionCommitted(EShowDownSide::Player, EShowDownBetAction::Check, PlayerState.CurrentBet);
+	RecordSingleBetBulletAction(EShowDownSide::Player, EShowDownBetAction::Check, PreviousPlayerBet, PlayerState.CurrentBet);
 	RecordCurrentRoundAction(FString::Printf(TEXT("Player checked at %d."), PlayerState.CurrentBet));
 	ShowEventDebugMessage(FString::Printf(TEXT("플레이어 체크: %d발"), PlayerState.CurrentBet));
 	UE_LOG(LogTemp, Log, TEXT("Player Check"));
@@ -1894,6 +1905,7 @@ void AShowDownGameModeBase::PlayerCheck()
 				EShowDownSide::Player,
 				EShowDownPlayerSlot::None);
 		}
+		RefreshBetBulletPresentation(TEXT("Player CHECK | reveal ready"));
 		PlayCollectorActionPresentationThen([this]()
 		{
 			FinishBettingAndResolveRound();
@@ -1909,6 +1921,7 @@ void AShowDownGameModeBase::PlayerCheck()
 			EShowDownSide::Collector,
 			EShowDownPlayerSlot::Player1);
 	}
+	RefreshBetBulletPresentation(TEXT("Player CHECK | Collector turn"));
 	PlayCollectorActionPresentationThen([this]()
 	{
 		ResolveCollectorBetResponse();
@@ -1941,6 +1954,7 @@ void AShowDownGameModeBase::PlayerRaiseTo(int32 BulletCount)
 	const int32 CurrentBet = BettingSystem->GetCurrentBet();
 	const int32 RequestedBet = BulletCount < 0 ? CurrentBet + FMath::Abs(BulletCount) : BulletCount;
 	const int32 NewBet = FMath::Clamp(RequestedBet, 1, 6);
+	const int32 PreviousPlayerBet = PlayerState.CurrentBet;
 
 	if (BettingSystem->RaiseTo(EShowDownSide::Player, NewBet))
 	{
@@ -1959,6 +1973,8 @@ void AShowDownGameModeBase::PlayerRaiseTo(int32 BulletCount)
 				EShowDownPlayerSlot::Player1);
 		}
 		BroadcastBetActionCommitted(EShowDownSide::Player, EShowDownBetAction::Raise, PlayerState.CurrentBet);
+		RecordSingleBetBulletAction(EShowDownSide::Player, EShowDownBetAction::Raise, PreviousPlayerBet, PlayerState.CurrentBet);
+		RefreshBetBulletPresentation(TEXT("Player RAISE | Collector response"));
 		RecordCurrentRoundAction(FString::Printf(TEXT("Player raised to %d."), PlayerState.CurrentBet));
 		ShowEventDebugMessage(FString::Printf(TEXT("플레이어 레이즈: %d발"), PlayerState.CurrentBet));
 		UE_LOG(LogTemp, Log, TEXT("Player Raise to %d"), NewBet);
@@ -1987,6 +2003,7 @@ void AShowDownGameModeBase::PlayerFold()
 		return;
 	}
 
+	const int32 PreviousPlayerBet = PlayerState.CurrentBet;
 	BettingSystem->Fold(EShowDownSide::Player);
 	bPlayerHasActedInBetting = true;
 
@@ -2001,6 +2018,8 @@ void AShowDownGameModeBase::PlayerFold()
 			EShowDownPlayerSlot::None);
 	}
 	BroadcastBetActionCommitted(EShowDownSide::Player, EShowDownBetAction::Fold, PlayerState.CurrentBet);
+	RecordSingleBetBulletAction(EShowDownSide::Player, EShowDownBetAction::Fold, PreviousPlayerBet, PlayerState.CurrentBet);
+	RefreshBetBulletPresentation(TEXT("Player FOLD | reveal"));
 	RecordCurrentRoundAction(FString::Printf(TEXT("Player folded at %d."), PlayerState.CurrentBet));
 	ShowEventDebugMessage(FString::Printf(TEXT("플레이어 폴드: %d발"), PlayerState.CurrentBet));
 	UE_LOG(LogTemp, Log, TEXT("Player Fold"));
@@ -2404,6 +2423,7 @@ void AShowDownGameModeBase::ExecuteCollectorBetDecision(const FCollectorBetDecis
 	}
 
 	const int32 CurrentBet = BettingSystem->GetCurrentBet();
+	const int32 PreviousCollectorBet = CollectorState.CurrentBet;
 	const EShowDownBetAction CollectorAction = CollectorDecision.Action;
 	bCollectorHasActedInBetting = true;
 
@@ -2415,9 +2435,10 @@ void AShowDownGameModeBase::ExecuteCollectorBetDecision(const FCollectorBetDecis
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 		{
 			ShowDownGameState->OnBetChanged.Broadcast(EShowDownSide::Collector, CollectorState.CurrentBet);
-		}
-		BroadcastBetActionCommitted(EShowDownSide::Collector, EShowDownBetAction::Check, CollectorState.CurrentBet);
-		RecordCurrentRoundAction(FString::Printf(TEXT("Collector checked at %d."), CollectorState.CurrentBet));
+			}
+			BroadcastBetActionCommitted(EShowDownSide::Collector, EShowDownBetAction::Check, CollectorState.CurrentBet);
+			RecordSingleBetBulletAction(EShowDownSide::Collector, EShowDownBetAction::Check, PreviousCollectorBet, CollectorState.CurrentBet);
+			RecordCurrentRoundAction(FString::Printf(TEXT("Collector checked at %d."), CollectorState.CurrentBet));
 		ShowEventDebugMessage(FString::Printf(TEXT("콜렉터 체크: %d발"), CollectorState.CurrentBet));
 		UE_LOG(LogTemp, Log, TEXT("Collector Check"));
 		if (bPlayerHasActedInBetting)
@@ -2428,10 +2449,11 @@ void AShowDownGameModeBase::ExecuteCollectorBetDecision(const FCollectorBetDecis
 				ShowDownGameState->SetNameTagSingleRoundStatus(
 					PlayerState.CurrentBet,
 					CollectorState.CurrentBet,
-					EShowDownSide::Collector,
-					EShowDownPlayerSlot::None);
-			}
-			PlayCollectorActionPresentationThen([this]()
+						EShowDownSide::Collector,
+						EShowDownPlayerSlot::None);
+				}
+				RefreshBetBulletPresentation(TEXT("Collector CHECK | reveal ready"));
+				PlayCollectorActionPresentationThen([this]()
 			{
 				FinishBettingAndResolveRound();
 			});
@@ -2444,10 +2466,11 @@ void AShowDownGameModeBase::ExecuteCollectorBetDecision(const FCollectorBetDecis
 				ShowDownGameState->SetNameTagSingleRoundStatus(
 					PlayerState.CurrentBet,
 					CollectorState.CurrentBet,
-					EShowDownSide::Player,
-					EShowDownPlayerSlot::Player1);
-			}
-			PlayCollectorActionPresentation();
+						EShowDownSide::Player,
+						EShowDownPlayerSlot::Player1);
+				}
+				RefreshBetBulletPresentation(TEXT("Collector CHECK | Player turn"));
+				PlayCollectorActionPresentation();
 		}
 		break;
 
@@ -2463,9 +2486,11 @@ void AShowDownGameModeBase::ExecuteCollectorBetDecision(const FCollectorBetDecis
 				CollectorState.CurrentBet,
 				EShowDownSide::Collector,
 				EShowDownPlayerSlot::None);
-		}
-		BroadcastBetActionCommitted(EShowDownSide::Collector, EShowDownBetAction::Call, CollectorState.CurrentBet);
-		RecordCurrentRoundAction(FString::Printf(TEXT("Collector called to %d."), CollectorState.CurrentBet));
+			}
+			BroadcastBetActionCommitted(EShowDownSide::Collector, EShowDownBetAction::Call, CollectorState.CurrentBet);
+			RecordSingleBetBulletAction(EShowDownSide::Collector, EShowDownBetAction::Call, PreviousCollectorBet, CollectorState.CurrentBet);
+			RefreshBetBulletPresentation(TEXT("Collector CALL | reveal ready"));
+			RecordCurrentRoundAction(FString::Printf(TEXT("Collector called to %d."), CollectorState.CurrentBet));
 		ShowEventDebugMessage(FString::Printf(TEXT("콜렉터 콜: %d발"), CollectorState.CurrentBet));
 		UE_LOG(LogTemp, Log, TEXT("Collector Call %d"), CurrentBet);
 		PlayCollectorActionPresentationThen([this]()
@@ -2491,9 +2516,11 @@ void AShowDownGameModeBase::ExecuteCollectorBetDecision(const FCollectorBetDecis
 						CollectorState.CurrentBet,
 						EShowDownSide::Player,
 						EShowDownPlayerSlot::Player1);
-				}
-				BroadcastBetActionCommitted(EShowDownSide::Collector, EShowDownBetAction::Raise, CollectorState.CurrentBet);
-				RecordCurrentRoundAction(FString::Printf(TEXT("Collector raised to %d."), CollectorState.CurrentBet));
+					}
+					BroadcastBetActionCommitted(EShowDownSide::Collector, EShowDownBetAction::Raise, CollectorState.CurrentBet);
+					RecordSingleBetBulletAction(EShowDownSide::Collector, EShowDownBetAction::Raise, PreviousCollectorBet, CollectorState.CurrentBet);
+					RefreshBetBulletPresentation(TEXT("Collector RAISE | Player response"));
+					RecordCurrentRoundAction(FString::Printf(TEXT("Collector raised to %d."), CollectorState.CurrentBet));
 				ShowEventDebugMessage(FString::Printf(TEXT("콜렉터 레이즈: %d발"), CollectorState.CurrentBet));
 				UE_LOG(LogTemp, Log, TEXT("Collector Raise to %d"), NewBet);
 				UE_LOG(LogTemp, Log, TEXT("Player needs to respond."));
@@ -2513,9 +2540,11 @@ void AShowDownGameModeBase::ExecuteCollectorBetDecision(const FCollectorBetDecis
 				CollectorState.CurrentBet,
 				EShowDownSide::Collector,
 				EShowDownPlayerSlot::None);
-		}
-		BroadcastBetActionCommitted(EShowDownSide::Collector, EShowDownBetAction::Fold, CollectorState.CurrentBet);
-		RecordCurrentRoundAction(FString::Printf(TEXT("Collector folded at %d."), CollectorState.CurrentBet));
+			}
+			BroadcastBetActionCommitted(EShowDownSide::Collector, EShowDownBetAction::Fold, CollectorState.CurrentBet);
+			RecordSingleBetBulletAction(EShowDownSide::Collector, EShowDownBetAction::Fold, PreviousCollectorBet, CollectorState.CurrentBet);
+			RefreshBetBulletPresentation(TEXT("Collector FOLD | reveal"));
+			RecordCurrentRoundAction(FString::Printf(TEXT("Collector folded at %d."), CollectorState.CurrentBet));
 		ShowEventDebugMessage(FString::Printf(TEXT("콜렉터 폴드: %d발"), CollectorState.CurrentBet));
 		UE_LOG(LogTemp, Log, TEXT("Collector Fold"));
 		PlayCollectorActionPresentationThen([this]()
@@ -2968,6 +2997,396 @@ void AShowDownGameModeBase::ContinueFoldAfterReveal(EShowDownSide FoldedSide, in
 	});
 }
 
+ASDBetBulletPresentationActor* AShowDownGameModeBase::EnsureBetBulletPresentationActor()
+{
+	if (!bUseBetBulletPresentation || !HasAuthority())
+	{
+		return nullptr;
+	}
+
+	if (IsValid(BetBulletPresentationActor))
+	{
+		return BetBulletPresentationActor;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	UClass* PresentationClass = BetBulletPresentationClass
+		? BetBulletPresentationClass.Get()
+		: ASDBetBulletPresentationActor::StaticClass();
+	if (!PresentationClass)
+	{
+		return nullptr;
+	}
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.Owner = this;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	BetBulletPresentationActor = World->SpawnActor<ASDBetBulletPresentationActor>(
+		PresentationClass,
+		FTransform::Identity,
+		SpawnParams);
+	return BetBulletPresentationActor;
+}
+
+void AShowDownGameModeBase::ClearBetBulletPresentation()
+{
+	ClearBetBulletTransientState();
+	if (ASDBetBulletPresentationActor* PresentationActor = EnsureBetBulletPresentationActor())
+	{
+		FSDBetBulletPresentationState EmptyState;
+		EmptyState.Revision = BetBulletPresentationRevision;
+		PresentationActor->SetPresentationState(EmptyState);
+	}
+}
+
+void AShowDownGameModeBase::RefreshBetBulletPresentation(const FString& StatusText)
+{
+	if (!bUseBetBulletPresentation)
+	{
+		return;
+	}
+
+	ASDBetBulletPresentationActor* PresentationActor = EnsureBetBulletPresentationActor();
+	if (!PresentationActor)
+	{
+		return;
+	}
+
+	FSDBetBulletPresentationState NewState;
+	NewState.TableBet = BettingSystem ? BettingSystem->GetCurrentBet() : 0;
+	NewState.StatusText = StatusText;
+	NewState.Revision = BetBulletPresentationRevision;
+
+	if (bMultiplayerMatchStarted)
+	{
+		NewState.StatusText = NewState.StatusText.IsEmpty()
+			? BuildMultiplayerBetBulletStatusText(MultiplayerCurrentBetter)
+			: NewState.StatusText;
+
+		TArray<ASDPlayerState*> OrderedPlayers;
+		for (ASDPlayerState* Player : MultiplayerPlayers)
+		{
+			if (Player)
+			{
+				OrderedPlayers.Add(Player);
+			}
+		}
+		OrderedPlayers.Sort(SortByMultiplayerTurnOrder);
+
+		for (ASDPlayerState* Player : OrderedPlayers)
+		{
+			if (!Player)
+			{
+				continue;
+			}
+
+			FSDBetBulletLaneState LaneState;
+			LaneState.Slot = Player->ShowDownSlot;
+			LaneState.DisplayName = Player->GetPlayerName().IsEmpty()
+				? FString::Printf(TEXT("Player%d"), static_cast<int32>(Player->ShowDownSlot))
+				: Player->GetPlayerName();
+			LaneState.BulletCount = FMath::Clamp(Player->CurrentBet, 0, 6);
+			LaneState.bFolded = MultiplayerFoldedPlayers.Contains(Player);
+			LaneState.bCurrentTurn = bBettingPhase
+				&& !bMultiplayerRoundResolving
+				&& MultiplayerCurrentBetter == Player
+				&& !LaneState.bFolded
+				&& !bHasBetBulletRouletteTarget;
+
+			if (bHasBetBulletAction
+				&& bBetBulletActionIsMultiplayer
+				&& BetBulletActionSlot == Player->ShowDownSlot)
+			{
+				LaneState.ActionText = BuildBetBulletActionText(
+					BetBulletAction,
+					BetBulletActionPreviousBet,
+					BetBulletActionTargetBet);
+				LaneState.ActionRevision = BetBulletPresentationRevision;
+			}
+
+			if (bHasBetBulletRouletteTarget
+				&& bBetBulletRouletteTargetIsMultiplayer
+				&& BetBulletRouletteTargetSlot == Player->ShowDownSlot)
+			{
+				LaneState.bRouletteTarget = true;
+				LaneState.RouletteBulletCount = BetBulletRouletteBulletCount;
+				LaneState.ActionRevision = BetBulletPresentationRevision;
+			}
+
+			const FTransform LaneTransform = BuildBetBulletLaneTransformForPlayer(Player);
+			LaneState.WorldLocation = LaneTransform.GetLocation();
+			LaneState.WorldRotation = LaneTransform.GetRotation().Rotator();
+			NewState.Lanes.Add(LaneState);
+		}
+	}
+	else
+	{
+		NewState.StatusText = NewState.StatusText.IsEmpty()
+			? BuildSingleBetBulletStatusText(CurrentRoundFirstSide)
+			: NewState.StatusText;
+		NewState.TableBet = FMath::Max(PlayerState.CurrentBet, CollectorState.CurrentBet);
+
+		const EShowDownSide Sides[] = { EShowDownSide::Player, EShowDownSide::Collector };
+		for (EShowDownSide Side : Sides)
+		{
+			const FShowDownParticipantState& ParticipantState = Side == EShowDownSide::Player
+				? PlayerState
+				: CollectorState;
+
+			FSDBetBulletLaneState LaneState;
+			LaneState.Slot = Side == EShowDownSide::Player ? EShowDownPlayerSlot::Player1 : EShowDownPlayerSlot::None;
+			LaneState.DisplayName = Side == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector");
+			LaneState.BulletCount = FMath::Clamp(ParticipantState.CurrentBet, 0, 6);
+			LaneState.bCurrentTurn = bBettingPhase
+				&& !bHasBetBulletRouletteTarget
+				&& GetShowDownGameState()
+				&& GetShowDownGameState()->NameTagTurnSide == Side
+				&& GetShowDownGameState()->NameTagTurnSlot != EShowDownPlayerSlot::None;
+
+			if (bHasBetBulletAction
+				&& !bBetBulletActionIsMultiplayer
+				&& BetBulletActionSide == Side)
+			{
+				LaneState.ActionText = BuildBetBulletActionText(
+					BetBulletAction,
+					BetBulletActionPreviousBet,
+					BetBulletActionTargetBet);
+				LaneState.ActionRevision = BetBulletPresentationRevision;
+				LaneState.bFolded = BetBulletAction == EShowDownBetAction::Fold;
+			}
+
+			if (bHasBetBulletRouletteTarget
+				&& !bBetBulletRouletteTargetIsMultiplayer
+				&& BetBulletRouletteTargetSide == Side)
+			{
+				LaneState.bRouletteTarget = true;
+				LaneState.RouletteBulletCount = BetBulletRouletteBulletCount;
+				LaneState.ActionRevision = BetBulletPresentationRevision;
+			}
+
+			const FTransform LaneTransform = BuildBetBulletLaneTransformForSide(Side);
+			LaneState.WorldLocation = LaneTransform.GetLocation();
+			LaneState.WorldRotation = LaneTransform.GetRotation().Rotator();
+			NewState.Lanes.Add(LaneState);
+		}
+	}
+
+	PresentationActor->SetPresentationState(NewState);
+}
+
+FTransform AShowDownGameModeBase::BuildBetBulletLaneTransformForSide(EShowDownSide Side) const
+{
+	if (const USceneComponent* HeadSlot = GetHeadSlotForSide(Side))
+	{
+		return BuildBetBulletLaneTransformFromLocation(
+			HeadSlot->GetComponentLocation(),
+			Side == EShowDownSide::Player ? 0 : 2);
+	}
+
+	if (const USceneComponent* HandSlot = GetHandSlotForSide(Side))
+	{
+		return BuildBetBulletLaneTransformFromLocation(
+			HandSlot->GetComponentLocation(),
+			Side == EShowDownSide::Player ? 0 : 2);
+	}
+
+	return BuildBetBulletLaneTransformFromLocation(
+		ResolveSingleTableCenter(GetWorld()),
+		Side == EShowDownSide::Player ? 0 : 2);
+}
+
+FTransform AShowDownGameModeBase::BuildBetBulletLaneTransformForPlayer(const ASDPlayerState* Player) const
+{
+	if (Player)
+	{
+		if (const USceneComponent* HeadSlot = GetHeadSlotForPlayerState(const_cast<ASDPlayerState*>(Player)))
+		{
+			return BuildBetBulletLaneTransformFromLocation(
+				HeadSlot->GetComponentLocation(),
+				GetMultiplayerTurnOrderIndex(Player->ShowDownSlot));
+		}
+
+		if (const USceneComponent* HandSlot = GetHandSlotForPlayerState(const_cast<ASDPlayerState*>(Player)))
+		{
+			return BuildBetBulletLaneTransformFromLocation(
+				HandSlot->GetComponentLocation(),
+				GetMultiplayerTurnOrderIndex(Player->ShowDownSlot));
+		}
+	}
+
+	return BuildBetBulletLaneTransformFromLocation(
+		ResolveSingleTableCenter(GetWorld()),
+		GetMultiplayerTurnOrderIndex(Player ? Player->ShowDownSlot : EShowDownPlayerSlot::None));
+}
+
+FTransform AShowDownGameModeBase::BuildBetBulletLaneTransformFromLocation(
+	const FVector& SourceLocation,
+	int32 FallbackOrderIndex) const
+{
+	const FVector TableCenter = ResolveSingleTableCenter(GetWorld());
+	FVector Direction = SourceLocation - TableCenter;
+	Direction.Z = 0.0f;
+
+	if (Direction.IsNearlyZero())
+	{
+		static const float FallbackYaws[] = { -90.0f, 0.0f, 90.0f, 180.0f };
+		const int32 FallbackIndex = FMath::Clamp(FallbackOrderIndex, 0, UE_ARRAY_COUNT(FallbackYaws) - 1);
+		Direction = FRotationMatrix(FRotator(0.0f, FallbackYaws[FallbackIndex], 0.0f)).GetUnitAxis(EAxis::X);
+	}
+	Direction.Normalize();
+
+	FVector LaneLocation = TableCenter + Direction * FMath::Max(0.0f, BetBulletLaneDistanceFromCenter);
+	LaneLocation.Z = TableCenter.Z + BetBulletLaneHeightOffset;
+
+	FVector FacingDirection = TableCenter - LaneLocation;
+	FacingDirection.Z = 0.0f;
+	if (FacingDirection.IsNearlyZero())
+	{
+		FacingDirection = -Direction;
+	}
+
+	FRotator LaneRotation = FacingDirection.Rotation();
+	LaneRotation.Pitch = 0.0f;
+	LaneRotation.Roll = 0.0f;
+	return FTransform(LaneRotation, LaneLocation);
+}
+
+FString AShowDownGameModeBase::BuildSingleBetBulletStatusText(EShowDownSide TurnSide) const
+{
+	const int32 TableBet = FMath::Max(PlayerState.CurrentBet, CollectorState.CurrentBet);
+	if (!bBettingPhase)
+	{
+		return FString::Printf(TEXT("BET DONE | TABLE %d"), TableBet);
+	}
+
+	return FString::Printf(
+		TEXT("TABLE %d | %s TURN"),
+		TableBet,
+		TurnSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"));
+}
+
+FString AShowDownGameModeBase::BuildMultiplayerBetBulletStatusText(const ASDPlayerState* TurnPlayer) const
+{
+	const int32 TableBet = BettingSystem ? BettingSystem->GetCurrentBet() : 0;
+	if (!bBettingPhase || !TurnPlayer)
+	{
+		return FString::Printf(TEXT("BET DONE | TABLE %d"), TableBet);
+	}
+
+	return FString::Printf(TEXT("TABLE %d | %s TURN"), TableBet, *TurnPlayer->GetPlayerName());
+}
+
+void AShowDownGameModeBase::RecordSingleBetBulletAction(
+	EShowDownSide Side,
+	EShowDownBetAction Action,
+	int32 PreviousBet,
+	int32 TargetBet)
+{
+	bHasBetBulletAction = true;
+	bBetBulletActionIsMultiplayer = false;
+	BetBulletActionSide = Side;
+	BetBulletActionSlot = EShowDownPlayerSlot::None;
+	BetBulletAction = Action;
+	BetBulletActionPreviousBet = PreviousBet;
+	BetBulletActionTargetBet = TargetBet;
+	bHasBetBulletRouletteTarget = false;
+	++BetBulletPresentationRevision;
+}
+
+void AShowDownGameModeBase::RecordMultiplayerBetBulletAction(
+	ASDPlayerState* Player,
+	EShowDownBetAction Action,
+	int32 PreviousBet,
+	int32 TargetBet)
+{
+	if (!Player)
+	{
+		return;
+	}
+
+	bHasBetBulletAction = true;
+	bBetBulletActionIsMultiplayer = true;
+	BetBulletActionSide = EShowDownSide::Player;
+	BetBulletActionSlot = Player->ShowDownSlot;
+	BetBulletAction = Action;
+	BetBulletActionPreviousBet = PreviousBet;
+	BetBulletActionTargetBet = TargetBet;
+	bHasBetBulletRouletteTarget = false;
+	++BetBulletPresentationRevision;
+}
+
+void AShowDownGameModeBase::MarkSingleBetBulletRouletteTarget(EShowDownSide TargetSide, int32 BulletCount)
+{
+	bHasBetBulletRouletteTarget = true;
+	bBetBulletRouletteTargetIsMultiplayer = false;
+	BetBulletRouletteTargetSide = TargetSide;
+	BetBulletRouletteTargetSlot = EShowDownPlayerSlot::None;
+	BetBulletRouletteBulletCount = FMath::Clamp(BulletCount, 0, 6);
+	++BetBulletPresentationRevision;
+}
+
+void AShowDownGameModeBase::MarkMultiplayerBetBulletRouletteTarget(ASDPlayerState* TargetPlayer, int32 BulletCount)
+{
+	if (!TargetPlayer)
+	{
+		return;
+	}
+
+	bHasBetBulletRouletteTarget = true;
+	bBetBulletRouletteTargetIsMultiplayer = true;
+	BetBulletRouletteTargetSide = EShowDownSide::Player;
+	BetBulletRouletteTargetSlot = TargetPlayer->ShowDownSlot;
+	BetBulletRouletteBulletCount = FMath::Clamp(BulletCount, 0, 6);
+	++BetBulletPresentationRevision;
+}
+
+void AShowDownGameModeBase::ClearBetBulletTransientState()
+{
+	bHasBetBulletAction = false;
+	bBetBulletActionIsMultiplayer = false;
+	BetBulletActionSide = EShowDownSide::Player;
+	BetBulletActionSlot = EShowDownPlayerSlot::None;
+	BetBulletAction = EShowDownBetAction::Check;
+	BetBulletActionPreviousBet = 0;
+	BetBulletActionTargetBet = 0;
+	bHasBetBulletRouletteTarget = false;
+	bBetBulletRouletteTargetIsMultiplayer = false;
+	BetBulletRouletteTargetSide = EShowDownSide::Player;
+	BetBulletRouletteTargetSlot = EShowDownPlayerSlot::None;
+	BetBulletRouletteBulletCount = 0;
+	++BetBulletPresentationRevision;
+}
+
+FString AShowDownGameModeBase::BuildBetBulletActionText(
+	EShowDownBetAction Action,
+	int32 PreviousBet,
+	int32 TargetBet) const
+{
+	const int32 AddedBullets = FMath::Max(0, TargetBet - PreviousBet);
+	switch (Action)
+	{
+	case EShowDownBetAction::Check:
+		return TEXT("CHECK");
+	case EShowDownBetAction::Call:
+		return AddedBullets > 0
+			? FString::Printf(TEXT("CALL +%d  -> %d"), AddedBullets, TargetBet)
+			: FString::Printf(TEXT("CALL  %d"), TargetBet);
+	case EShowDownBetAction::Raise:
+		return AddedBullets > 0
+			? FString::Printf(TEXT("RAISE +%d  -> %d"), AddedBullets, TargetBet)
+			: FString::Printf(TEXT("RAISE  %d"), TargetBet);
+	case EShowDownBetAction::Fold:
+		return TEXT("FOLD");
+	default:
+		return FString();
+	}
+}
+
 float AShowDownGameModeBase::PlaySinglePlayerCardRevealPresentation()
 {
 	TArray<ACard*> RevealCards;
@@ -3176,6 +3595,11 @@ void AShowDownGameModeBase::ApplyRouletteResult(EShowDownSide TargetSide, int32 
 			TargetSide,
 			EShowDownPlayerSlot::None);
 	}
+	MarkSingleBetBulletRouletteTarget(TargetSide, ClampedBulletCount);
+	RefreshBetBulletPresentation(FString::Printf(
+		TEXT("%s TARGET | LOAD %d"),
+		TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
+		ClampedBulletCount));
 	const bool bHit = RouletteSystem->RollRoulette(ClampedBulletCount);
 
 	UE_LOG(LogTemp, Log, TEXT("%s roulette: %d/6, %.0f%% chance, result: %s"),
@@ -3234,6 +3658,7 @@ void AShowDownGameModeBase::EndRound()
 		ShowDownGameState->SetNameTagSingleRoundStatus(0, 0, NextRoundFirstSide, EShowDownPlayerSlot::None);
 	}
 
+	ClearBetBulletPresentation();
 	ClearForeheadCards();
 
 	if (PlayerState.Lives <= 0)
@@ -4369,6 +4794,11 @@ void AShowDownGameModeBase::StartMultiplayerBetting()
 			EShowDownSide::Player,
 			MultiplayerCurrentBetter ? MultiplayerCurrentBetter->ShowDownSlot : EShowDownPlayerSlot::None);
 	}
+	ClearBetBulletTransientState();
+	RefreshBetBulletPresentation(FString::Printf(
+		TEXT("BASE BET %d | %s TURN"),
+		MinimumBet,
+		MultiplayerCurrentBetter ? *MultiplayerCurrentBetter->GetPlayerName() : TEXT("Player")));
 
 	NotifyMultiplayerStatus(FString::Printf(
 		TEXT("베팅 시작. %s부터 행동합니다. Q=체크/콜, E=레이즈, R=폴드"),
@@ -4388,6 +4818,7 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 	const int32 CurrentBet = BettingSystem
 		? BettingSystem->GetCurrentBet()
 		: SubmittingPlayer->CurrentBet;
+	const int32 PreviousSubmittingBet = SubmittingPlayer->CurrentBet;
 
 	auto FindNextActivePlayer = [this](ASDPlayerState* AfterPlayer)
 	{
@@ -4432,14 +4863,19 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 		BroadcastMultiplayerBetActionCommitted(SubmittingPlayer, CommittedAction, CurrentBet);
 		MultiplayerPlayersActed.Add(SubmittingPlayer);
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
-		{
-			ShowDownGameState->SetNameTagPlayerLoadedBulletCount(SubmittingPlayer->ShowDownSlot, SubmittingPlayer->CurrentBet);
-		}
-		if (CountActiveMultiplayerPlayers() <= 1 || AreAllActiveMultiplayerPlayersDoneBetting(CurrentBet))
-		{
-			FinishMultiplayerRoundByReveal();
-			return;
-		}
+			{
+				ShowDownGameState->SetNameTagPlayerLoadedBulletCount(SubmittingPlayer->ShowDownSlot, SubmittingPlayer->CurrentBet);
+			}
+			RecordMultiplayerBetBulletAction(SubmittingPlayer, CommittedAction, PreviousSubmittingBet, SubmittingPlayer->CurrentBet);
+			if (CountActiveMultiplayerPlayers() <= 1 || AreAllActiveMultiplayerPlayersDoneBetting(CurrentBet))
+			{
+				RefreshBetBulletPresentation(FString::Printf(
+					TEXT("%s %s | reveal ready"),
+					*SubmittingPlayer->GetPlayerName(),
+					CommittedAction == EShowDownBetAction::Call ? TEXT("CALL") : TEXT("CHECK")));
+				FinishMultiplayerRoundByReveal();
+				return;
+			}
 
 		MultiplayerCurrentBetter = FindNextActivePlayer(SubmittingPlayer);
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
@@ -4448,6 +4884,10 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 				CurrentBet,
 				EShowDownSide::Player,
 				MultiplayerCurrentBetter ? MultiplayerCurrentBetter->ShowDownSlot : EShowDownPlayerSlot::None);
+			RefreshBetBulletPresentation(FString::Printf(
+				TEXT("%s action | next: %s"),
+				*SubmittingPlayer->GetPlayerName(),
+				MultiplayerCurrentBetter ? *MultiplayerCurrentBetter->GetPlayerName() : TEXT("none")));
 		}
 		NotifyMultiplayerStatus(FString::Printf(TEXT("다음 차례: %s"),
 			MultiplayerCurrentBetter ? *MultiplayerCurrentBetter->GetPlayerName() : TEXT("없음")));
@@ -4480,23 +4920,31 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 			NewBet));
 		BroadcastMultiplayerBetActionCommitted(SubmittingPlayer, EShowDownBetAction::Raise, NewBet);
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
-		{
-			ShowDownGameState->SetNameTagPlayerLoadedBulletCount(SubmittingPlayer->ShowDownSlot, SubmittingPlayer->CurrentBet);
-		}
-		MultiplayerCurrentBetter = FindNextActivePlayer(SubmittingPlayer);
-		if (CountActiveMultiplayerPlayers() <= 1 || !MultiplayerCurrentBetter)
-		{
-			FinishMultiplayerRoundByReveal();
-			return;
-		}
+			{
+				ShowDownGameState->SetNameTagPlayerLoadedBulletCount(SubmittingPlayer->ShowDownSlot, SubmittingPlayer->CurrentBet);
+			}
+			RecordMultiplayerBetBulletAction(SubmittingPlayer, EShowDownBetAction::Raise, PreviousSubmittingBet, SubmittingPlayer->CurrentBet);
+			MultiplayerCurrentBetter = FindNextActivePlayer(SubmittingPlayer);
+			if (CountActiveMultiplayerPlayers() <= 1 || !MultiplayerCurrentBetter)
+			{
+				RefreshBetBulletPresentation(FString::Printf(
+					TEXT("%s raise | reveal ready"),
+					*SubmittingPlayer->GetPlayerName()));
+				FinishMultiplayerRoundByReveal();
+				return;
+			}
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 		{
 			ShowDownGameState->SetNameTagRoundStatus(
 				NewBet,
 				EShowDownSide::Player,
-				MultiplayerCurrentBetter ? MultiplayerCurrentBetter->ShowDownSlot : EShowDownPlayerSlot::None);
-		}
-		NotifyMultiplayerStatus(FString::Printf(
+					MultiplayerCurrentBetter ? MultiplayerCurrentBetter->ShowDownSlot : EShowDownPlayerSlot::None);
+			}
+			RefreshBetBulletPresentation(FString::Printf(
+				TEXT("%s raise | next: %s"),
+				*SubmittingPlayer->GetPlayerName(),
+				MultiplayerCurrentBetter ? *MultiplayerCurrentBetter->GetPlayerName() : TEXT("none")));
+			NotifyMultiplayerStatus(FString::Printf(
 			TEXT("%s: %d 레이즈. 다음 차례: %s"),
 			*SubmittingPlayer->GetPlayerName(),
 			NewBet,
@@ -4510,10 +4958,11 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 		BroadcastSystemChatMessage(FString::Printf(
 			TEXT("%s님이 폴드했습니다."),
 			*SubmittingPlayer->GetPlayerName()));
-		MultiplayerFoldedPlayers.Add(SubmittingPlayer);
-		BroadcastMultiplayerBetActionCommitted(SubmittingPlayer, EShowDownBetAction::Fold, SubmittingPlayer->CurrentBet);
+			MultiplayerFoldedPlayers.Add(SubmittingPlayer);
+			BroadcastMultiplayerBetActionCommitted(SubmittingPlayer, EShowDownBetAction::Fold, SubmittingPlayer->CurrentBet);
+			RecordMultiplayerBetBulletAction(SubmittingPlayer, EShowDownBetAction::Fold, PreviousSubmittingBet, SubmittingPlayer->CurrentBet);
 
-		const int32 FoldedRank = SubmittingPlayer->ForeheadCard ? SubmittingPlayer->ForeheadCard->Rank : 0;
+			const int32 FoldedRank = SubmittingPlayer->ForeheadCard ? SubmittingPlayer->ForeheadCard->Rank : 0;
 		const FShowDownStageRule* StageRule = GetCurrentStageRule();
 		const bool bSevenFoldLoadsSix = StageRule ? StageRule->bSevenFoldLoadsSix : true;
 		const int32 LoadCount = RoundResolver
@@ -4521,10 +4970,11 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 			: SubmittingPlayer->CurrentBet;
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 		{
-			ShowDownGameState->SetNameTagPlayerLoadedBulletCount(SubmittingPlayer->ShowDownSlot, SubmittingPlayer->CurrentBet);
-			ShowDownGameState->SetNameTagRoundStatus(SubmittingPlayer->CurrentBet, EShowDownSide::Player, EShowDownPlayerSlot::None);
-		}
-		const float RouletteDelay = ApplyMultiplayerRoulette(SubmittingPlayer, LoadCount);
+				ShowDownGameState->SetNameTagPlayerLoadedBulletCount(SubmittingPlayer->ShowDownSlot, SubmittingPlayer->CurrentBet);
+				ShowDownGameState->SetNameTagRoundStatus(SubmittingPlayer->CurrentBet, EShowDownSide::Player, EShowDownPlayerSlot::None);
+			}
+			RefreshBetBulletPresentation(FString::Printf(TEXT("%s fold"), *SubmittingPlayer->GetPlayerName()));
+			const float RouletteDelay = ApplyMultiplayerRoulette(SubmittingPlayer, LoadCount);
 		const auto ContinueAfterRoulette = [this, SubmittingPlayer, CurrentBet, FindNextActivePlayer]()
 		{
 			MultiplayerNextFirstPlayer = SubmittingPlayer;
@@ -4538,12 +4988,16 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 
 			if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 			{
-				ShowDownGameState->SetNameTagRoundStatus(
-					CurrentBet,
-					EShowDownSide::Player,
-					MultiplayerCurrentBetter->ShowDownSlot);
-			}
-		};
+					ShowDownGameState->SetNameTagRoundStatus(
+						CurrentBet,
+						EShowDownSide::Player,
+						MultiplayerCurrentBetter->ShowDownSlot);
+				}
+				ClearBetBulletTransientState();
+				RefreshBetBulletPresentation(FString::Printf(
+					TEXT("next: %s"),
+					MultiplayerCurrentBetter ? *MultiplayerCurrentBetter->GetPlayerName() : TEXT("none")));
+			};
 
 		if (RouletteDelay > KINDA_SMALL_NUMBER)
 		{
@@ -4835,6 +5289,11 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(ASDPlayerState* TargetPlay
 	{
 		ShowDownGameState->SetNameTagRoundStatus(ClampedBulletCount, EShowDownSide::Player, EShowDownPlayerSlot::None);
 	}
+	MarkMultiplayerBetBulletRouletteTarget(TargetPlayer, ClampedBulletCount);
+	RefreshBetBulletPresentation(FString::Printf(
+		TEXT("%s target | load %d"),
+		*TargetPlayer->GetPlayerName(),
+		ClampedBulletCount));
 	const bool bHit = RouletteSystem->RollRoulette(ClampedBulletCount);
 	const EShowDownPlayerSlot TargetSlot = TargetPlayer->ShowDownSlot;
 	const FString TargetName = TargetPlayer->GetPlayerName();
@@ -4948,6 +5407,7 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(ASDPlayerState* TargetPlay
 void AShowDownGameModeBase::EndMultiplayerRound()
 {
 	SetMultiplayerSelectableHand(nullptr);
+	ClearBetBulletPresentation();
 	ClearMultiplayerForeheadCards();
 	RefreshMultiplayerCharacterVisibility();
 
@@ -5410,6 +5870,7 @@ void AShowDownGameModeBase::StartStage(int32 StageIndex)
 	bBettingPhase = false;
 	GetWorldTimerManager().ClearTimer(RevealDelayHandle);
 	ClearCardRevealPresentationTimers();
+	ClearBetBulletPresentation();
 
 	ClearForeheadCards();
 	ClearHandCards();
