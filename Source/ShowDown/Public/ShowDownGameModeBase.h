@@ -248,6 +248,33 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation", meta = (ClampMin = "0.0"))
 	float RevealAutoAdvanceSeconds = 0.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal")
+	bool bUseCardRevealPresentation = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0"))
+	float CardRevealLeadInSeconds = 0.12f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0"))
+	float CardRevealStepSeconds = 0.24f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0"))
+	float CardRevealHoldSeconds = 0.8f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0"))
+	float CardRevealForwardDistance = 42.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal")
+	float CardRevealHeightOffset = 10.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0"))
+	float CardRevealSideSpacing = 10.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.1"))
+	float CardRevealVisualScale = 1.12f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal")
+	FRotator CardRevealRotationOffset = FRotator::ZeroRotator;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro")
 	bool bPlaySinglePlayerIntro = true;
 
@@ -295,6 +322,8 @@ private:
 	
 	bool bBettingPhase = false;
 	FTimerHandle RevealDelayHandle;
+	FTimerHandle MultiplayerRevealContinuationTimerHandle;
+	TArray<FTimerHandle> CardRevealPresentationTimerHandles;
 	int32 BettingRaisesLeft = 6;
 	bool bHasLastRaiser = false;
 	EShowDownSide LastRaiser = EShowDownSide::Player;
@@ -446,6 +475,13 @@ private:
 	void ResolveFold(EShowDownSide FoldedSide);
 	void ContinueRoundAfterReveal(EShowDownRoundResult Result);
 	void ContinueFoldAfterReveal(EShowDownSide FoldedSide, int32 LoadCount);
+	float PlaySinglePlayerCardRevealPresentation();
+	float PlayMultiplayerCardRevealPresentation(const TArray<ASDPlayerState*>& RevealedPlayers);
+	float PlayCardRevealPresentation(const TArray<ACard*>& Cards, const FVector& FocusLocation);
+	void ClearCardRevealPresentationTimers();
+	FTransform BuildCardRevealPresentationTransform(ACard* Card, const FVector& FocusLocation, int32 CardIndex, int32 CardCount) const;
+	FVector ResolveCardRevealFocusLocationForSingle() const;
+	FVector ResolveCardRevealFocusLocationForMultiplayer(const TArray<ASDPlayerState*>& RevealedPlayers) const;
 	void ApplyRouletteResult(EShowDownSide TargetSide, int32 BulletCount, TFunction<void()>&& Continuation);
 	void EndRound();
 	void ClearForeheadCards();
@@ -506,7 +542,9 @@ private:
 	void StartMultiplayerBetting();
 	void HandleMultiplayerBetAction(ASDPlayerState* SubmittingPlayer, EShowDownBetAction Action, int32 TargetBet);
 	void FinishMultiplayerRoundByReveal();
+	void ContinueMultiplayerRoundAfterReveal(TArray<ASDPlayerState*> RevealedPlayers, TArray<ASDPlayerState*> Winners);
 	void FinishMultiplayerRoundByFold(ASDPlayerState* FoldedPlayer);
+	void ContinueMultiplayerRoundAfterFoldReveal(ASDPlayerState* FoldedPlayer, int32 LoadCount);
 	float ApplyMultiplayerRoulette(ASDPlayerState* TargetPlayer, int32 BulletCount, float StartDelay = 0.0f);
 	void EndMultiplayerRound();
 	void ShowMultiplayerFinalRanking(ASDPlayerState* Winner);
@@ -539,7 +577,7 @@ private:
 	USceneComponent* GetPlayerHeadSlot() const;
 	FSDCardHandLayoutSettings ResolveHandLayoutSettingsForPlayerState(ASDPlayerState* Player) const;
 	void ApplyCardMotionForPlayerState(ASDPlayerState* Player, const TArray<ACard*>& Cards) const;
-	void ScheduleRevealAutoAdvanceIfNeeded();
+	void ScheduleRevealAutoAdvanceIfNeeded(float MinimumDelaySeconds = 0.0f);
 	void ShowEventDebugMessage(const FString& Message) const;
 	
 };

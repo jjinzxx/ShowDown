@@ -535,6 +535,7 @@ void AShowDownGameModeBase::ResetForHubReturn()
 	GetWorldTimerManager().ClearTimer(CardPlacementDelayHandle);
 	GetWorldTimerManager().ClearTimer(RevealDelayHandle);
 	GetWorldTimerManager().ClearTimer(CollectorActionPresentationTimerHandle);
+	ClearCardRevealPresentationTimers();
 	if (ActiveSelfShotGunActor)
 	{
 		ActiveSelfShotGunActor->OnGunPresentationFinished.RemoveDynamic(
@@ -2733,9 +2734,6 @@ void AShowDownGameModeBase::FinishBettingAndResolveRound()
 		return;
 	}
 
-	PlayerState.ForeheadCard->SetFaceUp(true);
-	CollectorState.ForeheadCard->SetFaceUp(true);
-
 	const int32 PlayerCardRank = PlayerState.ForeheadCard->Rank;
 	const int32 CollectorCardRank = CollectorState.ForeheadCard->Rank;
 	LastRoundPlayerCardRank = PlayerCardRank;
@@ -2758,13 +2756,14 @@ void AShowDownGameModeBase::FinishBettingAndResolveRound()
 	UE_LOG(LogTemp, Log, TEXT("Reveal cards. Player: %d, Collector: %d"), PlayerCardRank, CollectorCardRank);
 	UE_LOG(LogTemp, Log, TEXT("Reveal resolved. Waiting for presentation or auto-advance fallback."));
 
+	const float RevealPresentationSeconds = PlaySinglePlayerCardRevealPresentation();
 	bHasPendingRoundReveal = true;
 	bHasPendingFoldReveal = false;
 	PendingRoundResult = Result;
 
-	PlayCollectorActionPresentationThen([this]()
+	PlayCollectorActionPresentationThen([this, RevealPresentationSeconds]()
 	{
-		ScheduleRevealAutoAdvanceIfNeeded();
+		ScheduleRevealAutoAdvanceIfNeeded(RevealPresentationSeconds);
 	});
 }
 
@@ -2904,16 +2903,6 @@ void AShowDownGameModeBase::ResolveFold(EShowDownSide FoldedSide)
 	const bool bSevenFoldLoadsSix = StageRule ? StageRule->bSevenFoldLoadsSix : true;
 	const int32 LoadCount = RoundResolver->GetFoldLoadCount(FoldedCardRank, FoldedState.CurrentBet, bSevenFoldLoadsSix);
 
-	if (PlayerState.ForeheadCard)
-	{
-		PlayerState.ForeheadCard->SetFaceUp(true);
-	}
-
-	if (CollectorState.ForeheadCard)
-	{
-		CollectorState.ForeheadCard->SetFaceUp(true);
-	}
-
 	const int32 PlayerCardRank = PlayerState.ForeheadCard ? PlayerState.ForeheadCard->Rank : 0;
 	const int32 CollectorCardRank = CollectorState.ForeheadCard ? CollectorState.ForeheadCard->Rank : 0;
 	LastRoundPlayerCardRank = PlayerCardRank;
@@ -2946,14 +2935,15 @@ void AShowDownGameModeBase::ResolveFold(EShowDownSide FoldedSide)
 		LoadCount);
 	UE_LOG(LogTemp, Log, TEXT("Fold reveal resolved. Waiting for presentation or auto-advance fallback."));
 
+	const float RevealPresentationSeconds = PlaySinglePlayerCardRevealPresentation();
 	bHasPendingRoundReveal = false;
 	bHasPendingFoldReveal = true;
 	PendingFoldedSide = FoldedSide;
 	PendingFoldLoadCount = LoadCount;
 
-	PlayCollectorActionPresentationThen([this]()
+	PlayCollectorActionPresentationThen([this, RevealPresentationSeconds]()
 	{
-		ScheduleRevealAutoAdvanceIfNeeded();
+		ScheduleRevealAutoAdvanceIfNeeded(RevealPresentationSeconds);
 	});
 }
 
@@ -2976,6 +2966,190 @@ void AShowDownGameModeBase::ContinueFoldAfterReveal(EShowDownSide FoldedSide, in
 			FString::Printf(TEXT("%s folded"), *GetSideText(FoldedSide)));
 		EndRound();
 	});
+}
+
+float AShowDownGameModeBase::PlaySinglePlayerCardRevealPresentation()
+{
+	TArray<ACard*> RevealCards;
+	if (PlayerState.ForeheadCard)
+	{
+		RevealCards.Add(PlayerState.ForeheadCard);
+	}
+	if (CollectorState.ForeheadCard)
+	{
+		RevealCards.Add(CollectorState.ForeheadCard);
+	}
+
+	return PlayCardRevealPresentation(RevealCards, ResolveCardRevealFocusLocationForSingle());
+}
+
+float AShowDownGameModeBase::PlayMultiplayerCardRevealPresentation(const TArray<ASDPlayerState*>& RevealedPlayers)
+{
+	TArray<ASDPlayerState*> OrderedPlayers = RevealedPlayers;
+	OrderedPlayers.Sort(SortByMultiplayerTurnOrder);
+
+	TArray<ACard*> RevealCards;
+	for (ASDPlayerState* Player : OrderedPlayers)
+	{
+		if (Player && Player->ForeheadCard)
+		{
+			RevealCards.Add(Player->ForeheadCard);
+		}
+	}
+
+	return PlayCardRevealPresentation(RevealCards, ResolveCardRevealFocusLocationForMultiplayer(OrderedPlayers));
+}
+
+float AShowDownGameModeBase::PlayCardRevealPresentation(const TArray<ACard*>& Cards, const FVector& FocusLocation)
+{
+	ClearCardRevealPresentationTimers();
+
+	TArray<ACard*> ValidCards;
+	for (ACard* Card : Cards)
+	{
+		if (IsValid(Card))
+		{
+			ValidCards.Add(Card);
+		}
+	}
+
+	if (ValidCards.Num() <= 0)
+	{
+		return 0.0f;
+	}
+
+	if (!bUseCardRevealPresentation)
+	{
+		for (ACard* Card : ValidCards)
+		{
+			Card->SetHiddenFromSlot(EShowDownPlayerSlot::None);
+			Card->SetFaceUp(true);
+		}
+		return 0.0f;
+	}
+
+	float TotalSeconds = 0.0f;
+	const int32 CardCount = ValidCards.Num();
+	for (int32 CardIndex = 0; CardIndex < CardCount; ++CardIndex)
+	{
+		ACard* Card = ValidCards[CardIndex];
+		const float RevealDelay = FMath::Max(0.0f, CardRevealLeadInSeconds + CardRevealStepSeconds * CardIndex);
+		const float CardMotionSeconds = Card->GetRevealMotionTotalSeconds();
+		TotalSeconds = FMath::Max(TotalSeconds, RevealDelay + CardMotionSeconds);
+
+		TWeakObjectPtr<ACard> WeakCard(Card);
+		const auto RevealCard = [this, WeakCard, FocusLocation, CardIndex, CardCount]()
+		{
+			ACard* RevealCardActor = WeakCard.Get();
+			if (!IsValid(RevealCardActor))
+			{
+				return;
+			}
+
+			const FTransform RevealTransform = BuildCardRevealPresentationTransform(
+				RevealCardActor,
+				FocusLocation,
+				CardIndex,
+				CardCount);
+			RevealCardActor->MoveToRevealTransform(RevealTransform, CardRevealVisualScale);
+		};
+
+		if (RevealDelay <= KINDA_SMALL_NUMBER)
+		{
+			RevealCard();
+			continue;
+		}
+
+		FTimerHandle TimerHandle;
+		GetWorldTimerManager().SetTimer(TimerHandle, FTimerDelegate::CreateWeakLambda(this, RevealCard), RevealDelay, false);
+		CardRevealPresentationTimerHandles.Add(TimerHandle);
+	}
+
+	return TotalSeconds + FMath::Max(0.0f, CardRevealHoldSeconds);
+}
+
+void AShowDownGameModeBase::ClearCardRevealPresentationTimers()
+{
+	GetWorldTimerManager().ClearTimer(MultiplayerRevealContinuationTimerHandle);
+	for (FTimerHandle& TimerHandle : CardRevealPresentationTimerHandles)
+	{
+		GetWorldTimerManager().ClearTimer(TimerHandle);
+	}
+	CardRevealPresentationTimerHandles.Reset();
+}
+
+FTransform AShowDownGameModeBase::BuildCardRevealPresentationTransform(
+	ACard* Card,
+	const FVector& FocusLocation,
+	int32 CardIndex,
+	int32 CardCount) const
+{
+	if (!Card)
+	{
+		return FTransform::Identity;
+	}
+
+	const FVector StartLocation = Card->GetActorLocation();
+	FVector FaceDirection = FocusLocation - StartLocation;
+	FaceDirection.Z = 0.0f;
+	if (FaceDirection.IsNearlyZero())
+	{
+		FaceDirection = Card->GetActorForwardVector();
+		FaceDirection.Z = 0.0f;
+	}
+	if (FaceDirection.IsNearlyZero())
+	{
+		FaceDirection = FVector::ForwardVector;
+	}
+	FaceDirection.Normalize();
+
+	const FRotator FaceRotation = FaceDirection.Rotation();
+	const FVector RightDirection = FRotationMatrix(FaceRotation).GetUnitAxis(EAxis::Y);
+	const float CenteredIndex = static_cast<float>(CardIndex) - (static_cast<float>(CardCount) - 1.0f) * 0.5f;
+	const FVector RevealLocation =
+		StartLocation
+		+ FaceDirection * FMath::Max(0.0f, CardRevealForwardDistance)
+		+ FVector::UpVector * CardRevealHeightOffset
+		+ RightDirection * CardRevealSideSpacing * CenteredIndex;
+	const FQuat RevealRotation = (FaceRotation.Quaternion() * CardRevealRotationOffset.Quaternion()).GetNormalized();
+
+	return FTransform(RevealRotation, RevealLocation, Card->GetActorScale3D());
+}
+
+FVector AShowDownGameModeBase::ResolveCardRevealFocusLocationForSingle() const
+{
+	return ResolveSingleTableCenter(GetWorld());
+}
+
+FVector AShowDownGameModeBase::ResolveCardRevealFocusLocationForMultiplayer(
+	const TArray<ASDPlayerState*>& RevealedPlayers) const
+{
+	FVector FocusLocation = FVector::ZeroVector;
+	int32 FocusCount = 0;
+	for (const ASDPlayerState* Player : RevealedPlayers)
+	{
+		if (!Player)
+		{
+			continue;
+		}
+
+		if (Player->ForeheadCard)
+		{
+			FocusLocation += Player->ForeheadCard->GetActorLocation();
+			++FocusCount;
+			continue;
+		}
+
+		if (const USceneComponent* HeadSlot = GetHeadSlotForPlayerState(const_cast<ASDPlayerState*>(Player)))
+		{
+			FocusLocation += HeadSlot->GetComponentLocation();
+			++FocusCount;
+		}
+	}
+
+	return FocusCount > 0
+		? FocusLocation / static_cast<float>(FocusCount)
+		: ResolveSingleTableCenter(GetWorld());
 }
 
 void AShowDownGameModeBase::ApplyRouletteResult(EShowDownSide TargetSide, int32 BulletCount, TFunction<void()>&& Continuation)
@@ -4412,8 +4586,6 @@ void AShowDownGameModeBase::FinishMultiplayerRoundByReveal()
 			continue;
 		}
 
-		Player->ForeheadCard->SetHiddenFromSlot(EShowDownPlayerSlot::None);
-		Player->ForeheadCard->SetFaceUp(true);
 		RevealedPlayers.Add(Player);
 		const int32 Rank = Player->ForeheadCard->Rank;
 		if (Rank > HighestRank)
@@ -4438,6 +4610,39 @@ void AShowDownGameModeBase::FinishMultiplayerRoundByReveal()
 		ShowDownGameState->SetPhase(EShowDownPhase::Reveal);
 		ShowDownGameState->OnCardsRevealed.Broadcast(HighestRank, LowestRank == TNumericLimits<int32>::Max() ? 0 : LowestRank);
 	}
+
+	const float RevealPresentationSeconds = PlayMultiplayerCardRevealPresentation(RevealedPlayers);
+	if (RevealPresentationSeconds > KINDA_SMALL_NUMBER)
+	{
+		FTimerDelegate ContinueDelegate;
+		ContinueDelegate.BindWeakLambda(this, [this, RevealedPlayers, Winners]()
+		{
+			ContinueMultiplayerRoundAfterReveal(RevealedPlayers, Winners);
+		});
+
+		GetWorldTimerManager().SetTimer(
+			MultiplayerRevealContinuationTimerHandle,
+			ContinueDelegate,
+			RevealPresentationSeconds,
+			false);
+		return;
+	}
+
+	ContinueMultiplayerRoundAfterReveal(RevealedPlayers, Winners);
+}
+
+void AShowDownGameModeBase::ContinueMultiplayerRoundAfterReveal(
+	TArray<ASDPlayerState*> RevealedPlayers,
+	TArray<ASDPlayerState*> Winners)
+{
+	RevealedPlayers.RemoveAll([](const ASDPlayerState* Player)
+	{
+		return !Player || Player->Lives <= 0 || !Player->ForeheadCard;
+	});
+	Winners.RemoveAll([&RevealedPlayers](const ASDPlayerState* Player)
+	{
+		return !Player || !RevealedPlayers.Contains(Player);
+	});
 
 	if (Winners.Num() <= 0)
 	{
@@ -4540,15 +4745,22 @@ void AShowDownGameModeBase::FinishMultiplayerRoundByFold(ASDPlayerState* FoldedP
 
 	bMultiplayerRoundResolving = true;
 	MultiplayerNextFirstPlayer = FoldedPlayer;
+	TArray<ASDPlayerState*> RevealedPlayers;
+	int32 HighestRank = 0;
+	int32 LowestRank = TNumericLimits<int32>::Max();
 	if (MultiplayerDuelA && MultiplayerDuelA->ForeheadCard)
 	{
-		MultiplayerDuelA->ForeheadCard->SetHiddenFromSlot(EShowDownPlayerSlot::None);
-		MultiplayerDuelA->ForeheadCard->SetFaceUp(true);
+		RevealedPlayers.Add(MultiplayerDuelA);
+		const int32 Rank = MultiplayerDuelA->ForeheadCard->Rank;
+		HighestRank = FMath::Max(HighestRank, Rank);
+		LowestRank = FMath::Min(LowestRank, Rank);
 	}
 	if (MultiplayerDuelB && MultiplayerDuelB->ForeheadCard)
 	{
-		MultiplayerDuelB->ForeheadCard->SetHiddenFromSlot(EShowDownPlayerSlot::None);
-		MultiplayerDuelB->ForeheadCard->SetFaceUp(true);
+		RevealedPlayers.Add(MultiplayerDuelB);
+		const int32 Rank = MultiplayerDuelB->ForeheadCard->Rank;
+		HighestRank = FMath::Max(HighestRank, Rank);
+		LowestRank = FMath::Min(LowestRank, Rank);
 	}
 
 	const bool bSevenFoldLoadsSix = StageRules.Num() > 0 ? StageRules[0].bSevenFoldLoadsSix : true;
@@ -4560,6 +4772,39 @@ void AShowDownGameModeBase::FinishMultiplayerRoundByFold(ASDPlayerState* FoldedP
 	{
 		ShowDownGameState->SetNameTagPlayerLoadedBulletCount(FoldedPlayer->ShowDownSlot, FoldedPlayer->CurrentBet);
 		ShowDownGameState->SetNameTagRoundStatus(FoldedPlayer->CurrentBet, EShowDownSide::Player, EShowDownPlayerSlot::None);
+		ShowDownGameState->SetPhase(EShowDownPhase::Reveal);
+		ShowDownGameState->OnCardsRevealed.Broadcast(
+			HighestRank,
+			LowestRank == TNumericLimits<int32>::Max() ? 0 : LowestRank);
+	}
+
+	const float RevealPresentationSeconds = PlayMultiplayerCardRevealPresentation(RevealedPlayers);
+	if (RevealPresentationSeconds > KINDA_SMALL_NUMBER)
+	{
+		TWeakObjectPtr<ASDPlayerState> WeakFoldedPlayer(FoldedPlayer);
+		FTimerDelegate ContinueDelegate;
+		ContinueDelegate.BindWeakLambda(this, [this, WeakFoldedPlayer, LoadCount]()
+		{
+			ContinueMultiplayerRoundAfterFoldReveal(WeakFoldedPlayer.Get(), LoadCount);
+		});
+
+		GetWorldTimerManager().SetTimer(
+			MultiplayerRevealContinuationTimerHandle,
+			ContinueDelegate,
+			RevealPresentationSeconds,
+			false);
+		return;
+	}
+
+	ContinueMultiplayerRoundAfterFoldReveal(FoldedPlayer, LoadCount);
+}
+
+void AShowDownGameModeBase::ContinueMultiplayerRoundAfterFoldReveal(ASDPlayerState* FoldedPlayer, int32 LoadCount)
+{
+	if (!FoldedPlayer)
+	{
+		EndMultiplayerRound();
+		return;
 	}
 
 	const float RouletteDelay = ApplyMultiplayerRoulette(FoldedPlayer, LoadCount);
@@ -5164,6 +5409,7 @@ void AShowDownGameModeBase::StartStage(int32 StageIndex)
 
 	bBettingPhase = false;
 	GetWorldTimerManager().ClearTimer(RevealDelayHandle);
+	ClearCardRevealPresentationTimers();
 
 	ClearForeheadCards();
 	ClearHandCards();
@@ -5507,18 +5753,20 @@ USceneComponent* AShowDownGameModeBase::GetPlayerHeadSlot() const
 	return GetHeadSlotForSide(EShowDownSide::Player);
 }
 
-void AShowDownGameModeBase::ScheduleRevealAutoAdvanceIfNeeded()
+void AShowDownGameModeBase::ScheduleRevealAutoAdvanceIfNeeded(float MinimumDelaySeconds)
 {
 	GetWorldTimerManager().ClearTimer(RevealDelayHandle);
 
 	const AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState();
 	const bool bPresentationIsHandled = ShowDownGameState && ShowDownGameState->OnPresentationStarted.IsBound();
-	if (bPresentationIsHandled || !bAutoAdvanceRevealWithoutPresentation)
+	const bool bHasBuiltInPresentationDelay = MinimumDelaySeconds > KINDA_SMALL_NUMBER;
+	if (bPresentationIsHandled || (!bHasBuiltInPresentationDelay && !bAutoAdvanceRevealWithoutPresentation))
 	{
 		return;
 	}
 
-	if (RevealAutoAdvanceSeconds <= 0.0f)
+	const float DelaySeconds = FMath::Max(FMath::Max(0.0f, RevealAutoAdvanceSeconds), FMath::Max(0.0f, MinimumDelaySeconds));
+	if (DelaySeconds <= 0.0f)
 	{
 		EventEnd(EShowDownPhase::Reveal);
 		return;
@@ -5527,7 +5775,7 @@ void AShowDownGameModeBase::ScheduleRevealAutoAdvanceIfNeeded()
 	GetWorldTimerManager().SetTimer(
 		RevealDelayHandle,
 		FTimerDelegate::CreateUObject(this, &AShowDownGameModeBase::EventEnd, EShowDownPhase::Reveal),
-		RevealAutoAdvanceSeconds,
+		DelaySeconds,
 		false);
 }
 

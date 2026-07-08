@@ -159,6 +159,12 @@ public:
 	float GetSlotAttachMotionTotalSeconds() const;
 
 	UFUNCTION(BlueprintCallable, Category = "Card")
+	void MoveToRevealTransform(const FTransform& RevealTransform, float VisualScaleMultiplier);
+
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Card")
+	float GetRevealMotionTotalSeconds() const;
+
+	UFUNCTION(BlueprintCallable, Category = "Card")
 	void MoveToHandTransform(const FTransform& NewTransform);
 
 	virtual bool CanInteract_Implementation(AActor* Interactor) const override;

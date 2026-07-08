@@ -406,6 +406,25 @@ float ACard::GetSlotAttachMotionTotalSeconds() const
 		: 0.0f;
 }
 
+void ACard::MoveToRevealTransform(const FTransform& RevealTransform, float VisualScaleMultiplier)
+{
+	ClearPendingSlotAttachment();
+	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+	bSelected = false;
+	bHovered = false;
+	SetSelectable(false);
+	SetHiddenFromSlot(EShowDownPlayerSlot::None);
+	SetFaceUp(true);
+	SetTargetVisualScaleMultiplier(VisualScaleMultiplier);
+	ApplyMovementTarget(RevealTransform, bUseSlotAttachMotion);
+	PublishMovementTarget(RevealTransform, bUseSlotAttachMotion);
+}
+
+float ACard::GetRevealMotionTotalSeconds() const
+{
+	return GetSlotAttachMotionTotalSeconds();
+}
+
 void ACard::MoveToHandTransform(const FTransform& NewTransform)
 {
 	ClearPendingSlotAttachment();
