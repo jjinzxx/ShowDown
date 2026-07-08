@@ -667,7 +667,7 @@ void AShowDownPlayerController::HandlePrimaryClick()
 		}
 
 		HandCard = ResolveCardFromHit(Hit);
-		if (HandCard && HandCard->IsCardSelectable())
+		if (IsCardSelectableForLocalPlayer(HandCard))
 		{
 			SelectCard(HandCard);
 			if (bSubmitCardsOnSingleClick)
@@ -679,7 +679,7 @@ void AShowDownPlayerController::HandlePrimaryClick()
 	}
 
 	HandCard = bUseCenterAimCardFallback ? FindSelectableCardNearCenterAim() : nullptr;
-	if (HandCard && HandCard->IsCardSelectable())
+	if (IsCardSelectableForLocalPlayer(HandCard))
 	{
 		SelectCard(HandCard);
 		if (bSubmitCardsOnSingleClick)
@@ -703,7 +703,7 @@ void AShowDownPlayerController::TraceCardUnderCursor()
 	}
 
 	HandCard = ResolveCardFromHit(Hit);
-	if (HandCard && !HandCard->IsCardSelectable())
+	if (!IsCardSelectableForLocalPlayer(HandCard))
 	{
 		HandCard = nullptr;
 	}
@@ -791,6 +791,16 @@ ACard* AShowDownPlayerController::ResolveCardFromHit(const FHitResult& Hit) cons
 	}
 
 	return nullptr;
+}
+
+bool AShowDownPlayerController::IsCardSelectableForLocalPlayer(const ACard* Card) const
+{
+	const ASDPlayerState* ShowDownPlayerState = GetPlayerState<ASDPlayerState>();
+	const EShowDownPlayerSlot LocalSlot = ShowDownPlayerState
+		? ShowDownPlayerState->ShowDownSlot
+		: EShowDownPlayerSlot::None;
+
+	return IsValid(Card) && Card->IsCardSelectableForSlot(LocalSlot);
 }
 
 AActor* AShowDownPlayerController::ResolveInteractableFromHit(const FHitResult& Hit) const
@@ -937,7 +947,7 @@ ACard* AShowDownPlayerController::FindSelectableCardNearCenterAim() const
 	for (TActorIterator<ACard> It(World); It; ++It)
 	{
 		ACard* Card = *It;
-		if (!IsValid(Card) || !Card->IsCardSelectable())
+		if (!IsCardSelectableForLocalPlayer(Card))
 		{
 			continue;
 		}
@@ -970,7 +980,7 @@ ACard* AShowDownPlayerController::FindHoverPreviewCard() const
 	if (TracePrimaryInteraction(Hit))
 	{
 		ACard* HitCard = ResolveCardFromHit(Hit);
-		if (IsValid(HitCard) && HitCard->IsCardSelectable())
+		if (IsCardSelectableForLocalPlayer(HitCard))
 		{
 			return HitCard;
 		}
@@ -986,7 +996,7 @@ void AShowDownPlayerController::UpdateHoveredCard()
 
 void AShowDownPlayerController::SetHoveredCard(ACard* NewHoveredCard)
 {
-	if (!IsValid(NewHoveredCard) || !NewHoveredCard->IsCardSelectable())
+	if (!IsCardSelectableForLocalPlayer(NewHoveredCard))
 	{
 		NewHoveredCard = nullptr;
 	}
@@ -1011,7 +1021,7 @@ void AShowDownPlayerController::SetHoveredCard(ACard* NewHoveredCard)
 
 void AShowDownPlayerController::SelectCard(ACard* SelectedCard)
 {
-	if (!IsValid(SelectedCard))
+	if (!IsCardSelectableForLocalPlayer(SelectedCard))
 	{
 		return;
 	}
@@ -1038,7 +1048,7 @@ void AShowDownPlayerController::SelectCard(ACard* SelectedCard)
 
 void AShowDownPlayerController::SubmitSelectedCard(ACard* SelectedCard)
 {
-	if (!IsValid(SelectedCard))
+	if (!IsCardSelectableForLocalPlayer(SelectedCard))
 	{
 		return;
 	}

@@ -143,6 +143,9 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Card")
 	bool IsCardSelectable() const;
 
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Card")
+	bool IsCardSelectableForSlot(EShowDownPlayerSlot PlayerSlot) const;
+
 	UFUNCTION(BlueprintCallable, Category = "Card")
 	void MoveToSlot(USceneComponent* Slot, bool bNewFaceUp);
 

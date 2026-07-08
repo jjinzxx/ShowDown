@@ -330,6 +330,21 @@ bool ACard::IsCardSelectable() const
 	return bSelectable;
 }
 
+bool ACard::IsCardSelectableForSlot(EShowDownPlayerSlot PlayerSlot) const
+{
+	if (!bSelectable)
+	{
+		return false;
+	}
+
+	if (HandOwnerSlot == EShowDownPlayerSlot::None)
+	{
+		return true;
+	}
+
+	return PlayerSlot != EShowDownPlayerSlot::None && HandOwnerSlot == PlayerSlot;
+}
+
 void ACard::MoveToSlot(USceneComponent* Slot, bool bNewFaceUp)
 {
 	if (!Slot)
@@ -575,7 +590,17 @@ FRotator ACard::ScaleRotator(const FRotator& Rotator, float Scale) const
 
 bool ACard::CanInteract_Implementation(AActor* Interactor) const
 {
-	return bSelectable;
+	if (HandOwnerSlot == EShowDownPlayerSlot::None)
+	{
+		return bSelectable;
+	}
+
+	AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(Interactor);
+	const ASDPlayerState* ShowDownPlayerState = ShowDownController
+		? ShowDownController->GetPlayerState<ASDPlayerState>()
+		: nullptr;
+
+	return ShowDownPlayerState && IsCardSelectableForSlot(ShowDownPlayerState->ShowDownSlot);
 }
 
 void ACard::Interact_Implementation(AActor* Interactor)
@@ -591,7 +616,7 @@ void ACard::Interact_Implementation(AActor* Interactor)
 		ShowDownController = Cast<AShowDownPlayerController>(UGameplayStatics::GetPlayerController(this, 0));
 	}
 
-	if (ShowDownController)
+	if (ShowDownController && CanInteract_Implementation(ShowDownController))
 	{
 		ShowDownController->SubmitSelectedCard(this);
 	}

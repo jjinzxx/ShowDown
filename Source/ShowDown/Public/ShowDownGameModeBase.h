@@ -344,12 +344,6 @@ private:
 	TObjectPtr<ASDPlayerState> MultiplayerDuelB = nullptr;
 
 	UPROPERTY()
-	TObjectPtr<ASDPlayerState> MultiplayerCardGiver = nullptr;
-
-	UPROPERTY()
-	TObjectPtr<ASDPlayerState> MultiplayerCardReceiver = nullptr;
-
-	UPROPERTY()
 	TObjectPtr<ASDPlayerState> MultiplayerCurrentBetter = nullptr;
 
 	UPROPERTY()
@@ -507,7 +501,7 @@ private:
 	bool AreAllActiveMultiplayerPlayersDoneBetting(int32 CurrentBet) const;
 	int32 CountActiveMultiplayerPlayers() const;
 	void HandleMultiplayerPlayerDisconnected(ASDPlayerState* LeavingPlayer);
-	void StartMultiplayerCardSelection(ASDPlayerState* Giver, ASDPlayerState* Receiver);
+	void StartMultiplayerCardSelection();
 	void HandleMultiplayerSelectedCard(ASDPlayerState* SubmittingPlayer, ACard* SelectedCard);
 	void StartMultiplayerBetting();
 	void HandleMultiplayerBetAction(ASDPlayerState* SubmittingPlayer, EShowDownBetAction Action, int32 TargetBet);
@@ -517,6 +511,7 @@ private:
 	void EndMultiplayerRound();
 	void ShowMultiplayerFinalRanking(ASDPlayerState* Winner);
 	void SetMultiplayerSelectableHand(ASDPlayerState* Player);
+	void SetMultiplayerAliveHandsSelectable(bool bSelectable);
 	void ReflowMultiplayerHand(ASDPlayerState* Player);
 	USceneComponent* GetHandSlotForPlayerState(ASDPlayerState* Player) const;
 	USceneComponent* GetHeadSlotForPlayerState(ASDPlayerState* Player) const;

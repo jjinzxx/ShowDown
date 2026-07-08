@@ -3843,7 +3843,7 @@ void AShowDownGameModeBase::StartMultiplayerDuel(ASDPlayerState* FirstPlayer, AS
 
 	if (!AreAllAliveMultiplayerPlayersReadyToReveal())
 	{
-		StartMultiplayerCardSelection(FirstPlayer, FindNextAliveMultiplayerPlayer(FirstPlayer));
+		StartMultiplayerCardSelection();
 	}
 
 	NotifyMultiplayerStatus(FString::Printf(
@@ -3921,8 +3921,6 @@ void AShowDownGameModeBase::HandleMultiplayerPlayerDisconnected(ASDPlayerState* 
 		LeavingPlayer->ForeheadCard = nullptr;
 	}
 
-	const bool bWasCardGiver = MultiplayerCardGiver == LeavingPlayer;
-	const bool bWasCardReceiver = MultiplayerCardReceiver == LeavingPlayer;
 	const bool bWasCurrentBetter = MultiplayerCurrentBetter == LeavingPlayer;
 
 	MultiplayerPlayers.RemoveAll([LeavingPlayer](const TObjectPtr<ASDPlayerState>& Player)
@@ -3973,14 +3971,6 @@ void AShowDownGameModeBase::HandleMultiplayerPlayerDisconnected(ASDPlayerState* 
 	if (MultiplayerNextFirstPlayer == LeavingPlayer)
 	{
 		MultiplayerNextFirstPlayer = FindNextAliveMultiplayerPlayer(nullptr);
-	}
-	if (bWasCardGiver)
-	{
-		MultiplayerCardGiver = nullptr;
-	}
-	if (bWasCardReceiver)
-	{
-		MultiplayerCardReceiver = nullptr;
 	}
 	if (bWasCurrentBetter)
 	{
@@ -4047,66 +4037,77 @@ void AShowDownGameModeBase::HandleMultiplayerPlayerDisconnected(ASDPlayerState* 
 	StartMultiplayerBetting();
 }
 
-void AShowDownGameModeBase::StartMultiplayerCardSelection(ASDPlayerState* Giver, ASDPlayerState* Receiver)
+void AShowDownGameModeBase::StartMultiplayerCardSelection()
 {
-	MultiplayerCardGiver = Giver;
-	MultiplayerCardReceiver = Receiver;
-	SetMultiplayerSelectableHand(Giver);
+	SetMultiplayerAliveHandsSelectable(true);
 
 	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 	{
 		ShowDownGameState->SetPhase(EShowDownPhase::SelectCard);
-		if (Giver && Giver->ShowDownSlot != EShowDownPlayerSlot::None)
+		for (ASDPlayerState* Player : MultiplayerPlayers)
 		{
-			ShowDownGameState->SetNameTagPlayerLoadedBulletCount(Giver->ShowDownSlot, 0);
+			if (Player && Player->Lives > 0 && Player->ShowDownSlot != EShowDownPlayerSlot::None)
+			{
+				ShowDownGameState->SetNameTagPlayerLoadedBulletCount(Player->ShowDownSlot, 0);
+			}
 		}
 		ShowDownGameState->SetNameTagRoundStatus(
 			0,
 			EShowDownSide::Player,
-			Giver ? Giver->ShowDownSlot : EShowDownPlayerSlot::None);
+			EShowDownPlayerSlot::None);
 	}
 
-	NotifyMultiplayerStatus(FString::Printf(
-		TEXT("%s: %s에게 줄 카드를 선택하세요."),
-		Giver ? *Giver->GetPlayerName() : TEXT("플레이어"),
-		Receiver ? *Receiver->GetPlayerName() : TEXT("상대")));
+	NotifyMultiplayerStatus(TEXT("모든 플레이어가 동시에 카드를 선택합니다. 전원이 고르면 베팅을 시작합니다."));
 }
 
 void AShowDownGameModeBase::HandleMultiplayerSelectedCard(ASDPlayerState* SubmittingPlayer, ACard* SelectedCard)
 {
-	if (!SubmittingPlayer || !SelectedCard || SubmittingPlayer != MultiplayerCardGiver || !CardSystem)
+	if (!SubmittingPlayer || !SelectedCard || !CardSystem)
 	{
 		return;
 	}
 
-	if (!MultiplayerCardReceiver || !SubmittingPlayer->HandCards.Contains(SelectedCard))
+	if (SubmittingPlayer->Lives <= 0 || MultiplayerFoldedPlayers.Contains(SubmittingPlayer))
 	{
 		return;
 	}
 
-	if (MultiplayerCardReceiver->ForeheadCard)
+	if (!SubmittingPlayer->HandCards.Contains(SelectedCard))
+	{
+		return;
+	}
+
+	ASDPlayerState* Receiver = FindNextAliveMultiplayerPlayer(SubmittingPlayer);
+	if (!Receiver || Receiver == SubmittingPlayer || Receiver->ForeheadCard)
 	{
 		return;
 	}
 
 	CardSystem->RemoveCardFromHand(SubmittingPlayer->HandCards, SelectedCard);
 	ReflowMultiplayerHand(SubmittingPlayer);
+	for (ACard* Card : SubmittingPlayer->HandCards)
+	{
+		if (Card)
+		{
+			Card->SetSelectable(false);
+		}
+	}
 	SubmittingPlayer->ForceNetUpdate();
 	BroadcastMultiplayerCardSelectedAction(SubmittingPlayer);
 
-	MultiplayerCardReceiver->ForeheadCard = SelectedCard;
-	MultiplayerCardReceiver->ForceNetUpdate();
+	Receiver->ForeheadCard = SelectedCard;
+	Receiver->ForceNetUpdate();
 	SelectedCard->SetHandOwnerSlot(EShowDownPlayerSlot::None);
-	SelectedCard->SetHiddenFromSlot(MultiplayerCardReceiver->ShowDownSlot);
+	SelectedCard->SetHiddenFromSlot(Receiver->ShowDownSlot);
 	SelectedCard->SetFaceUp(true);
 	SelectedCard->SetSelectable(false);
-	if (USceneComponent* HeadSlot = GetHeadSlotForPlayerState(MultiplayerCardReceiver))
+	if (USceneComponent* HeadSlot = GetHeadSlotForPlayerState(Receiver))
 	{
 		CardSystem->MoveCardToSlotWithRotationOffset(
 			SelectedCard,
 			HeadSlot,
 			true,
-			GetMultiplayerForeheadCardRotationOffset(MultiplayerCardReceiver->ShowDownSlot));
+			GetMultiplayerForeheadCardRotationOffset(Receiver->ShowDownSlot));
 	}
 
 	if (AreAllAliveMultiplayerPlayersReadyToReveal())
@@ -4115,8 +4116,10 @@ void AShowDownGameModeBase::HandleMultiplayerSelectedCard(ASDPlayerState* Submit
 		return;
 	}
 
-	ASDPlayerState* NextGiver = FindNextAliveMultiplayerPlayer(SubmittingPlayer);
-	StartMultiplayerCardSelection(NextGiver, FindNextAliveMultiplayerPlayer(NextGiver));
+	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+	{
+		ShowDownGameState->SetNameTagRoundStatus(0, EShowDownSide::Player, EShowDownPlayerSlot::None);
+	}
 }
 
 void AShowDownGameModeBase::StartMultiplayerBetting()
@@ -4859,6 +4862,30 @@ void AShowDownGameModeBase::SetMultiplayerSelectableHand(ASDPlayerState* Player)
 			if (Card)
 			{
 				Card->SetSelectable(CurrentPlayer == Player);
+			}
+		}
+	}
+}
+
+void AShowDownGameModeBase::SetMultiplayerAliveHandsSelectable(bool bSelectable)
+{
+	for (ASDPlayerState* CurrentPlayer : MultiplayerPlayers)
+	{
+		if (!CurrentPlayer)
+		{
+			continue;
+		}
+
+		const bool bCurrentPlayerSelectable =
+			bSelectable
+			&& CurrentPlayer->Lives > 0
+			&& !MultiplayerFoldedPlayers.Contains(CurrentPlayer);
+
+		for (ACard* Card : CurrentPlayer->HandCards)
+		{
+			if (Card)
+			{
+				Card->SetSelectable(bCurrentPlayerSelectable);
 			}
 		}
 	}

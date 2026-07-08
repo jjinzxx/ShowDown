@@ -359,6 +359,7 @@ private:
 	bool TraceUnderCursor(FHitResult& OutHit) const;
 	bool TraceFromScreenCenter(FHitResult& OutHit) const;
 	ACard* ResolveCardFromHit(const FHitResult& Hit) const;
+	bool IsCardSelectableForLocalPlayer(const ACard* Card) const;
 	AActor* ResolveInteractableFromHit(const FHitResult& Hit) const;
 	AActor* FindFocusedInteractable() const;
 	void UpdateFocusedInteractable();
