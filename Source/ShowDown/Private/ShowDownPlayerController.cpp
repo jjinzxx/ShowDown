@@ -1732,9 +1732,6 @@ void AShowDownPlayerController::UpdateCharacterPlayerCamera(float DeltaTime)
 				AttachName);
 		}
 
-		PlayerCamera->SetRelativeLocation(LocalPlayerCameraCharacterTarget->GetPlayerCameraRelativeLocation());
-		PlayerCamera->SetRelativeRotation(LocalPlayerCameraCharacterTarget->GetPlayerCameraRotationOffset());
-		PlayerCamera->SetFieldOfView(LocalPlayerCameraCharacterTarget->GetPlayerCameraFOV());
 		PlayerCamera->bUsePawnControlRotation = true;
 
 		if (GetViewTarget() != PlayerPawn)
@@ -1750,6 +1747,26 @@ void AShowDownPlayerController::UpdateCharacterPlayerCamera(float DeltaTime)
 		InputMode.SetConsumeCaptureMouseDown(false);
 		SetInputMode(InputMode);
 	}
+
+	FVector CameraRelativeLocation = LocalPlayerCameraCharacterTarget->GetPlayerCameraRelativeLocation();
+	const FVector StableLocationOffset = LocalPlayerCameraCharacterTarget->GetPlayerCameraStableLocationOffset();
+	if (!StableLocationOffset.IsNearlyZero())
+	{
+		const USceneComponent* AttachParent = PlayerCamera->GetAttachParent();
+		if (AttachParent)
+		{
+			const FTransform AttachTransform = AttachParent->GetSocketTransform(
+				PlayerCamera->GetAttachSocketName(),
+				RTS_World);
+			const FVector StableWorldOffset =
+				LocalPlayerCameraCharacterTarget->GetActorTransform().TransformVectorNoScale(StableLocationOffset);
+			CameraRelativeLocation += AttachTransform.InverseTransformVectorNoScale(StableWorldOffset);
+		}
+	}
+
+	PlayerCamera->SetRelativeLocation(CameraRelativeLocation);
+	PlayerCamera->SetRelativeRotation(LocalPlayerCameraCharacterTarget->GetPlayerCameraRotationOffset());
+	PlayerCamera->SetFieldOfView(LocalPlayerCameraCharacterTarget->GetPlayerCameraFOV());
 
 	SubmitCharacterHeadLookRotation(GetControlRotation(), DeltaTime);
 }

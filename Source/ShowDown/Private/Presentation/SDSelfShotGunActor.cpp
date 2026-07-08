@@ -533,6 +533,33 @@ bool ASDSelfShotGunActor::TryResolveCharacterPresentationShot(
 	}
 
 	OutSourceLocation = RevolverAnchor->GetComponentLocation();
+
+	if (!TargetCharacter->ShouldAutoAimRevolverPresentationAtTarget())
+	{
+		FVector AimDirection = RevolverAnchor->GetForwardVector().GetSafeNormal();
+		if (AimDirection.IsNearlyZero())
+		{
+			AimDirection = TargetCharacter->GetActorForwardVector().GetSafeNormal();
+		}
+		if (AimDirection.IsNearlyZero())
+		{
+			AimDirection = FVector::ForwardVector;
+		}
+
+		OutAimLocation = OutSourceLocation + AimDirection * 100.0f;
+		if (OutRotationOffset)
+		{
+			FRotator ManualRotationOffset =
+				RevolverAnchor->GetComponentRotation()
+				- AimDirection.Rotation()
+				- TargetShotRotationOffset;
+			ManualRotationOffset.Normalize();
+			*OutRotationOffset = ManualRotationOffset;
+		}
+
+		return true;
+	}
+
 	OutAimLocation = TargetCharacter->GetActorLocation() + TargetShotAimOffset;
 	if (OutRotationOffset)
 	{

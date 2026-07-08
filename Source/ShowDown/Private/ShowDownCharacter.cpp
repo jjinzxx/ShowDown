@@ -108,6 +108,7 @@ AShowDownCharacter::AShowDownCharacter()
 void AShowDownCharacter::PostInitializeComponents()
 {
 	Super::PostInitializeComponents();
+	StabilizeRevolverPresentationAnchorAttachment();
 	CacheAnimBlueprintClass();
 	CacheBaseMeshTransform();
 	PushAnimStateToAnimInstance();
@@ -117,6 +118,7 @@ void AShowDownCharacter::PostInitializeComponents()
 void AShowDownCharacter::BeginPlay()
 {
 	Super::BeginPlay();
+	StabilizeRevolverPresentationAnchorAttachment();
 	CacheAnimBlueprintClass();
 	CacheBaseMeshTransform();
 	PushAnimStateToAnimInstance();
@@ -223,6 +225,23 @@ FTransform AShowDownCharacter::GetRevolverPresentationTransform() const
 	return RevolverPresentationAnchor
 		? RevolverPresentationAnchor->GetComponentTransform()
 		: GetActorTransform();
+}
+
+void AShowDownCharacter::StabilizeRevolverPresentationAnchorAttachment()
+{
+	if (!RevolverPresentationAnchor || !GetCapsuleComponent())
+	{
+		return;
+	}
+
+	const USceneComponent* CharacterMesh = GetMesh();
+	if (RevolverPresentationAnchor->GetAttachParent() == CharacterMesh
+		&& RevolverPresentationAnchor->GetAttachSocketName() != NAME_None)
+	{
+		RevolverPresentationAnchor->AttachToComponent(
+			GetCapsuleComponent(),
+			FAttachmentTransformRules::KeepWorldTransform);
+	}
 }
 
 void AShowDownCharacter::StartHitRagdoll()

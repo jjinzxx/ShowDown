@@ -71,6 +71,9 @@ public:
 	FVector GetPlayerCameraRelativeLocation() const { return PlayerCameraRelativeLocation; }
 
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Player Camera")
+	FVector GetPlayerCameraStableLocationOffset() const { return PlayerCameraStableLocationOffset; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Player Camera")
 	FRotator GetPlayerCameraRotationOffset() const { return PlayerCameraRotationOffset; }
 
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Player Camera")
@@ -81,6 +84,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Presentation")
 	FTransform GetRevolverPresentationTransform() const;
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Presentation")
+	bool ShouldAutoAimRevolverPresentationAtTarget() const { return bAutoAimRevolverPresentationAtTarget; }
 
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Character Camera")
 	float GetHeadLookPitch() const { return HeadLookPitch; }
@@ -191,6 +197,8 @@ protected:
 	UFUNCTION()
 	void HandleChatMessageReceived(const FString& SenderName, const FString& Message);
 
+	void StabilizeRevolverPresentationAnchorAttachment();
+
 	UFUNCTION(Server, Reliable)
 	void ServerSetCharacterIdentity(EShowDownCharacterRole NewRole, EShowDownPlayerSlot NewPlayerSlot, const FString& NewDisplayName);
 
@@ -199,6 +207,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Presentation")
 	TObjectPtr<USceneComponent> RevolverPresentationAnchor;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation", meta = (DisplayName = "Auto Aim Revolver Presentation At Target"))
+	bool bAutoAimRevolverPresentationAtTarget = false;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Name Tag")
 	TObjectPtr<UWidgetComponent> NameTagWidgetComponent;
@@ -211,6 +222,9 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Player Camera")
 	FVector PlayerCameraRelativeLocation = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Player Camera")
+	FVector PlayerCameraStableLocationOffset = FVector::ZeroVector;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Player Camera")
 	FRotator PlayerCameraRotationOffset = FRotator::ZeroRotator;
