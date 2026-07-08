@@ -81,19 +81,27 @@ namespace
 		return IsBeforeInMultiplayerTurnOrder(&Left, &Right);
 	}
 
-	FRotator GetHiddenForeheadCardRotationOffset()
+	FRotator BuildForeheadCardRotationOffsetFacingLocation(const USceneComponent* HeadSlot, const FVector& FocusLocation)
 	{
-		return FRotator(0.0f, 180.0f, 0.0f);
-	}
-
-	FRotator GetMultiplayerForeheadCardRotationOffset(EShowDownPlayerSlot ReceiverSlot)
-	{
-		if (ReceiverSlot == EShowDownPlayerSlot::Player2)
+		if (!HeadSlot)
 		{
 			return FRotator::ZeroRotator;
 		}
 
-		return GetHiddenForeheadCardRotationOffset();
+		FVector FaceDirection = FocusLocation - HeadSlot->GetComponentLocation();
+		FaceDirection.Z = 0.0f;
+		if (FaceDirection.IsNearlyZero())
+		{
+			return FRotator::ZeroRotator;
+		}
+
+		FRotator DesiredRotation = HeadSlot->GetComponentRotation();
+		DesiredRotation.Yaw = FaceDirection.Rotation().Yaw;
+
+		FRotator RotationOffset =
+			(HeadSlot->GetComponentQuat().Inverse() * DesiredRotation.Quaternion()).Rotator();
+		RotationOffset.Normalize();
+		return RotationOffset;
 	}
 
 	bool IsActiveNetworkPlayerController(const APlayerController* PlayerController)
@@ -156,6 +164,27 @@ namespace
 	EShowDownSide GetMultiplayerLayoutSideForPlayerIndex(int32 PlayerIndex)
 	{
 		return PlayerIndex == 1 ? EShowDownSide::Collector : EShowDownSide::Player;
+	}
+
+	AShowDownCharacter* FindActiveCharacterForPlayerSlot(UWorld* World, EShowDownPlayerSlot Slot)
+	{
+		if (!World || Slot == EShowDownPlayerSlot::None)
+		{
+			return nullptr;
+		}
+
+		for (TActorIterator<AShowDownCharacter> It(World); It; ++It)
+		{
+			AShowDownCharacter* CandidateCharacter = *It;
+			if (IsValid(CandidateCharacter)
+				&& CandidateCharacter->IsCharacterSceneActive()
+				&& CandidateCharacter->GetPlayerSlot() == Slot)
+			{
+				return CandidateCharacter;
+			}
+		}
+
+		return nullptr;
 	}
 
 	bool TryGetMultiplayerPlacementRole(
@@ -592,7 +621,11 @@ void AShowDownGameModeBase::PlayerSelectedCardFromController(AController* Submit
 	//콜렉터의 이마로 카드 이동
 	CollectorState.ForeheadCard = SelectedCard;
 
-	CardSystem->MoveCardToSlot(SelectedCard, CollectorHeadSlot, true);
+	CardSystem->MoveCardToSlotWithRotationOffset(
+		SelectedCard,
+		CollectorHeadSlot,
+		true,
+		GetForeheadCardRotationOffsetForSide(EShowDownSide::Collector, CollectorHeadSlot));
 
 	WaitForCardPlacementThen(SelectedCard, [this]()
 	{
@@ -1726,7 +1759,11 @@ void AShowDownGameModeBase::CollectorGiveCardToPlayer()
 	BroadcastCardSelectedAction(EShowDownSide::Collector);
 
 	// 플레이어는 자기 이마 카드를 보면 안 되므로 false
-	CardSystem->MoveCardToSlotWithRotationOffset(ChosenCard, PlayerHeadSlot, false, GetHiddenForeheadCardRotationOffset());
+	CardSystem->MoveCardToSlotWithRotationOffset(
+		ChosenCard,
+		PlayerHeadSlot,
+		false,
+		GetForeheadCardRotationOffsetForSide(EShowDownSide::Player, PlayerHeadSlot));
 
 	UE_LOG(LogTemp, Log, TEXT("Collector gave card to player: %s, Rank: %d"), *ChosenCard->GetName(), ChosenCard->Rank);
 
@@ -4107,7 +4144,7 @@ void AShowDownGameModeBase::HandleMultiplayerSelectedCard(ASDPlayerState* Submit
 			SelectedCard,
 			HeadSlot,
 			true,
-			GetMultiplayerForeheadCardRotationOffset(Receiver->ShowDownSlot));
+			GetForeheadCardRotationOffsetForPlayerState(Receiver, HeadSlot));
 	}
 
 	if (AreAllAliveMultiplayerPlayersReadyToReveal())
@@ -4956,6 +4993,14 @@ USceneComponent* AShowDownGameModeBase::GetHeadSlotForPlayerState(ASDPlayerState
 	}
 
 	const int32 PlayerIndex = MultiplayerPlayers.IndexOfByKey(Player);
+	if (const AShowDownCharacter* Character = FindActiveCharacterForPlayerSlot(GetWorld(), Player->ShowDownSlot))
+	{
+		if (USceneComponent* HeadSlot = Character->GetForeheadCardAnchor())
+		{
+			return HeadSlot;
+		}
+	}
+
 	if (const ASDCardPlacementAnchor* ForeheadAnchor = GetForeheadAnchorForPlayerSlot(Player->ShowDownSlot))
 	{
 		if (USceneComponent* HeadSlot = ForeheadAnchor->GetSlotComponent())
@@ -4988,6 +5033,94 @@ USceneComponent* AShowDownGameModeBase::GetHeadSlotForPlayerState(ASDPlayerState
 	}
 
 	return GetHeadSlotForSide(GetMultiplayerLayoutSideForPlayerIndex(PlayerIndex));
+}
+
+FRotator AShowDownGameModeBase::GetForeheadCardRotationOffsetForPlayerState(
+	const ASDPlayerState* Player,
+	const USceneComponent* HeadSlot) const
+{
+	if (!Player || !HeadSlot || !GetWorld())
+	{
+		return FRotator::ZeroRotator;
+	}
+
+	if (const AShowDownCharacter* Character = FindActiveCharacterForPlayerSlot(GetWorld(), Player->ShowDownSlot))
+	{
+		if (Character->GetForeheadCardAnchor() == HeadSlot
+			&& !Character->ShouldAutoFaceForeheadCardToOpponents())
+		{
+			return FRotator::ZeroRotator;
+		}
+	}
+
+	FVector FocusLocation = FVector::ZeroVector;
+	int32 FocusCount = 0;
+	for (const ASDPlayerState* OtherPlayer : MultiplayerPlayers)
+	{
+		if (!OtherPlayer || OtherPlayer == Player || OtherPlayer->Lives <= 0)
+		{
+			continue;
+		}
+
+		if (const AShowDownCharacter* Character = FindActiveCharacterForPlayerSlot(GetWorld(), OtherPlayer->ShowDownSlot))
+		{
+			FocusLocation += Character->GetForeheadCardAnchor()
+				? Character->GetForeheadCardAnchor()->GetComponentLocation()
+				: Character->GetActorLocation();
+			++FocusCount;
+			continue;
+		}
+
+		if (const ASDCardPlacementAnchor* ForeheadAnchor = GetForeheadAnchorForPlayerSlot(OtherPlayer->ShowDownSlot))
+		{
+			if (const USceneComponent* Slot = ForeheadAnchor->GetSlotComponent())
+			{
+				FocusLocation += Slot->GetComponentLocation();
+				++FocusCount;
+			}
+		}
+	}
+
+	return FocusCount > 0
+		? BuildForeheadCardRotationOffsetFacingLocation(HeadSlot, FocusLocation / static_cast<float>(FocusCount))
+		: FRotator::ZeroRotator;
+}
+
+FRotator AShowDownGameModeBase::GetForeheadCardRotationOffsetForSide(
+	EShowDownSide Side,
+	const USceneComponent* HeadSlot) const
+{
+	if (!HeadSlot)
+	{
+		return FRotator::ZeroRotator;
+	}
+
+	if (const AShowDownCharacter* Character = FindSingleRouletteCharacter(Side))
+	{
+		if (Character->GetForeheadCardAnchor() == HeadSlot
+			&& !Character->ShouldAutoFaceForeheadCardToOpponents())
+		{
+			return FRotator::ZeroRotator;
+		}
+	}
+
+	const EShowDownSide FocusSide = Side == EShowDownSide::Collector
+		? EShowDownSide::Player
+		: EShowDownSide::Collector;
+	if (const AShowDownCharacter* FocusCharacter = FindSingleRouletteCharacter(FocusSide))
+	{
+		const FVector FocusLocation = FocusCharacter->GetForeheadCardAnchor()
+			? FocusCharacter->GetForeheadCardAnchor()->GetComponentLocation()
+			: FocusCharacter->GetActorLocation();
+		return BuildForeheadCardRotationOffsetFacingLocation(HeadSlot, FocusLocation);
+	}
+
+	if (const USceneComponent* FocusSlot = GetHeadSlotForSide(FocusSide))
+	{
+		return BuildForeheadCardRotationOffsetFacingLocation(HeadSlot, FocusSlot->GetComponentLocation());
+	}
+
+	return FRotator::ZeroRotator;
 }
 
 void AShowDownGameModeBase::NotifyMultiplayerStatus(const FString& Message) const
@@ -5324,6 +5457,14 @@ USceneComponent* AShowDownGameModeBase::GetHandSlotForSide(EShowDownSide Side) c
 
 USceneComponent* AShowDownGameModeBase::GetHeadSlotForSide(EShowDownSide Side) const
 {
+	if (const AShowDownCharacter* Character = FindSingleRouletteCharacter(Side))
+	{
+		if (USceneComponent* HeadSlot = Character->GetForeheadCardAnchor())
+		{
+			return HeadSlot;
+		}
+	}
+
 	if (const ASDCardPlacementAnchor* Anchor = GetForeheadAnchorForSide(Side))
 	{
 		if (USceneComponent* HeadSlot = Anchor->GetSlotComponent())

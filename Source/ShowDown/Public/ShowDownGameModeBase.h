@@ -515,6 +515,8 @@ private:
 	void ReflowMultiplayerHand(ASDPlayerState* Player);
 	USceneComponent* GetHandSlotForPlayerState(ASDPlayerState* Player) const;
 	USceneComponent* GetHeadSlotForPlayerState(ASDPlayerState* Player) const;
+	FRotator GetForeheadCardRotationOffsetForPlayerState(const ASDPlayerState* Player, const USceneComponent* HeadSlot) const;
+	FRotator GetForeheadCardRotationOffsetForSide(EShowDownSide Side, const USceneComponent* HeadSlot) const;
 	void NotifyMultiplayerStatus(const FString& Message) const;
 	void StartStage(int32 StageIndex);
 	void AdvanceStage();

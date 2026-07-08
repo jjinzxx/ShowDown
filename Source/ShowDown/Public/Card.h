@@ -92,6 +92,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Card|Slot Attach Motion", meta = (ClampMin = "0.1"))
 	float SlotAttachTargetScale = 2.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Card|Slot Attach Motion", meta = (ClampMin = "0.1"))
+	float ForeheadSlotAttachTargetScale = 1.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Card|Slot Attach Motion")
 	FRotator SlotAttachFlightRotationAmplitude = FRotator(8.0f, 0.0f, 16.0f);
 
@@ -182,9 +185,12 @@ private:
 	void ConfigureInteractionComponents();
 	void UpdateTargetTransform();
 	void EnableMotionTick();
-	void MoveToSlotTransform(const FTransform& SlotTransform, bool bNewFaceUp);
+	void MoveToSlotComponent(USceneComponent* Slot, bool bNewFaceUp, FRotator RotationOffset);
+	void MoveToSlotTransform(const FTransform& SlotTransform, bool bNewFaceUp, float VisualScaleMultiplier);
 	void PublishMovementTarget(const FTransform& NewTransform, bool bPlaySlotAttachMotion);
 	void ApplyMovementTarget(const FTransform& NewTransform, bool bPlaySlotAttachMotion);
+	void AttachToPendingSlot();
+	void ClearPendingSlotAttachment();
 	void ResetTravelMotionState();
 	void StartSlotAttachMotion(const FTransform& TargetTransform);
 	void UpdateSlotAttachMotion(float DeltaTime);
@@ -212,6 +218,8 @@ private:
 	FVector SlotAttachTravelDirection = FVector::ForwardVector;
 	FQuat SlotAttachStartRotation = FQuat::Identity;
 	FQuat SlotAttachTargetRotation = FQuat::Identity;
+	TWeakObjectPtr<USceneComponent> PendingSlotAttachComponent;
+	FRotator PendingSlotAttachRotationOffset = FRotator::ZeroRotator;
 	float CurrentVisualScaleMultiplier = 1.0f;
 	float VisualScaleStartMultiplier = 1.0f;
 	float VisualScaleElapsedTime = 0.0f;

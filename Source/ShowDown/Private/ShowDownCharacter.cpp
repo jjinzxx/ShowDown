@@ -63,6 +63,11 @@ AShowDownCharacter::AShowDownCharacter()
 	RevolverPresentationAnchor->SetRelativeLocation(FVector(34.0f, 26.0f, -18.0f));
 	RevolverPresentationAnchor->SetRelativeRotation(FRotator::ZeroRotator);
 
+	ForeheadCardAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("ForeheadCardAnchor"));
+	ForeheadCardAnchor->SetupAttachment(CharacterMesh, TEXT("Head"));
+	ForeheadCardAnchor->SetRelativeLocation(FVector(18.0f, 0.0f, 8.0f));
+	ForeheadCardAnchor->SetRelativeRotation(FRotator::ZeroRotator);
+
 	NameTagWidgetComponent = CreateDefaultSubobject<UWidgetComponent>(TEXT("NameTag"));
 	NameTagWidgetComponent->SetupAttachment(GetCapsuleComponent());
 	NameTagWidgetComponent->SetRelativeLocation(NameTagRelativeLocation);

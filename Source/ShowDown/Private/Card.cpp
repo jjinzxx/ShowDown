@@ -150,6 +150,15 @@ void ACard::Tick(float DeltaTime)
 		return;
 	}
 
+	if (RootComp && RootComp->GetAttachParent())
+	{
+		if (!bVisualScaleMotionActive && !bSlotAttachSettleActive)
+		{
+			SetActorTickEnabled(false);
+		}
+		return;
+	}
+
 	const FVector NewLocation = FMath::VInterpTo(GetActorLocation(), TargetLocation, DeltaTime, MoveSpeed);
 	const FRotator NewRotation = FMath::RInterpTo(GetActorRotation(), TargetRotation, DeltaTime, MoveSpeed);
 	SetActorLocationAndRotation(NewLocation, NewRotation);
@@ -166,6 +175,7 @@ void ACard::Tick(float DeltaTime)
 			VisualRoot->SetRelativeLocation(VisualRelativeOffset);
 		}
 		SetActorLocationAndRotation(TargetLocation, TargetRotation);
+		AttachToPendingSlot();
 		SetActorTickEnabled(false);
 	}
 }
@@ -347,12 +357,7 @@ bool ACard::IsCardSelectableForSlot(EShowDownPlayerSlot PlayerSlot) const
 
 void ACard::MoveToSlot(USceneComponent* Slot, bool bNewFaceUp)
 {
-	if (!Slot)
-	{
-		return;
-	}
-
-	MoveToSlotTransform(Slot->GetComponentTransform(), bNewFaceUp);
+	MoveToSlotComponent(Slot, bNewFaceUp, FRotator::ZeroRotator);
 }
 
 void ACard::MoveToSlotWithRotationOffset(USceneComponent* Slot, bool bNewFaceUp, FRotator RotationOffset)
@@ -362,18 +367,33 @@ void ACard::MoveToSlotWithRotationOffset(USceneComponent* Slot, bool bNewFaceUp,
 		return;
 	}
 
-	FTransform SlotTransform = Slot->GetComponentTransform();
-	SlotTransform.SetRotation((SlotTransform.GetRotation() * RotationOffset.Quaternion()).GetNormalized());
-	MoveToSlotTransform(SlotTransform, bNewFaceUp);
+	MoveToSlotComponent(Slot, bNewFaceUp, RotationOffset);
 }
 
-void ACard::MoveToSlotTransform(const FTransform& SlotTransform, bool bNewFaceUp)
+void ACard::MoveToSlotComponent(USceneComponent* Slot, bool bNewFaceUp, FRotator RotationOffset)
+{
+	if (!Slot)
+	{
+		return;
+	}
+
+	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+	PendingSlotAttachComponent = Slot;
+	PendingSlotAttachRotationOffset = RotationOffset;
+
+	FTransform SlotTransform = Slot->GetComponentTransform();
+	SlotTransform.SetRotation((SlotTransform.GetRotation() * RotationOffset.Quaternion()).GetNormalized());
+	SlotTransform.SetScale3D(GetActorScale3D());
+	MoveToSlotTransform(SlotTransform, bNewFaceUp, ForeheadSlotAttachTargetScale);
+}
+
+void ACard::MoveToSlotTransform(const FTransform& SlotTransform, bool bNewFaceUp, float VisualScaleMultiplier)
 {
 	bSelected = false;
 	bHovered = false;
 	SetSelectable(false);
 	SetFaceUp(bNewFaceUp);
-	SetTargetVisualScaleMultiplier(SlotAttachTargetScale);
+	SetTargetVisualScaleMultiplier(VisualScaleMultiplier);
 	ApplyMovementTarget(SlotTransform, bUseSlotAttachMotion);
 	PublishMovementTarget(SlotTransform, bUseSlotAttachMotion);
 
@@ -388,6 +408,8 @@ float ACard::GetSlotAttachMotionTotalSeconds() const
 
 void ACard::MoveToHandTransform(const FTransform& NewTransform)
 {
+	ClearPendingSlotAttachment();
+	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
 	bVisualScaleMotionActive = false;
 	VisualScaleElapsedTime = 0.0f;
 	SetTargetVisualScaleMultiplier(1.0f);
@@ -435,6 +457,30 @@ void ACard::ApplyMovementTarget(const FTransform& NewTransform, bool bPlaySlotAt
 	{
 		StartSlotAttachMotion(FTransform(DefaultRotation, DefaultLocation));
 	}
+}
+
+void ACard::AttachToPendingSlot()
+{
+	USceneComponent* Slot = PendingSlotAttachComponent.Get();
+	if (!Slot)
+	{
+		ClearPendingSlotAttachment();
+		return;
+	}
+
+	FTransform SlotTransform = Slot->GetComponentTransform();
+	SlotTransform.SetRotation((SlotTransform.GetRotation() * PendingSlotAttachRotationOffset.Quaternion()).GetNormalized());
+	SlotTransform.SetScale3D(GetActorScale3D());
+	SetActorTransform(SlotTransform, false, nullptr, ETeleportType::TeleportPhysics);
+	AttachToComponent(Slot, FAttachmentTransformRules::KeepWorldTransform);
+	ClearPendingSlotAttachment();
+	ForceNetUpdate();
+}
+
+void ACard::ClearPendingSlotAttachment()
+{
+	PendingSlotAttachComponent.Reset();
+	PendingSlotAttachRotationOffset = FRotator::ZeroRotator;
 }
 
 void ACard::ResetTravelMotionState()
@@ -511,6 +557,7 @@ void ACard::UpdateSlotAttachMotion(float DeltaTime)
 		bSlotAttachSettleActive = SlotAttachSettleDuration > KINDA_SMALL_NUMBER;
 		SlotAttachSettleElapsedTime = 0.0f;
 		SetActorLocationAndRotation(SlotAttachTargetLocation, SlotAttachTargetRotation);
+		AttachToPendingSlot();
 	}
 }
 

@@ -83,10 +83,16 @@ public:
 	USceneComponent* GetRevolverPresentationAnchor() const { return RevolverPresentationAnchor; }
 
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Presentation")
+	USceneComponent* GetForeheadCardAnchor() const { return ForeheadCardAnchor; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Presentation")
 	FTransform GetRevolverPresentationTransform() const;
 
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Presentation")
 	bool ShouldAutoAimRevolverPresentationAtTarget() const { return bAutoAimRevolverPresentationAtTarget; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Presentation")
+	bool ShouldAutoFaceForeheadCardToOpponents() const { return bAutoFaceForeheadCardToOpponents; }
 
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Character Camera")
 	float GetHeadLookPitch() const { return HeadLookPitch; }
@@ -208,8 +214,14 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Presentation")
 	TObjectPtr<USceneComponent> RevolverPresentationAnchor;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Presentation")
+	TObjectPtr<USceneComponent> ForeheadCardAnchor;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation", meta = (DisplayName = "Auto Aim Revolver Presentation At Target"))
 	bool bAutoAimRevolverPresentationAtTarget = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation", meta = (DisplayName = "Auto Face Forehead Card To Opponents"))
+	bool bAutoFaceForeheadCardToOpponents = false;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Name Tag")
 	TObjectPtr<UWidgetComponent> NameTagWidgetComponent;
