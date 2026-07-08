@@ -21,6 +21,7 @@
 #include "LevelSequencePlayer.h"
 #include "MovieSceneSequencePlaybackSettings.h"
 #include "PlayerPawn.h"
+#include "Presentation/SDBetActionPanelActor.h"
 #include "Presentation/SDBetBulletPresentationActor.h"
 #include "Presentation/SDSelfShotGunActor.h"
 #include "SDPlayerSeat.h"
@@ -807,6 +808,7 @@ void AShowDownGameModeBase::PlayCollectorActionPresentationThen(TFunction<void()
 
 	bCollectorActionPresentationInProgress = true;
 	CollectorActionPresentationContinuation = MoveTemp(Continuation);
+	RefreshBetActionPanel();
 
 	Collector->PlayActionSpin();
 
@@ -837,6 +839,7 @@ void AShowDownGameModeBase::FinishCollectorActionPresentation()
 	{
 		Continuation();
 	}
+	RefreshBetActionPanel();
 
 	if (!bCollectorActionPresentationInProgress && QueuedCollectorActionPresentationContinuations.Num() > 0)
 	{
@@ -3033,6 +3036,42 @@ ASDBetBulletPresentationActor* AShowDownGameModeBase::EnsureBetBulletPresentatio
 	return BetBulletPresentationActor;
 }
 
+ASDBetActionPanelActor* AShowDownGameModeBase::EnsureBetActionPanelActor()
+{
+	if (!bUseBetActionPanel || !HasAuthority())
+	{
+		return nullptr;
+	}
+
+	if (IsValid(BetActionPanelActor))
+	{
+		return BetActionPanelActor;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	UClass* PanelClass = BetActionPanelClass
+		? BetActionPanelClass.Get()
+		: ASDBetActionPanelActor::StaticClass();
+	if (!PanelClass)
+	{
+		return nullptr;
+	}
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.Owner = this;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	BetActionPanelActor = World->SpawnActor<ASDBetActionPanelActor>(
+		PanelClass,
+		FTransform::Identity,
+		SpawnParams);
+	return BetActionPanelActor;
+}
+
 void AShowDownGameModeBase::ClearBetBulletPresentation()
 {
 	ClearBetBulletTransientState();
@@ -3042,18 +3081,21 @@ void AShowDownGameModeBase::ClearBetBulletPresentation()
 		EmptyState.Revision = BetBulletPresentationRevision;
 		PresentationActor->SetPresentationState(EmptyState);
 	}
+	ClearBetActionPanel();
 }
 
 void AShowDownGameModeBase::RefreshBetBulletPresentation(const FString& StatusText)
 {
 	if (!bUseBetBulletPresentation)
 	{
+		RefreshBetActionPanel();
 		return;
 	}
 
 	ASDBetBulletPresentationActor* PresentationActor = EnsureBetBulletPresentationActor();
 	if (!PresentationActor)
 	{
+		RefreshBetActionPanel();
 		return;
 	}
 
@@ -3177,6 +3219,113 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation(const FString& StatusTe
 	}
 
 	PresentationActor->SetPresentationState(NewState);
+	RefreshBetActionPanel();
+}
+
+void AShowDownGameModeBase::ClearBetActionPanel()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	++BetActionPanelRevision;
+	ASDBetActionPanelActor* PanelActor = IsValid(BetActionPanelActor)
+		? BetActionPanelActor.Get()
+		: EnsureBetActionPanelActor();
+	if (!PanelActor)
+	{
+		return;
+	}
+
+	FSDBetActionPanelState EmptyState;
+	EmptyState.Revision = BetActionPanelRevision;
+	PanelActor->SetPanelState(EmptyState);
+}
+
+void AShowDownGameModeBase::RefreshBetActionPanel()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	if (!bUseBetActionPanel)
+	{
+		ClearBetActionPanel();
+		return;
+	}
+
+	ASDBetActionPanelActor* PanelActor = EnsureBetActionPanelActor();
+	if (!PanelActor)
+	{
+		return;
+	}
+
+	FSDBetActionPanelState NewState;
+	NewState.Revision = ++BetActionPanelRevision;
+	NewState.MaxRaiseTarget = 6;
+
+	if (bMultiplayerMatchStarted)
+	{
+		const int32 TableBet = BettingSystem ? BettingSystem->GetCurrentBet() : 0;
+		const bool bCurrentPlayerCanAct =
+			bBettingPhase
+			&& !bMultiplayerRoundResolving
+			&& MultiplayerCurrentBetter
+			&& MultiplayerCurrentBetter->Lives > 0
+			&& !MultiplayerFoldedPlayers.Contains(MultiplayerCurrentBetter)
+			&& CountActiveMultiplayerPlayers() > 1;
+
+		NewState.bMultiplayer = true;
+		NewState.bVisible = bCurrentPlayerCanAct;
+		NewState.TurnSlot = bCurrentPlayerCanAct && MultiplayerCurrentBetter
+			? MultiplayerCurrentBetter->ShowDownSlot
+			: EShowDownPlayerSlot::None;
+		NewState.CurrentPlayerBet = MultiplayerCurrentBetter
+			? FMath::Clamp(MultiplayerCurrentBetter->CurrentBet, 0, 6)
+			: 0;
+		NewState.TableBet = FMath::Clamp(TableBet, 0, 6);
+		NewState.MinRaiseTarget = FMath::Clamp(NewState.TableBet + 1, 1, NewState.MaxRaiseTarget);
+		NewState.bCanRaise = bCurrentPlayerCanAct && BettingRaisesLeft > 0 && NewState.TableBet < NewState.MaxRaiseTarget;
+		NewState.bCanFold = bCurrentPlayerCanAct;
+
+		const FTransform PanelTransform = BuildBetActionPanelTransformForPlayer(MultiplayerCurrentBetter);
+		NewState.WorldLocation = PanelTransform.GetLocation();
+		NewState.WorldRotation = PanelTransform.GetRotation().Rotator();
+	}
+	else
+	{
+		const AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState();
+		const EShowDownSide TurnSide = ShowDownGameState
+			? ShowDownGameState->NameTagTurnSide
+			: CurrentRoundFirstSide;
+		const EShowDownPlayerSlot TurnSlot = ShowDownGameState
+			? ShowDownGameState->NameTagTurnSlot
+			: EShowDownPlayerSlot::Player1;
+		const int32 TableBet = FMath::Max(PlayerState.CurrentBet, CollectorState.CurrentBet);
+		const bool bPlayerCanAct =
+			bBettingPhase
+			&& !bCollectorActionPresentationInProgress
+			&& !bCollectorBetDecisionInProgress
+			&& TurnSide == EShowDownSide::Player
+			&& TurnSlot != EShowDownPlayerSlot::None;
+
+		NewState.bMultiplayer = false;
+		NewState.bVisible = bPlayerCanAct;
+		NewState.TurnSlot = bPlayerCanAct ? EShowDownPlayerSlot::Player1 : EShowDownPlayerSlot::None;
+		NewState.CurrentPlayerBet = FMath::Clamp(PlayerState.CurrentBet, 0, 6);
+		NewState.TableBet = FMath::Clamp(TableBet, 0, 6);
+		NewState.MinRaiseTarget = FMath::Clamp(NewState.TableBet + 1, 1, NewState.MaxRaiseTarget);
+		NewState.bCanRaise = bPlayerCanAct && BettingRaisesLeft > 0 && NewState.TableBet < NewState.MaxRaiseTarget;
+		NewState.bCanFold = bPlayerCanAct;
+
+		const FTransform PanelTransform = BuildBetActionPanelTransformForSide(EShowDownSide::Player);
+		NewState.WorldLocation = PanelTransform.GetLocation();
+		NewState.WorldRotation = PanelTransform.GetRotation().Rotator();
+	}
+
+	PanelActor->SetPanelState(NewState);
 }
 
 FTransform AShowDownGameModeBase::BuildBetBulletLaneTransformForSide(EShowDownSide Side) const
@@ -3254,6 +3403,83 @@ FTransform AShowDownGameModeBase::BuildBetBulletLaneTransformFromLocation(
 	LaneRotation.Pitch = 0.0f;
 	LaneRotation.Roll = 0.0f;
 	return FTransform(LaneRotation, LaneLocation);
+}
+
+FTransform AShowDownGameModeBase::BuildBetActionPanelTransformForSide(EShowDownSide Side) const
+{
+	if (const USceneComponent* HeadSlot = GetHeadSlotForSide(Side))
+	{
+		return BuildBetActionPanelTransformFromLocation(
+			HeadSlot->GetComponentLocation(),
+			Side == EShowDownSide::Player ? 0 : 2);
+	}
+
+	if (const USceneComponent* HandSlot = GetHandSlotForSide(Side))
+	{
+		return BuildBetActionPanelTransformFromLocation(
+			HandSlot->GetComponentLocation(),
+			Side == EShowDownSide::Player ? 0 : 2);
+	}
+
+	return BuildBetActionPanelTransformFromLocation(
+		ResolveSingleTableCenter(GetWorld()),
+		Side == EShowDownSide::Player ? 0 : 2);
+}
+
+FTransform AShowDownGameModeBase::BuildBetActionPanelTransformForPlayer(const ASDPlayerState* Player) const
+{
+	if (Player)
+	{
+		if (const USceneComponent* HeadSlot = GetHeadSlotForPlayerState(const_cast<ASDPlayerState*>(Player)))
+		{
+			return BuildBetActionPanelTransformFromLocation(
+				HeadSlot->GetComponentLocation(),
+				GetMultiplayerTurnOrderIndex(Player->ShowDownSlot));
+		}
+
+		if (const USceneComponent* HandSlot = GetHandSlotForPlayerState(const_cast<ASDPlayerState*>(Player)))
+		{
+			return BuildBetActionPanelTransformFromLocation(
+				HandSlot->GetComponentLocation(),
+				GetMultiplayerTurnOrderIndex(Player->ShowDownSlot));
+		}
+	}
+
+	return BuildBetActionPanelTransformFromLocation(
+		ResolveSingleTableCenter(GetWorld()),
+		GetMultiplayerTurnOrderIndex(Player ? Player->ShowDownSlot : EShowDownPlayerSlot::None));
+}
+
+FTransform AShowDownGameModeBase::BuildBetActionPanelTransformFromLocation(
+	const FVector& SourceLocation,
+	int32 FallbackOrderIndex) const
+{
+	const FVector TableCenter = ResolveSingleTableCenter(GetWorld());
+	FVector Direction = SourceLocation - TableCenter;
+	Direction.Z = 0.0f;
+
+	if (Direction.IsNearlyZero())
+	{
+		static const float FallbackYaws[] = { -90.0f, 0.0f, 90.0f, 180.0f };
+		const int32 FallbackIndex = FMath::Clamp(FallbackOrderIndex, 0, UE_ARRAY_COUNT(FallbackYaws) - 1);
+		Direction = FRotationMatrix(FRotator(0.0f, FallbackYaws[FallbackIndex], 0.0f)).GetUnitAxis(EAxis::X);
+	}
+	Direction.Normalize();
+
+	FVector PanelLocation = TableCenter + Direction * FMath::Max(0.0f, BetActionPanelDistanceFromCenter);
+	PanelLocation.Z = TableCenter.Z + BetActionPanelHeightOffset;
+
+	FVector FacingDirection = TableCenter - PanelLocation;
+	FacingDirection.Z = 0.0f;
+	if (FacingDirection.IsNearlyZero())
+	{
+		FacingDirection = -Direction;
+	}
+
+	FRotator PanelRotation = FacingDirection.Rotation();
+	PanelRotation.Pitch = 0.0f;
+	PanelRotation.Roll = 0.0f;
+	return FTransform(PanelRotation, PanelLocation);
 }
 
 FString AShowDownGameModeBase::BuildSingleBetBulletStatusText(EShowDownSide TurnSide) const

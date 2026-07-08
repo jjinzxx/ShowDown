@@ -30,6 +30,7 @@ class AController;
 class APlayerController;
 class ASDPlayerState;
 class ALevelSequenceActor;
+class ASDBetActionPanelActor;
 class ASDBetBulletPresentationActor;
 class ULevelSequence;
 class ULevelSequencePlayer;
@@ -261,6 +262,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Bullets")
 	float BetBulletLaneHeightOffset = 58.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions")
+	bool bUseBetActionPanel = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions")
+	TSubclassOf<ASDBetActionPanelActor> BetActionPanelClass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (ClampMin = "0.0"))
+	float BetActionPanelDistanceFromCenter = 132.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions")
+	float BetActionPanelHeightOffset = 30.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal")
 	bool bUseCardRevealPresentation = true;
 
@@ -423,12 +436,15 @@ private:
 	TObjectPtr<ASDSelfShotGunActor> ActiveSelfShotGunActor = nullptr;
 	UPROPERTY()
 	TObjectPtr<ASDBetBulletPresentationActor> BetBulletPresentationActor = nullptr;
+	UPROPERTY()
+	TObjectPtr<ASDBetActionPanelActor> BetActionPanelActor = nullptr;
 
 	bool bSelfShotGunPresentationInProgress = false;
 	bool bPendingSelfShotRouletteResult = false;
 	bool bPendingSelfShotLiveRound = false;
 	EShowDownSide PendingSelfShotTargetSide = EShowDownSide::Player;
 	int32 BetBulletPresentationRevision = 0;
+	int32 BetActionPanelRevision = 0;
 	bool bHasBetBulletAction = false;
 	bool bBetBulletActionIsMultiplayer = false;
 	EShowDownSide BetBulletActionSide = EShowDownSide::Player;
@@ -506,9 +522,15 @@ private:
 	void ClearBetBulletPresentation();
 	void RefreshBetBulletPresentation(const FString& StatusText);
 	ASDBetBulletPresentationActor* EnsureBetBulletPresentationActor();
+	void ClearBetActionPanel();
+	void RefreshBetActionPanel();
+	ASDBetActionPanelActor* EnsureBetActionPanelActor();
 	FTransform BuildBetBulletLaneTransformForSide(EShowDownSide Side) const;
 	FTransform BuildBetBulletLaneTransformForPlayer(const ASDPlayerState* Player) const;
 	FTransform BuildBetBulletLaneTransformFromLocation(const FVector& SourceLocation, int32 FallbackOrderIndex) const;
+	FTransform BuildBetActionPanelTransformForSide(EShowDownSide Side) const;
+	FTransform BuildBetActionPanelTransformForPlayer(const ASDPlayerState* Player) const;
+	FTransform BuildBetActionPanelTransformFromLocation(const FVector& SourceLocation, int32 FallbackOrderIndex) const;
 	FString BuildSingleBetBulletStatusText(EShowDownSide TurnSide) const;
 	FString BuildMultiplayerBetBulletStatusText(const ASDPlayerState* TurnPlayer) const;
 	void RecordSingleBetBulletAction(EShowDownSide Side, EShowDownBetAction Action, int32 PreviousBet, int32 TargetBet);
