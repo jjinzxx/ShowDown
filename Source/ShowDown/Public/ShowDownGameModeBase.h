@@ -258,7 +258,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions")
 	TSubclassOf<ASDBetActionPanelActor> BetActionPanelClass;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (ClampMin = "0.0", DisplayName = "Action Panel Hand Forward Offset"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (DisplayName = "Action Panel Hand Forward Offset"))
 	float BetActionPanelDistanceFromCenter = 12.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (DisplayName = "Action Panel Hand Right Offset"))
@@ -266,6 +266,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (DisplayName = "Action Panel Hand Height Offset"))
 	float BetActionPanelHeightOffset = 16.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (DisplayName = "Action Panel Rotation Offset"))
+	FRotator BetActionPanelRotationOffset = FRotator::ZeroRotator;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (ClampMin = "0.1", ClampMax = "2.0", DisplayName = "Action Panel Visual Scale"))
 	float BetActionPanelVisualScale = 0.35f;
@@ -291,7 +294,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal")
 	float CardRevealHeightOffset = 10.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0", DisplayName = "Card Reveal Depth Spacing"))
 	float CardRevealSideSpacing = 10.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.1"))

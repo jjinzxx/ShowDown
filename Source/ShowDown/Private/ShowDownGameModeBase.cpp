@@ -3448,11 +3448,12 @@ FTransform AShowDownGameModeBase::BuildBetActionPanelTransformFromLocation(
 	FRotator PanelRotation = FacingDirection.Rotation();
 	PanelRotation.Pitch = 0.0f;
 	PanelRotation.Roll = 0.0f;
+	PanelRotation = (PanelRotation.Quaternion() * BetActionPanelRotationOffset.Quaternion()).Rotator();
 	const FVector RightDirection = FRotationMatrix(PanelRotation).GetUnitAxis(EAxis::Y);
 
 	FVector PanelLocation =
 		SourceLocation
-		+ Direction * FMath::Max(0.0f, BetActionPanelDistanceFromCenter)
+		+ Direction * BetActionPanelDistanceFromCenter
 		+ RightDirection * BetActionPanelRightOffset;
 	PanelLocation.Z = SourceLocation.Z + BetActionPanelHeightOffset;
 	return FTransform(PanelRotation, PanelLocation);
@@ -3681,13 +3682,11 @@ FTransform AShowDownGameModeBase::BuildCardRevealPresentationTransform(
 	const FVector TableCenter = ResolveSingleTableCenter(GetWorld());
 	const FRotator TableRotation(0.0f, CardRevealTableYaw, 0.0f);
 	const FVector ForwardDirection = FRotationMatrix(TableRotation).GetUnitAxis(EAxis::X);
-	const FVector RightDirection = FRotationMatrix(TableRotation).GetUnitAxis(EAxis::Y);
 	const float CenteredIndex = static_cast<float>(CardIndex) - (static_cast<float>(CardCount) - 1.0f) * 0.5f;
 	const FVector RevealLocation =
 		TableCenter
-		+ ForwardDirection * FMath::Max(0.0f, CardRevealForwardDistance)
-		+ FVector::UpVector * CardRevealHeightOffset
-		+ RightDirection * CardRevealSideSpacing * CenteredIndex;
+		+ ForwardDirection * (CardRevealForwardDistance + CardRevealSideSpacing * CenteredIndex)
+		+ FVector::UpVector * CardRevealHeightOffset;
 	const FQuat RevealRotation = (TableRotation.Quaternion() * CardRevealRotationOffset.Quaternion()).GetNormalized();
 
 	return FTransform(RevealRotation, RevealLocation, Card->GetActorScale3D());
