@@ -524,7 +524,7 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 		{
 			HandlePrimaryPress();
 		}
-		if (PressedBetActionButton)
+		if (PressedBetActionButton.Get())
 		{
 			UpdatePressedBetActionButton();
 		}
@@ -736,13 +736,13 @@ void AShowDownPlayerController::HandlePrimaryPress()
 
 void AShowDownPlayerController::HandlePrimaryRelease()
 {
-	if (!IsValid(PressedBetActionButton))
+	ASDBetActionButtonActor* Button = PressedBetActionButton.Get();
+	if (!IsValid(Button))
 	{
 		PressedBetActionButton = nullptr;
 		return;
 	}
 
-	ASDBetActionButtonActor* Button = PressedBetActionButton;
 	PressedBetActionButton = nullptr;
 
 	FHitResult Hit;
@@ -757,7 +757,8 @@ void AShowDownPlayerController::HandlePrimaryRelease()
 
 void AShowDownPlayerController::UpdatePressedBetActionButton()
 {
-	if (!IsValid(PressedBetActionButton))
+	ASDBetActionButtonActor* Button = PressedBetActionButton.Get();
+	if (!IsValid(Button))
 	{
 		PressedBetActionButton = nullptr;
 		return;
@@ -773,8 +774,8 @@ void AShowDownPlayerController::UpdatePressedBetActionButton()
 	const bool bStillHovering =
 		bEnableInteractableTrace
 		&& TracePrimaryInteraction(Hit)
-		&& ResolveBetActionButtonFromHit(Hit) == PressedBetActionButton
-		&& ISDInteractable::Execute_CanInteract(PressedBetActionButton, this);
+		&& ResolveBetActionButtonFromHit(Hit) == Button
+		&& ISDInteractable::Execute_CanInteract(Button, this);
 
 	if (!bStillHovering)
 	{
@@ -784,13 +785,14 @@ void AShowDownPlayerController::UpdatePressedBetActionButton()
 
 void AShowDownPlayerController::CancelPressedBetActionButton()
 {
-	if (!IsValid(PressedBetActionButton))
+	ASDBetActionButtonActor* Button = PressedBetActionButton.Get();
+	if (!IsValid(Button))
 	{
 		PressedBetActionButton = nullptr;
 		return;
 	}
 
-	PressedBetActionButton->CancelPointerPress();
+	Button->CancelPointerPress();
 	PressedBetActionButton = nullptr;
 }
 
