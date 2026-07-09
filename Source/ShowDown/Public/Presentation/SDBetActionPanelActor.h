@@ -84,25 +84,25 @@ public:
 	float PanelVisualScale = 0.35f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions", meta = (ClampMin = "1.0"))
-	float ButtonHeight = 14.0f;
+	float ButtonHeight = 12.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions", meta = (ClampMin = "1.0"))
-	float PrimaryButtonWidth = 44.0f;
+	float PrimaryButtonWidth = 46.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions", meta = (ClampMin = "1.0"))
-	float RaiseButtonWidth = 51.0f;
+	float RaiseButtonWidth = 58.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions", meta = (ClampMin = "1.0"))
-	float StepButtonWidth = 19.0f;
+	float StepButtonWidth = 18.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions", meta = (ClampMin = "1.0"))
-	float FoldButtonWidth = 34.0f;
+	float FoldButtonWidth = 46.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions")
-	float TopRowHeight = 8.0f;
+	float TopRowHeight = 7.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions")
-	float BottomRowHeight = -9.0f;
+	float BottomRowHeight = -7.0f;
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Bet Actions")
 	void SetPanelState(const FSDBetActionPanelState& NewState);
@@ -186,6 +186,18 @@ protected:
 	TObjectPtr<UStaticMeshComponent> BackplateMesh;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<UStaticMeshComponent> RimMesh;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<UStaticMeshComponent> HighlightMesh;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<UStaticMeshComponent> ShadowMesh;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<UTextRenderComponent> LabelShadowText;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UTextRenderComponent> LabelText;
 
 private:
@@ -199,9 +211,21 @@ private:
 	TObjectPtr<UMaterialInstanceDynamic> BackplateMaterialInstance;
 
 	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> RimMaterialInstance;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> HighlightMaterialInstance;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> ShadowMaterialInstance;
+
+	UPROPERTY()
 	TObjectPtr<UStaticMesh> BackplateMeshAsset;
 
 	FLinearColor CurrentBackplateColor = FLinearColor::White;
+	FLinearColor CurrentRimColor = FLinearColor::White;
+	FLinearColor CurrentHighlightColor = FLinearColor::White;
+	FLinearColor CurrentShadowColor = FLinearColor::Black;
 	FLinearColor CurrentLabelColor = FLinearColor::White;
 
 	ESDBetActionPanelButtonKind ButtonKind = ESDBetActionPanelButtonKind::Primary;
@@ -210,5 +234,9 @@ private:
 	bool bPointerPressed = false;
 	float VisualAlpha = 0.0f;
 	float PressVisualAlpha = 0.0f;
+	float CurrentButtonWidth = 1.0f;
+	float CurrentButtonHeight = 1.0f;
+	float CurrentHighlightHeight = 0.4f;
 	float CurrentPressDepth = 1.2f;
+	float CurrentLabelDepth = 1.0f;
 };

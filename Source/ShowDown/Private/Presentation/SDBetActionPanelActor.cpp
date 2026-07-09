@@ -32,10 +32,10 @@ namespace
 	FLinearColor DimColor(const FLinearColor& Color)
 	{
 		return FLinearColor(
-			Color.R * 0.28f,
-			Color.G * 0.28f,
-			Color.B * 0.28f,
-			0.72f);
+			Color.R * 0.34f,
+			Color.G * 0.34f,
+			Color.B * 0.34f,
+			1.0f);
 	}
 }
 
@@ -421,17 +421,15 @@ FLinearColor ASDBetActionPanelActor::GetButtonColor(
 	switch (ButtonKind)
 	{
 	case ESDBetActionPanelButtonKind::Primary:
-		Color = PanelState.CurrentPlayerBet < PanelState.TableBet
-			? FLinearColor(0.04f, 0.95f, 0.24f, 1.0f)
-			: FLinearColor(0.04f, 0.95f, 0.24f, 1.0f);
+		Color = FLinearColor(0.02f, 0.78f, 0.22f, 1.0f);
 		break;
 	case ESDBetActionPanelButtonKind::RaiseDown:
 	case ESDBetActionPanelButtonKind::RaiseSubmit:
 	case ESDBetActionPanelButtonKind::RaiseUp:
-		Color = FLinearColor(1.0f, 0.45f, 0.02f, 1.0f);
+		Color = FLinearColor(0.95f, 0.38f, 0.02f, 1.0f);
 		break;
 	case ESDBetActionPanelButtonKind::Fold:
-		Color = FLinearColor(1.0f, 0.04f, 0.02f, 1.0f);
+		Color = FLinearColor(0.86f, 0.02f, 0.04f, 1.0f);
 		break;
 	default:
 		break;
@@ -483,10 +481,38 @@ ASDBetActionButtonActor::ASDBetActionButtonActor()
 	ClickBounds->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 	ClickBounds->SetCanEverAffectNavigation(false);
 
+	ShadowMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ShadowMesh"));
+	ShadowMesh->SetupAttachment(Root);
+	ShadowMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	ShadowMesh->SetCanEverAffectNavigation(false);
+	ShadowMesh->SetCastShadow(false);
+
+	RimMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("RimMesh"));
+	RimMesh->SetupAttachment(Root);
+	RimMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	RimMesh->SetCanEverAffectNavigation(false);
+	RimMesh->SetCastShadow(false);
+
 	BackplateMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BackplateMesh"));
 	BackplateMesh->SetupAttachment(Root);
 	BackplateMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	BackplateMesh->SetCanEverAffectNavigation(false);
+	BackplateMesh->SetCastShadow(false);
+
+	HighlightMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("HighlightMesh"));
+	HighlightMesh->SetupAttachment(Root);
+	HighlightMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	HighlightMesh->SetCanEverAffectNavigation(false);
+	HighlightMesh->SetCastShadow(false);
+
+	LabelShadowText = CreateDefaultSubobject<UTextRenderComponent>(TEXT("LabelShadowText"));
+	LabelShadowText->SetupAttachment(Root);
+	LabelShadowText->SetHorizontalAlignment(EHTA_Center);
+	LabelShadowText->SetVerticalAlignment(EVRTA_TextCenter);
+	LabelShadowText->SetTextRenderColor(FColor::Black);
+	LabelShadowText->SetWorldSize(13.0f);
+	LabelShadowText->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	LabelShadowText->SetCanEverAffectNavigation(false);
 
 	LabelText = CreateDefaultSubobject<UTextRenderComponent>(TEXT("LabelText"));
 	LabelText->SetupAttachment(Root);
@@ -502,13 +528,19 @@ ASDBetActionButtonActor::ASDBetActionButtonActor()
 	if (CubeMeshFinder.Succeeded())
 	{
 		BackplateMeshAsset = CubeMeshFinder.Object;
+		ShadowMesh->SetStaticMesh(BackplateMeshAsset);
+		RimMesh->SetStaticMesh(BackplateMeshAsset);
 		BackplateMesh->SetStaticMesh(BackplateMeshAsset);
+		HighlightMesh->SetStaticMesh(BackplateMeshAsset);
 	}
 
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> MaterialFinder(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
 	if (MaterialFinder.Succeeded())
 	{
+		ShadowMesh->SetMaterial(0, MaterialFinder.Object);
+		RimMesh->SetMaterial(0, MaterialFinder.Object);
 		BackplateMesh->SetMaterial(0, MaterialFinder.Object);
+		HighlightMesh->SetMaterial(0, MaterialFinder.Object);
 	}
 
 	SetActorHiddenInGame(true);
@@ -608,31 +640,76 @@ void ASDBetActionButtonActor::SetButtonState(
 	if (ClickBounds)
 	{
 		ClickBounds->SetBoxExtent(FVector(
-			FMath::Max(1.0f, Size.Y * 0.25f),
+			FMath::Max(0.75f, Size.Y * 0.25f),
 			FMath::Max(1.0f, Size.X * 0.5f),
 			FMath::Max(1.0f, Size.Y * 0.5f)));
 	}
 
+	CurrentButtonWidth = FMath::Max(1.0f, Size.X);
+	CurrentButtonHeight = FMath::Max(1.0f, Size.Y);
+	CurrentHighlightHeight = FMath::Clamp(CurrentButtonHeight * 0.16f, 0.32f, 0.75f);
+	const float RimThickness = FMath::Clamp(CurrentButtonHeight * 0.16f, 0.34f, 0.82f);
+	const float InnerWidth = FMath::Max(1.0f, CurrentButtonWidth - RimThickness * 2.0f);
+	const float InnerHeight = FMath::Max(1.0f, CurrentButtonHeight - RimThickness * 2.0f);
+	const float PlateDepth = FMath::Clamp(CurrentButtonHeight * 0.20f, 0.62f, 1.15f);
+	const float RimDepth = PlateDepth + 0.18f;
+	const float ShadowDepth = FMath::Clamp(CurrentButtonHeight * 0.11f, 0.35f, 0.7f);
+
+	if (ShadowMesh)
+	{
+		ShadowMesh->SetRelativeScale3D(FVector(
+			ShadowDepth / 100.0f,
+			(CurrentButtonWidth + CurrentButtonHeight * 0.35f) / 100.0f,
+			(CurrentButtonHeight + CurrentButtonHeight * 0.25f) / 100.0f));
+	}
+
+	if (RimMesh)
+	{
+		RimMesh->SetRelativeScale3D(FVector(
+			RimDepth / 100.0f,
+			CurrentButtonWidth / 100.0f,
+			CurrentButtonHeight / 100.0f));
+	}
+
 	if (BackplateMesh)
 	{
-		CurrentPressDepth = FMath::Clamp(Size.Y * 0.35f, 0.75f, 2.4f);
+		CurrentPressDepth = FMath::Clamp(CurrentButtonHeight * 0.28f, 0.58f, 1.55f);
+		CurrentLabelDepth = FMath::Max(0.78f, CurrentPressDepth + 0.45f);
 		BackplateMesh->SetRelativeScale3D(FVector(
-			FMath::Max(0.012f, Size.Y * 0.0025f),
-			FMath::Max(1.0f, Size.X) / 100.0f,
-			FMath::Max(1.0f, Size.Y) / 100.0f));
-		ApplyBackplateColor(Color);
+			PlateDepth / 100.0f,
+			InnerWidth / 100.0f,
+			InnerHeight / 100.0f));
 	}
+
+	if (HighlightMesh)
+	{
+		HighlightMesh->SetRelativeScale3D(FVector(
+			FMath::Max(0.08f, PlateDepth * 0.16f) / 100.0f,
+			InnerWidth * 0.84f / 100.0f,
+			CurrentHighlightHeight / 100.0f));
+	}
+
+	ApplyBackplateColor(Color);
 
 	if (LabelText)
 	{
 		LabelText->SetVisibility(bVisible);
 		LabelText->SetText(FText::FromString(Label));
 		CurrentLabelColor = bEnabled
-			? FLinearColor(1.0f, 1.0f, 1.0f, 1.0f)
-			: FLinearColor(0.78f, 0.78f, 0.78f, 1.0f);
+			? FLinearColor(1.0f, 0.96f, 0.84f, 1.0f)
+			: FLinearColor(0.62f, 0.58f, 0.5f, 1.0f);
 		LabelText->SetWorldSize(Label.Len() <= 2
-			? FMath::Clamp(Size.Y * 0.68f, 1.8f, 9.5f)
-			: FMath::Clamp(Size.Y * 0.42f, 1.6f, 6.5f));
+			? FMath::Clamp(CurrentButtonHeight * 0.78f, 1.8f, 8.0f)
+			: FMath::Clamp(CurrentButtonHeight * 0.50f, 1.7f, 5.8f));
+	}
+
+	if (LabelShadowText)
+	{
+		LabelShadowText->SetVisibility(bVisible);
+		LabelShadowText->SetText(FText::FromString(Label));
+		LabelShadowText->SetWorldSize(Label.Len() <= 2
+			? FMath::Clamp(CurrentButtonHeight * 0.78f, 1.8f, 8.0f)
+			: FMath::Clamp(CurrentButtonHeight * 0.50f, 1.7f, 5.8f));
 	}
 
 	ApplyAnimatedVisuals();
@@ -658,7 +735,10 @@ void ASDBetActionButtonActor::ApplyAnimatedVisuals()
 	const bool bDrawVisible = bTargetVisible || VisualAlpha > KINDA_SMALL_NUMBER;
 	SetActorHiddenInGame(!bDrawVisible);
 
-	const float PressOffsetX = -CurrentPressDepth * FMath::SmoothStep(0.0f, 1.0f, FMath::Clamp(PressVisualAlpha, 0.0f, 1.0f));
+	const float Alpha = FMath::Clamp(VisualAlpha, 0.0f, 1.0f);
+	const float PressAlpha = FMath::SmoothStep(0.0f, 1.0f, FMath::Clamp(PressVisualAlpha, 0.0f, 1.0f));
+	const float PressOffsetX = -CurrentPressDepth * PressAlpha;
+	const float RevealOffsetZ = (1.0f - Alpha) * -1.65f;
 	SetActorScale3D(FVector::OneVector);
 
 	if (ClickBounds)
@@ -669,10 +749,47 @@ void ASDBetActionButtonActor::ApplyAnimatedVisuals()
 				: ECollisionEnabled::NoCollision);
 	}
 
+	auto ApplyMaterialColor = [](UMaterialInstanceDynamic* MaterialInstance, const FLinearColor& Color)
+	{
+		if (!MaterialInstance)
+		{
+			return;
+		}
+
+		FLinearColor OpaqueColor = Color;
+		OpaqueColor.A = 1.0f;
+		MaterialInstance->SetVectorParameterValue(TEXT("Color"), OpaqueColor);
+		MaterialInstance->SetVectorParameterValue(TEXT("BaseColor"), OpaqueColor);
+	};
+
+	if (ShadowMesh)
+	{
+		ShadowMesh->SetVisibility(bDrawVisible);
+		ShadowMesh->SetRelativeLocation(FVector(-0.48f + PressOffsetX * 0.16f, 0.18f, RevealOffsetZ - 0.18f));
+		const FLinearColor ShadowFadeColor(0.0f, 0.0f, 0.0f, 1.0f);
+		const FLinearColor ShadowColor = FMath::Lerp(ShadowFadeColor, CurrentShadowColor, Alpha);
+		ApplyMaterialColor(ShadowMaterialInstance, ShadowColor);
+	}
+
+	if (RimMesh)
+	{
+		RimMesh->SetVisibility(bDrawVisible);
+		RimMesh->SetRelativeLocation(FVector(PressOffsetX * 0.82f - 0.04f, 0.0f, RevealOffsetZ));
+		const FLinearColor FadeColor(
+			CurrentRimColor.R * 0.08f,
+			CurrentRimColor.G * 0.08f,
+			CurrentRimColor.B * 0.08f,
+			1.0f);
+		FLinearColor RimColor = FMath::Lerp(FadeColor, CurrentRimColor, Alpha);
+		const FLinearColor PressedRimColor = FMath::Lerp(CurrentRimColor, FLinearColor::White, 0.18f);
+		RimColor = FMath::Lerp(RimColor, PressedRimColor, PressAlpha);
+		ApplyMaterialColor(RimMaterialInstance, RimColor);
+	}
+
 	if (BackplateMesh)
 	{
 		BackplateMesh->SetVisibility(bDrawVisible);
-		BackplateMesh->SetRelativeLocation(FVector(PressOffsetX, 0.0f, 0.0f));
+		BackplateMesh->SetRelativeLocation(FVector(PressOffsetX, 0.0f, RevealOffsetZ));
 		if (BackplateMaterialInstance)
 		{
 			const FLinearColor FadeColor(
@@ -680,22 +797,56 @@ void ASDBetActionButtonActor::ApplyAnimatedVisuals()
 				CurrentBackplateColor.G * 0.08f,
 				CurrentBackplateColor.B * 0.08f,
 				1.0f);
-			FLinearColor AnimatedColor = FMath::Lerp(FadeColor, CurrentBackplateColor, FMath::Clamp(VisualAlpha, 0.0f, 1.0f));
+			FLinearColor AnimatedColor = FMath::Lerp(FadeColor, CurrentBackplateColor, Alpha);
+			const FLinearColor PressedColor(
+				CurrentBackplateColor.R * 0.58f,
+				CurrentBackplateColor.G * 0.58f,
+				CurrentBackplateColor.B * 0.58f,
+				1.0f);
+			AnimatedColor = FMath::Lerp(AnimatedColor, PressedColor, PressAlpha);
 			AnimatedColor.A = 1.0f;
 			BackplateMaterialInstance->SetVectorParameterValue(TEXT("Color"), AnimatedColor);
 			BackplateMaterialInstance->SetVectorParameterValue(TEXT("BaseColor"), AnimatedColor);
 		}
 	}
+	if (HighlightMesh)
+	{
+		HighlightMesh->SetVisibility(bDrawVisible);
+		HighlightMesh->SetRelativeLocation(FVector(
+			PressOffsetX + 0.48f,
+			0.0f,
+			RevealOffsetZ + CurrentButtonHeight * 0.5f - CurrentHighlightHeight * 0.78f));
+		const FLinearColor FadeColor(
+			CurrentHighlightColor.R * 0.08f,
+			CurrentHighlightColor.G * 0.08f,
+			CurrentHighlightColor.B * 0.08f,
+			1.0f);
+		FLinearColor HighlightColor = FMath::Lerp(FadeColor, CurrentHighlightColor, Alpha);
+		HighlightColor = FMath::Lerp(HighlightColor, CurrentHighlightColor * 0.72f, PressAlpha);
+		HighlightColor.A = 1.0f;
+		ApplyMaterialColor(HighlightMaterialInstance, HighlightColor);
+	}
+	if (LabelShadowText)
+	{
+		LabelShadowText->SetVisibility(bDrawVisible);
+		LabelShadowText->SetRelativeLocation(FVector(CurrentLabelDepth - 0.08f + PressOffsetX, 0.16f, RevealOffsetZ - 0.16f));
+		const FLinearColor ShadowTextColor = FMath::Lerp(
+			FLinearColor(0.0f, 0.0f, 0.0f, 1.0f),
+			FLinearColor(0.03f, 0.025f, 0.018f, 1.0f),
+			Alpha);
+		LabelShadowText->SetTextRenderColor(ToTextColor(ShadowTextColor));
+	}
 	if (LabelText)
 	{
 		LabelText->SetVisibility(bDrawVisible);
-		LabelText->SetRelativeLocation(FVector(FMath::Max(0.55f, CurrentPressDepth * 1.25f) + PressOffsetX, 0.0f, 0.0f));
+		LabelText->SetRelativeLocation(FVector(CurrentLabelDepth + PressOffsetX, 0.0f, RevealOffsetZ));
 		const FLinearColor FadeTextColor(
 			CurrentLabelColor.R * 0.12f,
 			CurrentLabelColor.G * 0.12f,
 			CurrentLabelColor.B * 0.12f,
 			1.0f);
-		FLinearColor TextColor = FMath::Lerp(FadeTextColor, CurrentLabelColor, FMath::Clamp(VisualAlpha, 0.0f, 1.0f));
+		FLinearColor TextColor = FMath::Lerp(FadeTextColor, CurrentLabelColor, Alpha);
+		TextColor = FMath::Lerp(TextColor, CurrentLabelColor * 0.82f, PressAlpha);
 		TextColor.A = 1.0f;
 		LabelText->SetTextRenderColor(ToTextColor(TextColor));
 	}
@@ -703,35 +854,58 @@ void ASDBetActionButtonActor::ApplyAnimatedVisuals()
 
 void ASDBetActionButtonActor::ApplyBackplateColor(const FLinearColor& Color)
 {
-	if (!BackplateMesh)
+	if (!ShadowMaterialInstance && ShadowMesh)
 	{
-		return;
+		ShadowMaterialInstance = ShadowMesh->CreateAndSetMaterialInstanceDynamic(0);
 	}
-
-	if (!BackplateMaterialInstance)
+	if (!RimMaterialInstance && RimMesh)
+	{
+		RimMaterialInstance = RimMesh->CreateAndSetMaterialInstanceDynamic(0);
+	}
+	if (!BackplateMaterialInstance && BackplateMesh)
 	{
 		BackplateMaterialInstance = BackplateMesh->CreateAndSetMaterialInstanceDynamic(0);
 	}
-
-	if (!BackplateMaterialInstance)
+	if (!HighlightMaterialInstance && HighlightMesh)
 	{
-		return;
+		HighlightMaterialInstance = HighlightMesh->CreateAndSetMaterialInstanceDynamic(0);
 	}
 
-	const FLinearColor PlateColor(
-		Color.R * 0.92f,
-		Color.G * 0.92f,
-		Color.B * 0.92f,
+	const FLinearColor PlateColor = FMath::Lerp(Color, FLinearColor::Black, 0.12f);
+	CurrentBackplateColor = FLinearColor(PlateColor.R, PlateColor.G, PlateColor.B, 1.0f);
+	const FLinearColor RimColor = FMath::Lerp(Color, FLinearColor::White, 0.24f);
+	CurrentRimColor = FLinearColor(RimColor.R, RimColor.G, RimColor.B, 1.0f);
+	const FLinearColor HighlightColor = FMath::Lerp(Color, FLinearColor::White, 0.42f);
+	CurrentHighlightColor = FLinearColor(HighlightColor.R, HighlightColor.G, HighlightColor.B, 1.0f);
+	CurrentShadowColor = FLinearColor(
+		FMath::Clamp(Color.R * 0.045f, 0.0f, 0.08f),
+		FMath::Clamp(Color.G * 0.045f, 0.0f, 0.08f),
+		FMath::Clamp(Color.B * 0.045f, 0.0f, 0.08f),
 		1.0f);
-	CurrentBackplateColor = PlateColor;
 
 	const FLinearColor FadeColor(
-		PlateColor.R * 0.08f,
-		PlateColor.G * 0.08f,
-		PlateColor.B * 0.08f,
+		CurrentBackplateColor.R * 0.08f,
+		CurrentBackplateColor.G * 0.08f,
+		CurrentBackplateColor.B * 0.08f,
 		1.0f);
-	FLinearColor AnimatedColor = FMath::Lerp(FadeColor, PlateColor, FMath::Clamp(VisualAlpha, 0.0f, 1.0f));
+	FLinearColor AnimatedColor = FMath::Lerp(FadeColor, CurrentBackplateColor, FMath::Clamp(VisualAlpha, 0.0f, 1.0f));
 	AnimatedColor.A = 1.0f;
-	BackplateMaterialInstance->SetVectorParameterValue(TEXT("Color"), AnimatedColor);
-	BackplateMaterialInstance->SetVectorParameterValue(TEXT("BaseColor"), AnimatedColor);
+
+	auto ApplyMaterialColor = [](UMaterialInstanceDynamic* MaterialInstance, const FLinearColor& MaterialColor)
+	{
+		if (!MaterialInstance)
+		{
+			return;
+		}
+
+		FLinearColor OpaqueColor = MaterialColor;
+		OpaqueColor.A = 1.0f;
+		MaterialInstance->SetVectorParameterValue(TEXT("Color"), OpaqueColor);
+		MaterialInstance->SetVectorParameterValue(TEXT("BaseColor"), OpaqueColor);
+	};
+
+	ApplyMaterialColor(ShadowMaterialInstance, CurrentShadowColor);
+	ApplyMaterialColor(RimMaterialInstance, CurrentRimColor);
+	ApplyMaterialColor(BackplateMaterialInstance, AnimatedColor);
+	ApplyMaterialColor(HighlightMaterialInstance, CurrentHighlightColor);
 }
