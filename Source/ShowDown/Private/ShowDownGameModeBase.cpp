@@ -4905,6 +4905,8 @@ void AShowDownGameModeBase::HandleMultiplayerPlayerDisconnected(ASDPlayerState* 
 
 void AShowDownGameModeBase::StartMultiplayerCardSelection()
 {
+	bBettingPhase = false;
+	ClearBetActionPanel();
 	SetMultiplayerAliveHandsSelectable(true);
 
 	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
@@ -4990,6 +4992,7 @@ void AShowDownGameModeBase::HandleMultiplayerSelectedCard(ASDPlayerState* Submit
 
 void AShowDownGameModeBase::StartMultiplayerBetting()
 {
+	bBettingPhase = true;
 	const int32 MinimumBet = StageRules.Num() > 0 ? StageRules[0].MinimumBet : 1;
 	if (BettingSystem)
 	{
@@ -5250,6 +5253,7 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 
 void AShowDownGameModeBase::FinishMultiplayerRoundByReveal()
 {
+	bBettingPhase = false;
 	bMultiplayerRoundResolving = true;
 	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 	{
@@ -5258,6 +5262,7 @@ void AShowDownGameModeBase::FinishMultiplayerRoundByReveal()
 			EShowDownSide::Player,
 			EShowDownPlayerSlot::None);
 	}
+	ClearBetActionPanel();
 	int32 HighestRank = 0;
 	int32 LowestRank = TNumericLimits<int32>::Max();
 	TArray<ASDPlayerState*> Winners;
@@ -5427,8 +5432,10 @@ void AShowDownGameModeBase::FinishMultiplayerRoundByFold(ASDPlayerState* FoldedP
 		return;
 	}
 
+	bBettingPhase = false;
 	bMultiplayerRoundResolving = true;
 	MultiplayerNextFirstPlayer = FoldedPlayer;
+	ClearBetActionPanel();
 	TArray<ASDPlayerState*> RevealedPlayers;
 	int32 HighestRank = 0;
 	int32 LowestRank = TNumericLimits<int32>::Max();
