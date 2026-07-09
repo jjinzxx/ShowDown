@@ -249,7 +249,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation", meta = (ClampMin = "0.0"))
 	float RevealAutoAdvanceSeconds = 0.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Bullets")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Status", meta = (DisplayName = "Use Bet Status Presentation"))
 	bool bUseBetBulletPresentation = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions")
@@ -443,15 +443,12 @@ private:
 	bool bPendingSelfShotRouletteResult = false;
 	bool bPendingSelfShotLiveRound = false;
 	EShowDownSide PendingSelfShotTargetSide = EShowDownSide::Player;
-	int32 BetBulletPresentationRevision = 0;
 	int32 BetActionPanelRevision = 0;
 	bool bHasBetBulletAction = false;
 	bool bBetBulletActionIsMultiplayer = false;
 	EShowDownSide BetBulletActionSide = EShowDownSide::Player;
 	EShowDownPlayerSlot BetBulletActionSlot = EShowDownPlayerSlot::None;
 	EShowDownBetAction BetBulletAction = EShowDownBetAction::Check;
-	int32 BetBulletActionPreviousBet = 0;
-	int32 BetBulletActionTargetBet = 0;
 	bool bHasBetBulletRouletteTarget = false;
 	bool bBetBulletRouletteTargetIsMultiplayer = false;
 	EShowDownSide BetBulletRouletteTargetSide = EShowDownSide::Player;
@@ -520,19 +517,19 @@ private:
 	void ContinueRoundAfterReveal(EShowDownRoundResult Result);
 	void ContinueFoldAfterReveal(EShowDownSide FoldedSide, int32 LoadCount);
 	void ClearBetBulletPresentation();
-	void RefreshBetBulletPresentation(const FString& StatusText);
+	void RefreshBetBulletPresentation();
 	void ClearBetActionPanel();
 	void RefreshBetActionPanel();
 	ASDBetActionPanelActor* EnsureBetActionPanelActor();
 	FTransform BuildBetActionPanelTransformForSide(EShowDownSide Side) const;
 	FTransform BuildBetActionPanelTransformForPlayer(const ASDPlayerState* Player) const;
 	FTransform BuildBetActionPanelTransformFromLocation(const FVector& SourceLocation, int32 FallbackOrderIndex) const;
-	void RecordSingleBetBulletAction(EShowDownSide Side, EShowDownBetAction Action, int32 PreviousBet, int32 TargetBet);
-	void RecordMultiplayerBetBulletAction(ASDPlayerState* Player, EShowDownBetAction Action, int32 PreviousBet, int32 TargetBet);
+	void RecordSingleBetBulletAction(EShowDownSide Side, EShowDownBetAction Action);
+	void RecordMultiplayerBetBulletAction(ASDPlayerState* Player, EShowDownBetAction Action);
 	void MarkSingleBetBulletRouletteTarget(EShowDownSide TargetSide, int32 BulletCount);
 	void MarkMultiplayerBetBulletRouletteTarget(ASDPlayerState* TargetPlayer, int32 BulletCount);
 	void ClearBetBulletTransientState();
-	FString BuildBetBulletActionText(EShowDownBetAction Action, int32 PreviousBet, int32 TargetBet) const;
+	FString BuildBetBulletActionText(EShowDownBetAction Action) const;
 	float PlaySinglePlayerCardRevealPresentation();
 	float PlayMultiplayerCardRevealPresentation(const TArray<ASDPlayerState*>& RevealedPlayers);
 	float PlayCardRevealPresentation(const TArray<ACard*>& Cards);
