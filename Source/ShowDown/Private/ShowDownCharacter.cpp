@@ -83,11 +83,11 @@ AShowDownCharacter::AShowDownCharacter()
 
 	BetStatusWidgetComponent = CreateDefaultSubobject<UWidgetComponent>(TEXT("BetStatus"));
 	BetStatusWidgetComponent->SetupAttachment(GetCapsuleComponent());
-	BetStatusWidgetComponent->SetRelativeLocation(BetStatusRelativeLocation);
+	BetStatusWidgetComponent->SetRelativeLocation(FVector(0.0f, 0.0f, 178.0f));
 	BetStatusWidgetComponent->SetWidgetClass(UShowDownBetStatusWidget::StaticClass());
 	BetStatusWidgetComponent->SetWidgetSpace(EWidgetSpace::Screen);
 	BetStatusWidgetComponent->SetDrawAtDesiredSize(false);
-	BetStatusWidgetComponent->SetDrawSize(BetStatusDrawSize);
+	BetStatusWidgetComponent->SetDrawSize(FVector2D(260.0f, 82.0f));
 	BetStatusWidgetComponent->SetPivot(FVector2D(0.5f, 1.0f));
 	BetStatusWidgetComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	BetStatusWidgetComponent->SetGenerateOverlapEvents(false);
@@ -123,20 +123,12 @@ AShowDownCharacter::AShowDownCharacter()
 	MovementComponent->DisableMovement();
 }
 
-void AShowDownCharacter::OnConstruction(const FTransform& Transform)
-{
-	Super::OnConstruction(Transform);
-	ApplyBetStatusWidgetSettings();
-}
-
 void AShowDownCharacter::PostInitializeComponents()
 {
 	Super::PostInitializeComponents();
-	StabilizeRevolverPresentationAnchorAttachment();
 	CacheAnimBlueprintClass();
 	CacheBaseMeshTransform();
 	PushAnimStateToAnimInstance();
-	ApplyBetStatusWidgetSettings();
 	RefreshNameTag();
 	RefreshBetStatusWidget();
 }
@@ -144,7 +136,6 @@ void AShowDownCharacter::PostInitializeComponents()
 void AShowDownCharacter::BeginPlay()
 {
 	Super::BeginPlay();
-	StabilizeRevolverPresentationAnchorAttachment();
 	CacheAnimBlueprintClass();
 	CacheBaseMeshTransform();
 	PushAnimStateToAnimInstance();
@@ -253,23 +244,6 @@ FTransform AShowDownCharacter::GetRevolverPresentationTransform() const
 	return RevolverPresentationAnchor
 		? RevolverPresentationAnchor->GetComponentTransform()
 		: GetActorTransform();
-}
-
-void AShowDownCharacter::StabilizeRevolverPresentationAnchorAttachment()
-{
-	if (!RevolverPresentationAnchor || !GetCapsuleComponent())
-	{
-		return;
-	}
-
-	const USceneComponent* CharacterMesh = GetMesh();
-	if (RevolverPresentationAnchor->GetAttachParent() == CharacterMesh
-		&& RevolverPresentationAnchor->GetAttachSocketName() != NAME_None)
-	{
-		RevolverPresentationAnchor->AttachToComponent(
-			GetCapsuleComponent(),
-			FAttachmentTransformRules::KeepWorldTransform);
-	}
 }
 
 void AShowDownCharacter::StartHitRagdoll()
@@ -1258,19 +1232,6 @@ void AShowDownCharacter::RefreshNameTag()
 	NameTagWidgetComponent->SetHiddenInGame(!bVisible, true);
 }
 
-void AShowDownCharacter::ApplyBetStatusWidgetSettings()
-{
-	if (!BetStatusWidgetComponent)
-	{
-		return;
-	}
-
-	BetStatusWidgetComponent->SetRelativeLocation(BetStatusRelativeLocation);
-	BetStatusWidgetComponent->SetDrawSize(BetStatusDrawSize);
-	const float SafeScale = FMath::Max(0.1f, BetStatusWidgetScale);
-	BetStatusWidgetComponent->SetRelativeScale3D(FVector(SafeScale, SafeScale, SafeScale));
-}
-
 void AShowDownCharacter::RefreshBetStatusWidget()
 {
 	if (!BetStatusWidgetComponent)
@@ -1278,7 +1239,6 @@ void AShowDownCharacter::RefreshBetStatusWidget()
 		return;
 	}
 
-	ApplyBetStatusWidgetSettings();
 	BetStatusWidgetComponent->InitWidget();
 	if (UShowDownBetStatusWidget* BetStatusWidget =
 		Cast<UShowDownBetStatusWidget>(BetStatusWidgetComponent->GetUserWidgetObject()))

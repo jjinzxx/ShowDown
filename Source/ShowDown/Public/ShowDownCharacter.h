@@ -48,7 +48,6 @@ class SHOWDOWN_API AShowDownCharacter : public ACharacter
 public:
 	AShowDownCharacter();
 
-	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void PostInitializeComponents() override;
@@ -244,8 +243,6 @@ protected:
 	UFUNCTION()
 	void HandleChatMessageReceived(const FString& SenderName, const FString& Message);
 
-	void StabilizeRevolverPresentationAnchorAttachment();
-
 	UFUNCTION(Server, Reliable)
 	void ServerSetCharacterIdentity(EShowDownCharacterRole NewRole, EShowDownPlayerSlot NewPlayerSlot, const FString& NewDisplayName);
 
@@ -272,15 +269,6 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Bet Status")
 	TObjectPtr<UWidgetComponent> BetStatusWidgetComponent;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Status")
-	FVector BetStatusRelativeLocation = FVector(0.0f, 0.0f, 178.0f);
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Status")
-	FVector2D BetStatusDrawSize = FVector2D(260.0f, 82.0f);
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Status", meta = (ClampMin = "0.1", ClampMax = "3.0"))
-	float BetStatusWidgetScale = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Player Camera")
 	FName PlayerCameraAttachName = TEXT("Head");
@@ -387,7 +375,6 @@ private:
 	void ApplyCharacterSceneActive();
 	void ApplyPresentationCollisionSettings();
 	void RefreshNameTag();
-	void ApplyBetStatusWidgetSettings();
 	void RefreshBetStatusWidget();
 	FString ResolveNameTagDisplayName() const;
 	FString ResolveNameTagStatusText() const;
