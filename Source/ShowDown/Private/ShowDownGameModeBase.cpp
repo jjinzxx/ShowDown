@@ -3335,22 +3335,30 @@ void AShowDownGameModeBase::RefreshBetActionPanel()
 
 FTransform AShowDownGameModeBase::BuildBetBulletLaneTransformForSide(EShowDownSide Side) const
 {
-	if (const USceneComponent* HandSlot = GetHandSlotForSide(Side))
+	if (const ASDCardPlacementAnchor* HandAnchor = GetHandAnchorForSide(Side))
 	{
-		return BuildBetBulletLaneTransformFromLocation(
-			HandSlot->GetComponentLocation(),
-			Side == EShowDownSide::Player ? 0 : 2);
+		if (const USceneComponent* HandSlot = HandAnchor->GetSlotComponent())
+		{
+			return BuildBetBulletLaneTransformFromLocation(
+				HandSlot->GetComponentLocation(),
+				Side == EShowDownSide::Player ? 0 : 2);
+		}
 	}
 
-	if (const USceneComponent* HeadSlot = GetHeadSlotForSide(Side))
+	if (const ASDPlayerSeat* Seat = GetSeatForSide(Side))
 	{
-		return BuildBetBulletLaneTransformFromLocation(
-			HeadSlot->GetComponentLocation(),
-			Side == EShowDownSide::Player ? 0 : 2);
+		if (const USceneComponent* HandSlot = Seat->GetHandSlot())
+		{
+			return BuildBetBulletLaneTransformFromLocation(
+				HandSlot->GetComponentLocation(),
+				Side == EShowDownSide::Player ? 0 : 2);
+		}
 	}
 
+	const FVector TableCenter = ResolveSingleTableCenter(GetWorld());
+	const int32 SeatIndex = Side == EShowDownSide::Player ? 0 : 1;
 	return BuildBetBulletLaneTransformFromLocation(
-		ResolveSingleTableCenter(GetWorld()),
+		BuildSingleTableSeatTransform(TableCenter, SeatIndex).GetLocation(),
 		Side == EShowDownSide::Player ? 0 : 2);
 }
 
@@ -3358,24 +3366,23 @@ FTransform AShowDownGameModeBase::BuildBetBulletLaneTransformForPlayer(const ASD
 {
 	if (Player)
 	{
-		if (const USceneComponent* HandSlot = GetHandSlotForPlayerState(const_cast<ASDPlayerState*>(Player)))
+		if (const ASDCardPlacementAnchor* HandAnchor = GetHandAnchorForPlayerSlot(Player->ShowDownSlot))
 		{
-			return BuildBetBulletLaneTransformFromLocation(
-				HandSlot->GetComponentLocation(),
-				GetMultiplayerTurnOrderIndex(Player->ShowDownSlot));
-		}
-
-		if (const USceneComponent* HeadSlot = GetHeadSlotForPlayerState(const_cast<ASDPlayerState*>(Player)))
-		{
-			return BuildBetBulletLaneTransformFromLocation(
-				HeadSlot->GetComponentLocation(),
-				GetMultiplayerTurnOrderIndex(Player->ShowDownSlot));
+			if (const USceneComponent* HandSlot = HandAnchor->GetSlotComponent())
+			{
+				return BuildBetBulletLaneTransformFromLocation(
+					HandSlot->GetComponentLocation(),
+					GetSeatIndexFromPlayerSlot(Player->ShowDownSlot));
+			}
 		}
 	}
 
+	const FVector TableCenter = ResolveSingleTableCenter(GetWorld());
+	const int32 SeatIndex = GetSeatIndexFromPlayerSlot(Player ? Player->ShowDownSlot : EShowDownPlayerSlot::None);
+	const int32 FallbackSeatIndex = SeatIndex == INDEX_NONE ? 0 : SeatIndex;
 	return BuildBetBulletLaneTransformFromLocation(
-		ResolveSingleTableCenter(GetWorld()),
-		GetMultiplayerTurnOrderIndex(Player ? Player->ShowDownSlot : EShowDownPlayerSlot::None));
+		BuildSingleTableSeatTransform(TableCenter, FallbackSeatIndex).GetLocation(),
+		FallbackSeatIndex);
 }
 
 FTransform AShowDownGameModeBase::BuildBetBulletLaneTransformFromLocation(
