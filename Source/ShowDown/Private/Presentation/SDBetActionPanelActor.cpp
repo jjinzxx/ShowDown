@@ -41,11 +41,14 @@ namespace
 
 ASDBetActionPanelActor::ASDBetActionPanelActor()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.TickInterval = 0.15f;
 	bReplicates = true;
+	bAlwaysRelevant = true;
 	SetReplicateMovement(false);
 	SetNetUpdateFrequency(14.0f);
 	SetMinNetUpdateFrequency(4.0f);
+	SetActorTickEnabled(false);
 
 	Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 	SetRootComponent(Root);
@@ -56,6 +59,27 @@ void ASDBetActionPanelActor::BeginPlay()
 	Super::BeginPlay();
 	EnsureButtons();
 	RefreshVisuals();
+}
+
+void ASDBetActionPanelActor::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	if (!PanelState.bVisible)
+	{
+		SetActorTickEnabled(false);
+		return;
+	}
+
+	const EShowDownPlayerSlot CurrentLocalPlayerSlot = ResolveLocalPlayerSlot();
+	const bool bShouldBeVisible =
+		PanelState.TurnSlot != EShowDownPlayerSlot::None
+		&& CurrentLocalPlayerSlot == PanelState.TurnSlot;
+
+	if (CurrentLocalPlayerSlot != LastResolvedLocalPlayerSlot || bShouldBeVisible == IsHidden())
+	{
+		RefreshVisuals();
+	}
 }
 
 void ASDBetActionPanelActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -146,8 +170,13 @@ void ASDBetActionPanelActor::RefreshVisuals()
 	EnsureButtons();
 	RefreshSelectedRaiseTarget();
 
-	const bool bPanelVisible = IsPanelVisibleForLocalPlayer();
+	LastResolvedLocalPlayerSlot = ResolveLocalPlayerSlot();
+	const bool bPanelVisible =
+		PanelState.bVisible
+		&& PanelState.TurnSlot != EShowDownPlayerSlot::None
+		&& LastResolvedLocalPlayerSlot == PanelState.TurnSlot;
 	SetActorHiddenInGame(!bPanelVisible);
+	SetActorTickEnabled(PanelState.bVisible);
 
 	for (ESDBetActionPanelButtonKind ButtonKind : ButtonKinds)
 	{
@@ -299,8 +328,17 @@ void ASDBetActionPanelActor::HandleButtonClicked(ESDBetActionPanelButtonKind But
 
 FTransform ASDBetActionPanelActor::BuildButtonTransform(ESDBetActionPanelButtonKind ButtonKind) const
 {
+	const float LayoutScale = FMath::Max(0.1f, PanelVisualScale);
 	const FRotator PanelRotation = PanelState.WorldRotation;
 	const FVector RightDirection = FRotationMatrix(PanelRotation).GetUnitAxis(EAxis::Y);
+	const FVector2D PrimarySize = GetButtonSize(ESDBetActionPanelButtonKind::Primary);
+	const FVector2D FoldSize = GetButtonSize(ESDBetActionPanelButtonKind::Fold);
+	const FVector2D StepSize = GetButtonSize(ESDBetActionPanelButtonKind::RaiseDown);
+	const FVector2D RaiseSize = GetButtonSize(ESDBetActionPanelButtonKind::RaiseSubmit);
+	const float BottomGap = 6.0f * LayoutScale;
+	const float BottomTotalWidth = StepSize.X + BottomGap + RaiseSize.X + BottomGap + StepSize.X;
+	const float TopGap = FMath::Max(6.0f * LayoutScale, BottomTotalWidth - FoldSize.X - PrimarySize.X);
+	const float RaiseStepOffset = (RaiseSize.X * 0.5f) + BottomGap + (StepSize.X * 0.5f);
 
 	float RightOffset = 0.0f;
 	float HeightOffset = BottomRowHeight;
@@ -308,21 +346,21 @@ FTransform ASDBetActionPanelActor::BuildButtonTransform(ESDBetActionPanelButtonK
 	switch (ButtonKind)
 	{
 	case ESDBetActionPanelButtonKind::Primary:
-		RightOffset = -48.0f;
+		RightOffset = -((FoldSize.X + TopGap) * 0.5f);
 		HeightOffset = TopRowHeight;
 		break;
 	case ESDBetActionPanelButtonKind::Fold:
-		RightOffset = 48.0f;
+		RightOffset = (PrimarySize.X + TopGap) * 0.5f;
 		HeightOffset = TopRowHeight;
 		break;
 	case ESDBetActionPanelButtonKind::RaiseDown:
-		RightOffset = -74.0f;
+		RightOffset = RaiseStepOffset;
 		break;
 	case ESDBetActionPanelButtonKind::RaiseSubmit:
 		RightOffset = 0.0f;
 		break;
 	case ESDBetActionPanelButtonKind::RaiseUp:
-		RightOffset = 74.0f;
+		RightOffset = -RaiseStepOffset;
 		break;
 	default:
 		break;
@@ -331,25 +369,26 @@ FTransform ASDBetActionPanelActor::BuildButtonTransform(ESDBetActionPanelButtonK
 	const FVector ButtonLocation =
 		PanelState.WorldLocation
 		+ RightDirection * RightOffset
-		+ FVector::UpVector * HeightOffset;
+		+ FVector::UpVector * HeightOffset * LayoutScale;
 	return FTransform(PanelRotation, ButtonLocation);
 }
 
 FVector2D ASDBetActionPanelActor::GetButtonSize(ESDBetActionPanelButtonKind ButtonKind) const
 {
+	const float LayoutScale = FMath::Max(0.1f, PanelVisualScale);
 	switch (ButtonKind)
 	{
 	case ESDBetActionPanelButtonKind::Primary:
-		return FVector2D(PrimaryButtonWidth, ButtonHeight);
+		return FVector2D(PrimaryButtonWidth, ButtonHeight) * LayoutScale;
 	case ESDBetActionPanelButtonKind::RaiseDown:
 	case ESDBetActionPanelButtonKind::RaiseUp:
-		return FVector2D(StepButtonWidth, ButtonHeight);
+		return FVector2D(StepButtonWidth, ButtonHeight) * LayoutScale;
 	case ESDBetActionPanelButtonKind::RaiseSubmit:
-		return FVector2D(RaiseButtonWidth, ButtonHeight);
+		return FVector2D(RaiseButtonWidth, ButtonHeight) * LayoutScale;
 	case ESDBetActionPanelButtonKind::Fold:
-		return FVector2D(FoldButtonWidth, ButtonHeight);
+		return FVector2D(FoldButtonWidth, ButtonHeight) * LayoutScale;
 	default:
-		return FVector2D(PrimaryButtonWidth, ButtonHeight);
+		return FVector2D(PrimaryButtonWidth, ButtonHeight) * LayoutScale;
 	}
 }
 
@@ -383,16 +422,16 @@ FLinearColor ASDBetActionPanelActor::GetButtonColor(
 	{
 	case ESDBetActionPanelButtonKind::Primary:
 		Color = PanelState.CurrentPlayerBet < PanelState.TableBet
-			? FLinearColor(0.08f, 0.78f, 1.0f, 1.0f)
-			: FLinearColor(0.18f, 1.0f, 0.64f, 1.0f);
+			? FLinearColor(0.04f, 0.95f, 0.24f, 1.0f)
+			: FLinearColor(0.04f, 0.95f, 0.24f, 1.0f);
 		break;
 	case ESDBetActionPanelButtonKind::RaiseDown:
 	case ESDBetActionPanelButtonKind::RaiseSubmit:
 	case ESDBetActionPanelButtonKind::RaiseUp:
-		Color = FLinearColor(1.0f, 0.66f, 0.12f, 1.0f);
+		Color = FLinearColor(1.0f, 0.45f, 0.02f, 1.0f);
 		break;
 	case ESDBetActionPanelButtonKind::Fold:
-		Color = FLinearColor(1.0f, 0.16f, 0.1f, 1.0f);
+		Color = FLinearColor(1.0f, 0.04f, 0.02f, 1.0f);
 		break;
 	default:
 		break;
@@ -428,9 +467,10 @@ void ASDBetActionPanelActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 
 ASDBetActionButtonActor::ASDBetActionButtonActor()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
 	bReplicates = false;
 	SetReplicateMovement(false);
+	SetActorTickEnabled(false);
 
 	Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 	SetRootComponent(Root);
@@ -474,12 +514,73 @@ ASDBetActionButtonActor::ASDBetActionButtonActor()
 	SetActorHiddenInGame(true);
 }
 
+void ASDBetActionButtonActor::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	const float TargetAlpha = bTargetVisible ? 1.0f : 0.0f;
+	const float InterpSpeed = bTargetVisible ? 9.0f : 11.0f;
+	VisualAlpha = FMath::FInterpTo(VisualAlpha, TargetAlpha, DeltaSeconds, InterpSpeed);
+	if (FMath::IsNearlyEqual(VisualAlpha, TargetAlpha, 0.01f))
+	{
+		VisualAlpha = TargetAlpha;
+	}
+
+	const float TargetPressAlpha = bPointerPressed ? 1.0f : 0.0f;
+	PressVisualAlpha = FMath::FInterpTo(PressVisualAlpha, TargetPressAlpha, DeltaSeconds, 18.0f);
+	if (FMath::IsNearlyEqual(PressVisualAlpha, TargetPressAlpha, 0.01f))
+	{
+		PressVisualAlpha = TargetPressAlpha;
+	}
+	ApplyAnimatedVisuals();
+
+	if (!bTargetVisible && VisualAlpha <= KINDA_SMALL_NUMBER && PressVisualAlpha <= KINDA_SMALL_NUMBER)
+	{
+		SetActorTickEnabled(false);
+	}
+	else if (bTargetVisible && VisualAlpha >= 1.0f && PressVisualAlpha <= KINDA_SMALL_NUMBER && !bPointerPressed)
+	{
+		SetActorTickEnabled(false);
+	}
+}
+
 void ASDBetActionButtonActor::InitializeButton(
 	ASDBetActionPanelActor* InOwnerPanel,
 	ESDBetActionPanelButtonKind InButtonKind)
 {
 	OwnerPanel = InOwnerPanel;
 	ButtonKind = InButtonKind;
+}
+
+void ASDBetActionButtonActor::BeginPointerPress()
+{
+	if (!bButtonEnabled)
+	{
+		return;
+	}
+
+	bPointerPressed = true;
+	SetActorTickEnabled(true);
+	ApplyAnimatedVisuals();
+}
+
+void ASDBetActionButtonActor::CancelPointerPress()
+{
+	bPointerPressed = false;
+	SetActorTickEnabled(true);
+	ApplyAnimatedVisuals();
+}
+
+void ASDBetActionButtonActor::ReleasePointerPress(AActor* Interactor, bool bCommit)
+{
+	bPointerPressed = false;
+	SetActorTickEnabled(true);
+	ApplyAnimatedVisuals();
+
+	if (bCommit && OwnerPanel)
+	{
+		OwnerPanel->HandleButtonClicked(ButtonKind, Interactor);
+	}
 }
 
 void ASDBetActionButtonActor::SetButtonState(
@@ -491,20 +592,32 @@ void ASDBetActionButtonActor::SetButtonState(
 	const FTransform& WorldTransform)
 {
 	SetActorTransform(WorldTransform);
-	SetActorHiddenInGame(!bVisible);
+	if (bVisible && !bTargetVisible)
+	{
+		SetActorHiddenInGame(false);
+	}
+
+	bTargetVisible = bVisible;
 	bButtonEnabled = bVisible && bEnabled;
+	if (!bButtonEnabled)
+	{
+		bPointerPressed = false;
+	}
+	SetActorTickEnabled(true);
 
 	if (ClickBounds)
 	{
-		ClickBounds->SetBoxExtent(FVector(8.0f, FMath::Max(1.0f, Size.X * 0.5f), FMath::Max(1.0f, Size.Y * 0.5f)));
-		ClickBounds->SetCollisionEnabled(bButtonEnabled ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
+		ClickBounds->SetBoxExtent(FVector(
+			FMath::Max(1.0f, Size.Y * 0.25f),
+			FMath::Max(1.0f, Size.X * 0.5f),
+			FMath::Max(1.0f, Size.Y * 0.5f)));
 	}
 
 	if (BackplateMesh)
 	{
-		BackplateMesh->SetVisibility(bVisible);
+		CurrentPressDepth = FMath::Clamp(Size.Y * 0.35f, 0.75f, 2.4f);
 		BackplateMesh->SetRelativeScale3D(FVector(
-			0.035f,
+			FMath::Max(0.012f, Size.Y * 0.0025f),
 			FMath::Max(1.0f, Size.X) / 100.0f,
 			FMath::Max(1.0f, Size.Y) / 100.0f));
 		ApplyBackplateColor(Color);
@@ -514,9 +627,15 @@ void ASDBetActionButtonActor::SetButtonState(
 	{
 		LabelText->SetVisibility(bVisible);
 		LabelText->SetText(FText::FromString(Label));
-		LabelText->SetTextRenderColor(ToTextColor(bEnabled ? FLinearColor::White : FLinearColor(0.55f, 0.55f, 0.55f, 1.0f)));
-		LabelText->SetWorldSize(Label.Len() <= 2 ? 19.0f : 12.0f);
+		CurrentLabelColor = bEnabled
+			? FLinearColor(1.0f, 1.0f, 1.0f, 1.0f)
+			: FLinearColor(0.78f, 0.78f, 0.78f, 1.0f);
+		LabelText->SetWorldSize(Label.Len() <= 2
+			? FMath::Clamp(Size.Y * 0.68f, 1.8f, 9.5f)
+			: FMath::Clamp(Size.Y * 0.42f, 1.6f, 6.5f));
 	}
+
+	ApplyAnimatedVisuals();
 }
 
 bool ASDBetActionButtonActor::CanInteract_Implementation(AActor* Interactor) const
@@ -530,7 +649,55 @@ void ASDBetActionButtonActor::Interact_Implementation(AActor* Interactor)
 {
 	if (OwnerPanel)
 	{
-		OwnerPanel->HandleButtonClicked(ButtonKind, Interactor);
+		ReleasePointerPress(Interactor, true);
+	}
+}
+
+void ASDBetActionButtonActor::ApplyAnimatedVisuals()
+{
+	const bool bDrawVisible = bTargetVisible || VisualAlpha > KINDA_SMALL_NUMBER;
+	SetActorHiddenInGame(!bDrawVisible);
+
+	const float PressOffsetX = -CurrentPressDepth * FMath::SmoothStep(0.0f, 1.0f, FMath::Clamp(PressVisualAlpha, 0.0f, 1.0f));
+	SetActorScale3D(FVector::OneVector);
+
+	if (ClickBounds)
+	{
+		ClickBounds->SetCollisionEnabled(
+			bButtonEnabled && VisualAlpha > 0.85f
+				? ECollisionEnabled::QueryOnly
+				: ECollisionEnabled::NoCollision);
+	}
+
+	if (BackplateMesh)
+	{
+		BackplateMesh->SetVisibility(bDrawVisible);
+		BackplateMesh->SetRelativeLocation(FVector(PressOffsetX, 0.0f, 0.0f));
+		if (BackplateMaterialInstance)
+		{
+			const FLinearColor FadeColor(
+				CurrentBackplateColor.R * 0.08f,
+				CurrentBackplateColor.G * 0.08f,
+				CurrentBackplateColor.B * 0.08f,
+				1.0f);
+			FLinearColor AnimatedColor = FMath::Lerp(FadeColor, CurrentBackplateColor, FMath::Clamp(VisualAlpha, 0.0f, 1.0f));
+			AnimatedColor.A = 1.0f;
+			BackplateMaterialInstance->SetVectorParameterValue(TEXT("Color"), AnimatedColor);
+			BackplateMaterialInstance->SetVectorParameterValue(TEXT("BaseColor"), AnimatedColor);
+		}
+	}
+	if (LabelText)
+	{
+		LabelText->SetVisibility(bDrawVisible);
+		LabelText->SetRelativeLocation(FVector(FMath::Max(0.55f, CurrentPressDepth * 1.25f) + PressOffsetX, 0.0f, 0.0f));
+		const FLinearColor FadeTextColor(
+			CurrentLabelColor.R * 0.12f,
+			CurrentLabelColor.G * 0.12f,
+			CurrentLabelColor.B * 0.12f,
+			1.0f);
+		FLinearColor TextColor = FMath::Lerp(FadeTextColor, CurrentLabelColor, FMath::Clamp(VisualAlpha, 0.0f, 1.0f));
+		TextColor.A = 1.0f;
+		LabelText->SetTextRenderColor(ToTextColor(TextColor));
 	}
 }
 
@@ -552,10 +719,19 @@ void ASDBetActionButtonActor::ApplyBackplateColor(const FLinearColor& Color)
 	}
 
 	const FLinearColor PlateColor(
-		Color.R * 0.22f,
-		Color.G * 0.22f,
-		Color.B * 0.22f,
-		0.78f);
-	BackplateMaterialInstance->SetVectorParameterValue(TEXT("Color"), PlateColor);
-	BackplateMaterialInstance->SetVectorParameterValue(TEXT("BaseColor"), PlateColor);
+		Color.R * 0.92f,
+		Color.G * 0.92f,
+		Color.B * 0.92f,
+		1.0f);
+	CurrentBackplateColor = PlateColor;
+
+	const FLinearColor FadeColor(
+		PlateColor.R * 0.08f,
+		PlateColor.G * 0.08f,
+		PlateColor.B * 0.08f,
+		1.0f);
+	FLinearColor AnimatedColor = FMath::Lerp(FadeColor, PlateColor, FMath::Clamp(VisualAlpha, 0.0f, 1.0f));
+	AnimatedColor.A = 1.0f;
+	BackplateMaterialInstance->SetVectorParameterValue(TEXT("Color"), AnimatedColor);
+	BackplateMaterialInstance->SetVectorParameterValue(TEXT("BaseColor"), AnimatedColor);
 }

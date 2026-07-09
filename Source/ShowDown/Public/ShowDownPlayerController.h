@@ -9,6 +9,7 @@
 class ACard;
 class ACameraActor;
 class APostProcessVolume;
+class ASDBetActionButtonActor;
 class AShowDownCharacter;
 class AShowDownGameModeBase;
 class SWidget;
@@ -355,11 +356,16 @@ private:
 	void InitializeFromPossessedPawn();
 	void InitializeInteractableOutlinePostProcess();
 	void TraceCardUnderCursor();
+	void HandlePrimaryPress();
+	void HandlePrimaryRelease();
+	void UpdatePressedBetActionButton();
+	void CancelPressedBetActionButton();
 	bool TracePrimaryInteraction(FHitResult& OutHit) const;
 	bool TraceUnderCursor(FHitResult& OutHit) const;
 	bool TraceFromScreenCenter(FHitResult& OutHit) const;
 	ACard* ResolveCardFromHit(const FHitResult& Hit) const;
 	bool IsCardSelectableForLocalPlayer(const ACard* Card) const;
+	ASDBetActionButtonActor* ResolveBetActionButtonFromHit(const FHitResult& Hit) const;
 	AActor* ResolveInteractableFromHit(const FHitResult& Hit) const;
 	AActor* FindFocusedInteractable() const;
 	void UpdateFocusedInteractable();
@@ -424,6 +430,9 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<AActor> FocusedInteractable = nullptr;
+
+	UPROPERTY()
+	TObjectPtr<ASDBetActionButtonActor> PressedBetActionButton = nullptr;
 
 	UPROPERTY()
 	UShowDownChatWidget* ChatWidget = nullptr;

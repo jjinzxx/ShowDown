@@ -3069,6 +3069,10 @@ ASDBetActionPanelActor* AShowDownGameModeBase::EnsureBetActionPanelActor()
 		PanelClass,
 		FTransform::Identity,
 		SpawnParams);
+	if (BetActionPanelActor)
+	{
+		BetActionPanelActor->PanelVisualScale = FMath::Max(0.1f, BetActionPanelVisualScale);
+	}
 	return BetActionPanelActor;
 }
 
@@ -3261,6 +3265,7 @@ void AShowDownGameModeBase::RefreshBetActionPanel()
 	{
 		return;
 	}
+	PanelActor->PanelVisualScale = FMath::Max(0.1f, BetActionPanelVisualScale);
 
 	FSDBetActionPanelState NewState;
 	NewState.Revision = ++BetActionPanelRevision;
@@ -3407,17 +3412,17 @@ FTransform AShowDownGameModeBase::BuildBetBulletLaneTransformFromLocation(
 
 FTransform AShowDownGameModeBase::BuildBetActionPanelTransformForSide(EShowDownSide Side) const
 {
-	if (const USceneComponent* HeadSlot = GetHeadSlotForSide(Side))
-	{
-		return BuildBetActionPanelTransformFromLocation(
-			HeadSlot->GetComponentLocation(),
-			Side == EShowDownSide::Player ? 0 : 2);
-	}
-
 	if (const USceneComponent* HandSlot = GetHandSlotForSide(Side))
 	{
 		return BuildBetActionPanelTransformFromLocation(
 			HandSlot->GetComponentLocation(),
+			Side == EShowDownSide::Player ? 0 : 2);
+	}
+
+	if (const USceneComponent* HeadSlot = GetHeadSlotForSide(Side))
+	{
+		return BuildBetActionPanelTransformFromLocation(
+			HeadSlot->GetComponentLocation(),
 			Side == EShowDownSide::Player ? 0 : 2);
 	}
 
@@ -3430,17 +3435,17 @@ FTransform AShowDownGameModeBase::BuildBetActionPanelTransformForPlayer(const AS
 {
 	if (Player)
 	{
-		if (const USceneComponent* HeadSlot = GetHeadSlotForPlayerState(const_cast<ASDPlayerState*>(Player)))
-		{
-			return BuildBetActionPanelTransformFromLocation(
-				HeadSlot->GetComponentLocation(),
-				GetMultiplayerTurnOrderIndex(Player->ShowDownSlot));
-		}
-
 		if (const USceneComponent* HandSlot = GetHandSlotForPlayerState(const_cast<ASDPlayerState*>(Player)))
 		{
 			return BuildBetActionPanelTransformFromLocation(
 				HandSlot->GetComponentLocation(),
+				GetMultiplayerTurnOrderIndex(Player->ShowDownSlot));
+		}
+
+		if (const USceneComponent* HeadSlot = GetHeadSlotForPlayerState(const_cast<ASDPlayerState*>(Player)))
+		{
+			return BuildBetActionPanelTransformFromLocation(
+				HeadSlot->GetComponentLocation(),
 				GetMultiplayerTurnOrderIndex(Player->ShowDownSlot));
 		}
 	}
@@ -3466,19 +3471,18 @@ FTransform AShowDownGameModeBase::BuildBetActionPanelTransformFromLocation(
 	}
 	Direction.Normalize();
 
-	FVector PanelLocation = TableCenter + Direction * FMath::Max(0.0f, BetActionPanelDistanceFromCenter);
-	PanelLocation.Z = TableCenter.Z + BetActionPanelHeightOffset;
-
-	FVector FacingDirection = TableCenter - PanelLocation;
-	FacingDirection.Z = 0.0f;
-	if (FacingDirection.IsNearlyZero())
-	{
-		FacingDirection = -Direction;
-	}
+	FVector FacingDirection = Direction;
 
 	FRotator PanelRotation = FacingDirection.Rotation();
 	PanelRotation.Pitch = 0.0f;
 	PanelRotation.Roll = 0.0f;
+	const FVector RightDirection = FRotationMatrix(PanelRotation).GetUnitAxis(EAxis::Y);
+
+	FVector PanelLocation =
+		SourceLocation
+		+ Direction * FMath::Max(0.0f, BetActionPanelDistanceFromCenter)
+		+ RightDirection * BetActionPanelRightOffset;
+	PanelLocation.Z = SourceLocation.Z + BetActionPanelHeightOffset;
 	return FTransform(PanelRotation, PanelLocation);
 }
 

@@ -80,26 +80,29 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions")
 	TSubclassOf<ASDBetActionButtonActor> ButtonActorClass;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions", meta = (ClampMin = "1.0"))
-	float ButtonHeight = 28.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions", meta = (ClampMin = "0.1", ClampMax = "2.0"))
+	float PanelVisualScale = 0.35f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions", meta = (ClampMin = "1.0"))
-	float PrimaryButtonWidth = 88.0f;
+	float ButtonHeight = 14.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions", meta = (ClampMin = "1.0"))
-	float RaiseButtonWidth = 102.0f;
+	float PrimaryButtonWidth = 44.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions", meta = (ClampMin = "1.0"))
-	float StepButtonWidth = 38.0f;
+	float RaiseButtonWidth = 51.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions", meta = (ClampMin = "1.0"))
-	float FoldButtonWidth = 68.0f;
+	float StepButtonWidth = 19.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions", meta = (ClampMin = "1.0"))
+	float FoldButtonWidth = 34.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions")
-	float TopRowHeight = 16.0f;
+	float TopRowHeight = 8.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions")
-	float BottomRowHeight = -18.0f;
+	float BottomRowHeight = -9.0f;
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Bet Actions")
 	void SetPanelState(const FSDBetActionPanelState& NewState);
@@ -110,6 +113,7 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void Tick(float DeltaSeconds) override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
@@ -143,6 +147,7 @@ private:
 	int32 LastSeenTableBet = INDEX_NONE;
 	int32 LastSeenCurrentPlayerBet = INDEX_NONE;
 	EShowDownPlayerSlot LastSeenTurnSlot = EShowDownPlayerSlot::None;
+	EShowDownPlayerSlot LastResolvedLocalPlayerSlot = EShowDownPlayerSlot::None;
 };
 
 UCLASS()
@@ -154,6 +159,9 @@ public:
 	ASDBetActionButtonActor();
 
 	void InitializeButton(ASDBetActionPanelActor* InOwnerPanel, ESDBetActionPanelButtonKind InButtonKind);
+	void BeginPointerPress();
+	void CancelPointerPress();
+	void ReleasePointerPress(AActor* Interactor, bool bCommit);
 	void SetButtonState(
 		const FString& Label,
 		const FLinearColor& Color,
@@ -166,6 +174,8 @@ public:
 	virtual void Interact_Implementation(AActor* Interactor) override;
 
 protected:
+	virtual void Tick(float DeltaSeconds) override;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<USceneComponent> Root;
 
@@ -180,6 +190,7 @@ protected:
 
 private:
 	void ApplyBackplateColor(const FLinearColor& Color);
+	void ApplyAnimatedVisuals();
 
 	UPROPERTY()
 	TObjectPtr<ASDBetActionPanelActor> OwnerPanel;
@@ -190,6 +201,14 @@ private:
 	UPROPERTY()
 	TObjectPtr<UStaticMesh> BackplateMeshAsset;
 
+	FLinearColor CurrentBackplateColor = FLinearColor::White;
+	FLinearColor CurrentLabelColor = FLinearColor::White;
+
 	ESDBetActionPanelButtonKind ButtonKind = ESDBetActionPanelButtonKind::Primary;
 	bool bButtonEnabled = false;
+	bool bTargetVisible = false;
+	bool bPointerPressed = false;
+	float VisualAlpha = 0.0f;
+	float PressVisualAlpha = 0.0f;
+	float CurrentPressDepth = 1.2f;
 };

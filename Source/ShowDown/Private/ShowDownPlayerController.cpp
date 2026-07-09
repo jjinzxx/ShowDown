@@ -18,6 +18,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "PlayerPawn.h"
+#include "Presentation/SDBetActionPanelActor.h"
 #include "SDPlayerState.h"
 #include "ShowDownCameraAspect.h"
 #include "ShowDownCharacter.h"
@@ -462,6 +463,7 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 
 	if (!bHandleShowDownGameplayInput)
 	{
+		CancelPressedBetActionButton();
 		SetFocusedInteractable(nullptr);
 		SetHoveredCard(nullptr);
 		UpdateCenterCrosshairVisibility();
@@ -470,6 +472,7 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 
 	if (LeaveConfirmWidget && LeaveConfirmWidget->GetVisibility() == ESlateVisibility::Visible)
 	{
+		CancelPressedBetActionButton();
 		if (WasInputKeyJustPressed(LeaveMatchKey))
 		{
 			CancelLeaveMultiplayerMatch();
@@ -480,6 +483,7 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 
 	if (bChatOpen)
 	{
+		CancelPressedBetActionButton();
 		SetFocusedInteractable(nullptr);
 		SetHoveredCard(nullptr);
 		UpdateCenterCrosshairVisibility();
@@ -500,6 +504,7 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 
 	if (WasInputKeyJustPressed(ToggleChatKey))
 	{
+		CancelPressedBetActionButton();
 		OpenChat();
 		return;
 	}
@@ -508,13 +513,29 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 
 	if (WasInputKeyJustPressed(LeaveMatchKey))
 	{
+		CancelPressedBetActionButton();
 		RequestLeaveMultiplayerMatch();
 		return;
 	}
 
-	if (bEnablePrimaryClickTrace && WasInputKeyJustPressed(EKeys::LeftMouseButton))
+	if (bEnablePrimaryClickTrace)
 	{
-		HandlePrimaryClick();
+		if (WasInputKeyJustPressed(EKeys::LeftMouseButton))
+		{
+			HandlePrimaryPress();
+		}
+		if (PressedBetActionButton)
+		{
+			UpdatePressedBetActionButton();
+		}
+		if (WasInputKeyJustReleased(EKeys::LeftMouseButton))
+		{
+			HandlePrimaryRelease();
+		}
+	}
+	else
+	{
+		CancelPressedBetActionButton();
 	}
 
 	if (bEnableLegacyKeyboardBetHotkeys)
@@ -692,6 +713,87 @@ void AShowDownPlayerController::HandlePrimaryClick()
 	HandCard = nullptr;
 }
 
+void AShowDownPlayerController::HandlePrimaryPress()
+{
+	CancelPressedBetActionButton();
+
+	FHitResult Hit;
+	if (bEnableInteractableTrace && TracePrimaryInteraction(Hit))
+	{
+		if (ASDBetActionButtonActor* Button = ResolveBetActionButtonFromHit(Hit))
+		{
+			if (ISDInteractable::Execute_CanInteract(Button, this))
+			{
+				PressedBetActionButton = Button;
+				Button->BeginPointerPress();
+				return;
+			}
+		}
+	}
+
+	HandlePrimaryClick();
+}
+
+void AShowDownPlayerController::HandlePrimaryRelease()
+{
+	if (!IsValid(PressedBetActionButton))
+	{
+		PressedBetActionButton = nullptr;
+		return;
+	}
+
+	ASDBetActionButtonActor* Button = PressedBetActionButton;
+	PressedBetActionButton = nullptr;
+
+	FHitResult Hit;
+	const bool bCommit =
+		bEnableInteractableTrace
+		&& TracePrimaryInteraction(Hit)
+		&& ResolveBetActionButtonFromHit(Hit) == Button
+		&& ISDInteractable::Execute_CanInteract(Button, this);
+
+	Button->ReleasePointerPress(this, bCommit);
+}
+
+void AShowDownPlayerController::UpdatePressedBetActionButton()
+{
+	if (!IsValid(PressedBetActionButton))
+	{
+		PressedBetActionButton = nullptr;
+		return;
+	}
+
+	if (!IsInputKeyDown(EKeys::LeftMouseButton))
+	{
+		HandlePrimaryRelease();
+		return;
+	}
+
+	FHitResult Hit;
+	const bool bStillHovering =
+		bEnableInteractableTrace
+		&& TracePrimaryInteraction(Hit)
+		&& ResolveBetActionButtonFromHit(Hit) == PressedBetActionButton
+		&& ISDInteractable::Execute_CanInteract(PressedBetActionButton, this);
+
+	if (!bStillHovering)
+	{
+		CancelPressedBetActionButton();
+	}
+}
+
+void AShowDownPlayerController::CancelPressedBetActionButton()
+{
+	if (!IsValid(PressedBetActionButton))
+	{
+		PressedBetActionButton = nullptr;
+		return;
+	}
+
+	PressedBetActionButton->CancelPointerPress();
+	PressedBetActionButton = nullptr;
+}
+
 void AShowDownPlayerController::TraceCardUnderCursor()
 {
 	HandCard = nullptr;
@@ -801,6 +903,21 @@ bool AShowDownPlayerController::IsCardSelectableForLocalPlayer(const ACard* Card
 		: EShowDownPlayerSlot::None;
 
 	return IsValid(Card) && Card->IsCardSelectableForSlot(LocalSlot);
+}
+
+ASDBetActionButtonActor* AShowDownPlayerController::ResolveBetActionButtonFromHit(const FHitResult& Hit) const
+{
+	if (ASDBetActionButtonActor* Button = Cast<ASDBetActionButtonActor>(Hit.GetActor()))
+	{
+		return Button;
+	}
+
+	if (const UPrimitiveComponent* HitComponent = Hit.GetComponent())
+	{
+		return Cast<ASDBetActionButtonActor>(HitComponent->GetOwner());
+	}
+
+	return nullptr;
 }
 
 AActor* AShowDownPlayerController::ResolveInteractableFromHit(const FHitResult& Hit) const
