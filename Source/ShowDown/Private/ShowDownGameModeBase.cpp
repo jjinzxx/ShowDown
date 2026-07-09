@@ -151,6 +151,61 @@ namespace
 		return TEXT("Connecting...");
 	}
 
+	bool StatusTextStartsWith(const FString& Text, const TCHAR* Prefix)
+	{
+		return Text.StartsWith(Prefix, ESearchCase::IgnoreCase);
+	}
+
+	FLinearColor GetBetStatusAccentColor(const FSDBetBulletLaneState& LaneState)
+	{
+		const FString ActionText = LaneState.ActionText.TrimStartAndEnd();
+		if (LaneState.bFolded || StatusTextStartsWith(ActionText, TEXT("FOLD")))
+		{
+			return FLinearColor(1.0f, 0.10f, 0.08f, 1.0f);
+		}
+		if (LaneState.bRouletteTarget)
+		{
+			return FLinearColor(1.0f, 0.16f, 0.08f, 1.0f);
+		}
+		if (StatusTextStartsWith(ActionText, TEXT("CALL")) || StatusTextStartsWith(ActionText, TEXT("CHECK")))
+		{
+			return FLinearColor(0.08f, 0.92f, 0.34f, 1.0f);
+		}
+		if (StatusTextStartsWith(ActionText, TEXT("RAISE")))
+		{
+			return FLinearColor(1.0f, 0.56f, 0.08f, 1.0f);
+		}
+		if (LaneState.bCurrentTurn)
+		{
+			return FLinearColor(0.05f, 0.82f, 1.0f, 1.0f);
+		}
+
+		return FLinearColor(1.0f, 0.72f, 0.18f, 1.0f);
+	}
+
+	FString GetBetStatusLabel(const FSDBetBulletLaneState& LaneState)
+	{
+		const FString ActionText = LaneState.ActionText.TrimStartAndEnd();
+		if (!ActionText.IsEmpty())
+		{
+			return ActionText.Left(12);
+		}
+		if (LaneState.bRouletteTarget)
+		{
+			return TEXT("TARGET");
+		}
+		if (LaneState.bFolded)
+		{
+			return TEXT("FOLD");
+		}
+		if (LaneState.bCurrentTurn)
+		{
+			return TEXT("TURN");
+		}
+
+		return FString();
+	}
+
 	EShowDownPlayerSlot GetPlayerSlotByIndex(int32 SlotIndex)
 	{
 		static const EShowDownPlayerSlot AllSlots[] = {
@@ -3079,11 +3134,18 @@ ASDBetActionPanelActor* AShowDownGameModeBase::EnsureBetActionPanelActor()
 void AShowDownGameModeBase::ClearBetBulletPresentation()
 {
 	ClearBetBulletTransientState();
-	if (ASDBetBulletPresentationActor* PresentationActor = EnsureBetBulletPresentationActor())
+	if (IsValid(BetBulletPresentationActor))
 	{
 		FSDBetBulletPresentationState EmptyState;
 		EmptyState.Revision = BetBulletPresentationRevision;
-		PresentationActor->SetPresentationState(EmptyState);
+		BetBulletPresentationActor->SetPresentationState(EmptyState);
+	}
+	for (AShowDownCharacter* Character : GetShowDownCharacters())
+	{
+		if (IsValid(Character))
+		{
+			Character->ClearBetStatusPresentation();
+		}
 	}
 	ClearBetActionPanel();
 }
@@ -3092,15 +3154,22 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation(const FString& StatusTe
 {
 	if (!bUseBetBulletPresentation)
 	{
+		for (AShowDownCharacter* Character : GetShowDownCharacters())
+		{
+			if (IsValid(Character))
+			{
+				Character->ClearBetStatusPresentation();
+			}
+		}
 		RefreshBetActionPanel();
 		return;
 	}
 
-	ASDBetBulletPresentationActor* PresentationActor = EnsureBetBulletPresentationActor();
-	if (!PresentationActor)
+	if (IsValid(BetBulletPresentationActor))
 	{
-		RefreshBetActionPanel();
-		return;
+		FSDBetBulletPresentationState EmptyState;
+		EmptyState.Revision = BetBulletPresentationRevision;
+		BetBulletPresentationActor->SetPresentationState(EmptyState);
 	}
 
 	FSDBetBulletPresentationState NewState;
@@ -3164,9 +3233,6 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation(const FString& StatusTe
 				LaneState.ActionRevision = BetBulletPresentationRevision;
 			}
 
-			const FTransform LaneTransform = BuildBetBulletLaneTransformForPlayer(Player);
-			LaneState.WorldLocation = LaneTransform.GetLocation();
-			LaneState.WorldRotation = LaneTransform.GetRotation().Rotator();
 			NewState.Lanes.Add(LaneState);
 		}
 	}
@@ -3215,14 +3281,49 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation(const FString& StatusTe
 				LaneState.ActionRevision = BetBulletPresentationRevision;
 			}
 
-			const FTransform LaneTransform = BuildBetBulletLaneTransformForSide(Side);
-			LaneState.WorldLocation = LaneTransform.GetLocation();
-			LaneState.WorldRotation = LaneTransform.GetRotation().Rotator();
 			NewState.Lanes.Add(LaneState);
 		}
 	}
 
-	PresentationActor->SetPresentationState(NewState);
+	TSet<AShowDownCharacter*> UpdatedBetStatusCharacters;
+	for (const FSDBetBulletLaneState& LaneState : NewState.Lanes)
+	{
+		AShowDownCharacter* TargetCharacter = nullptr;
+		if (bMultiplayerMatchStarted)
+		{
+			TargetCharacter = FindActiveCharacterForPlayerSlot(GetWorld(), LaneState.Slot);
+		}
+		else if (LaneState.Slot == EShowDownPlayerSlot::Player1)
+		{
+			TargetCharacter = FindSingleRouletteCharacter(EShowDownSide::Player);
+		}
+		else
+		{
+			TargetCharacter = FindSingleRouletteCharacter(EShowDownSide::Collector);
+		}
+
+		if (!IsValid(TargetCharacter))
+		{
+			continue;
+		}
+
+		UpdatedBetStatusCharacters.Add(TargetCharacter);
+		TargetCharacter->SetBetStatusPresentation(
+			true,
+			LaneState.DisplayName,
+			GetBetStatusLabel(LaneState),
+			LaneState.bRouletteTarget ? LaneState.RouletteBulletCount : LaneState.BulletCount,
+			6,
+			GetBetStatusAccentColor(LaneState));
+	}
+
+	for (AShowDownCharacter* Character : GetShowDownCharacters())
+	{
+		if (IsValid(Character) && !UpdatedBetStatusCharacters.Contains(Character))
+		{
+			Character->ClearBetStatusPresentation();
+		}
+	}
 	RefreshBetActionPanel();
 }
 
@@ -3402,7 +3503,7 @@ FTransform AShowDownGameModeBase::BuildBetBulletLaneTransformFromLocation(
 	Direction.Normalize();
 
 	FVector LaneLocation = TableCenter + Direction * FMath::Max(0.0f, BetBulletLaneDistanceFromCenter);
-	LaneLocation.Z = TableCenter.Z + FMath::Clamp(BetBulletLaneHeightOffset, -12.0f, 24.0f);
+	LaneLocation.Z = TableCenter.Z + BetBulletLaneHeightOffset;
 
 	FVector FacingDirection = TableCenter - LaneLocation;
 	FacingDirection.Z = 0.0f;
@@ -3602,18 +3703,16 @@ void AShowDownGameModeBase::ClearBetBulletTransientState()
 FString AShowDownGameModeBase::BuildBetBulletActionText(
 	EShowDownBetAction Action,
 	int32,
-	int32 TargetBet) const
+	int32) const
 {
 	switch (Action)
 	{
 	case EShowDownBetAction::Check:
 		return TEXT("CHECK");
 	case EShowDownBetAction::Call:
-		return TargetBet > 0
-			? FString::Printf(TEXT("CALL %d"), TargetBet)
-			: TEXT("CALL");
+		return TEXT("CALL");
 	case EShowDownBetAction::Raise:
-		return FString::Printf(TEXT("RAISE %d"), TargetBet);
+		return TEXT("RAISE");
 	case EShowDownBetAction::Fold:
 		return TEXT("FOLD");
 	default:

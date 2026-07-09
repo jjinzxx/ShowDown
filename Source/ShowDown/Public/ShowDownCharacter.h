@@ -12,8 +12,33 @@ class UAnimationAsset;
 class UAnimMontage;
 class UAnimInstance;
 class USceneComponent;
+class UShowDownBetStatusWidget;
 class UShowDownCharacterAnimInstance;
 class UWidgetComponent;
+
+USTRUCT()
+struct FShowDownCharacterBetStatusPresentation
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	bool bVisible = false;
+
+	UPROPERTY()
+	FString DisplayName;
+
+	UPROPERTY()
+	FString StatusText;
+
+	UPROPERTY()
+	int32 BulletCount = 0;
+
+	UPROPERTY()
+	int32 MaxBulletCount = 6;
+
+	UPROPERTY()
+	FLinearColor AccentColor = FLinearColor(1.0f, 0.72f, 0.18f, 1.0f);
+};
 
 UCLASS(Blueprintable)
 class SHOWDOWN_API AShowDownCharacter : public ACharacter
@@ -23,6 +48,7 @@ class SHOWDOWN_API AShowDownCharacter : public ACharacter
 public:
 	AShowDownCharacter();
 
+	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void PostInitializeComponents() override;
@@ -118,6 +144,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Voice")
 	void SetVoiceTalking(bool bNewVoiceTalking);
 
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Bet Status")
+	void SetBetStatusPresentation(
+		bool bVisible,
+		const FString& DisplayName,
+		const FString& StatusText,
+		int32 BulletCount,
+		int32 MaxBulletCount,
+		const FLinearColor& AccentColor);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Bet Status")
+	void ClearBetStatusPresentation();
+
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Character Identity")
 	EShowDownCharacterRole GetCharacterRole() const { return CharacterRole; }
 
@@ -163,6 +201,9 @@ protected:
 
 	UFUNCTION()
 	void OnRep_SceneActive();
+
+	UFUNCTION()
+	void OnRep_BetStatusPresentation();
 
 	UFUNCTION(Server, Reliable)
 	void ServerSetCharacterAnimState(EShowDownCharacterAnimState NewState);
@@ -228,6 +269,18 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Name Tag")
 	FVector NameTagRelativeLocation = FVector(0.0f, 0.0f, 135.0f);
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Bet Status")
+	TObjectPtr<UWidgetComponent> BetStatusWidgetComponent;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Status")
+	FVector BetStatusRelativeLocation = FVector(0.0f, 0.0f, 178.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Status")
+	FVector2D BetStatusDrawSize = FVector2D(260.0f, 82.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Status", meta = (ClampMin = "0.1", ClampMax = "3.0"))
+	float BetStatusWidgetScale = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Player Camera")
 	FName PlayerCameraAttachName = TEXT("Head");
@@ -304,6 +357,9 @@ protected:
 	UPROPERTY(ReplicatedUsing = OnRep_SceneActive, BlueprintReadOnly, Category = "ShowDown|Character Visibility")
 	bool bCharacterSceneActive = true;
 
+	UPROPERTY(ReplicatedUsing = OnRep_BetStatusPresentation)
+	FShowDownCharacterBetStatusPresentation ReplicatedBetStatusPresentation;
+
 private:
 	void ApplyCharacterAnimState(EShowDownCharacterAnimState NewState);
 	void FinishCharacterActionAnimIfCurrent(EShowDownCharacterAnimState FinishedState);
@@ -331,6 +387,8 @@ private:
 	void ApplyCharacterSceneActive();
 	void ApplyPresentationCollisionSettings();
 	void RefreshNameTag();
+	void ApplyBetStatusWidgetSettings();
+	void RefreshBetStatusWidget();
 	FString ResolveNameTagDisplayName() const;
 	FString ResolveNameTagStatusText() const;
 	bool IsNameTagTurnActive() const;
