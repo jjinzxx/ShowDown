@@ -81,9 +81,15 @@ AShowDownCharacter::AShowDownCharacter()
 	NameTagWidgetComponent->SetGenerateOverlapEvents(false);
 	NameTagWidgetComponent->SetVisibility(false);
 
+	BetStatusAnchorComponent = CreateDefaultSubobject<USceneComponent>(TEXT("BetStatusAnchor"));
+	BetStatusAnchorComponent->SetupAttachment(GetCapsuleComponent());
+	BetStatusAnchorComponent->SetRelativeLocation(FVector(0.0f, 0.0f, 178.0f));
+	BetStatusAnchorComponent->SetRelativeRotation(FRotator::ZeroRotator);
+
 	BetStatusWidgetComponent = CreateDefaultSubobject<UWidgetComponent>(TEXT("BetStatus"));
-	BetStatusWidgetComponent->SetupAttachment(GetCapsuleComponent());
-	BetStatusWidgetComponent->SetRelativeLocation(FVector(0.0f, 0.0f, 178.0f));
+	BetStatusWidgetComponent->SetupAttachment(BetStatusAnchorComponent);
+	BetStatusWidgetComponent->SetRelativeLocation(FVector::ZeroVector);
+	BetStatusWidgetComponent->SetRelativeRotation(FRotator::ZeroRotator);
 	BetStatusWidgetComponent->SetWidgetClass(UShowDownBetStatusWidget::StaticClass());
 	BetStatusWidgetComponent->SetWidgetSpace(EWidgetSpace::Screen);
 	BetStatusWidgetComponent->SetDrawAtDesiredSize(false);

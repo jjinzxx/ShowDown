@@ -268,6 +268,9 @@ protected:
 	FVector NameTagRelativeLocation = FVector(0.0f, 0.0f, 135.0f);
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Bet Status")
+	TObjectPtr<USceneComponent> BetStatusAnchorComponent;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Bet Status")
 	TObjectPtr<UWidgetComponent> BetStatusWidgetComponent;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Player Camera")
