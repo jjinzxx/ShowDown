@@ -72,6 +72,12 @@ ASDBetBulletPresentationActor::ASDBetBulletPresentationActor()
 		BulletMeshAsset = CylinderMeshFinder.Object;
 	}
 
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMeshFinder(TEXT("/Engine/BasicShapes/Cube.Cube"));
+	if (CubeMeshFinder.Succeeded())
+	{
+		PlateMeshAsset = CubeMeshFinder.Object;
+	}
+
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> BulletMaterialFinder(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
 	if (BulletMaterialFinder.Succeeded())
 	{
@@ -84,22 +90,58 @@ ASDBetBulletPresentationActor::ASDBetBulletPresentationActor()
 
 	for (int32 LaneIndex = 0; LaneIndex < MaxLanes; ++LaneIndex)
 	{
+		UStaticMeshComponent* PlateMesh = CreateDefaultSubobject<UStaticMeshComponent>(
+			*FString::Printf(TEXT("LanePlate_%d"), LaneIndex));
+		PlateMesh->SetupAttachment(Root);
+		PlateMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		PlateMesh->SetCollisionObjectType(ECC_WorldDynamic);
+		PlateMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
+		PlateMesh->SetCanEverAffectNavigation(false);
+		PlateMesh->SetCastShadow(false);
+		if (PlateMeshAsset)
+		{
+			PlateMesh->SetStaticMesh(PlateMeshAsset);
+		}
+		if (BulletMaterial)
+		{
+			PlateMesh->SetMaterial(0, BulletMaterial);
+		}
+		LanePlateMeshes.Add(PlateMesh);
+
+		UStaticMeshComponent* AccentMesh = CreateDefaultSubobject<UStaticMeshComponent>(
+			*FString::Printf(TEXT("LaneAccent_%d"), LaneIndex));
+		AccentMesh->SetupAttachment(Root);
+		AccentMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		AccentMesh->SetCollisionObjectType(ECC_WorldDynamic);
+		AccentMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
+		AccentMesh->SetCanEverAffectNavigation(false);
+		AccentMesh->SetCastShadow(false);
+		if (PlateMeshAsset)
+		{
+			AccentMesh->SetStaticMesh(PlateMeshAsset);
+		}
+		if (BulletMaterial)
+		{
+			AccentMesh->SetMaterial(0, BulletMaterial);
+		}
+		LaneAccentMeshes.Add(AccentMesh);
+
 		UTextRenderComponent* StatusText = CreateDefaultSubobject<UTextRenderComponent>(
 			*FString::Printf(TEXT("LaneStatusText_%d"), LaneIndex));
 		StatusText->SetupAttachment(Root);
-		SetTextComponentDefaults(StatusText, 17.0f);
+		SetTextComponentDefaults(StatusText, 5.2f);
 		LaneStatusTexts.Add(StatusText);
 
 		UTextRenderComponent* NameText = CreateDefaultSubobject<UTextRenderComponent>(
 			*FString::Printf(TEXT("LaneNameText_%d"), LaneIndex));
 		NameText->SetupAttachment(Root);
-		SetTextComponentDefaults(NameText, 15.0f);
+		SetTextComponentDefaults(NameText, 4.2f);
 		LaneNameTexts.Add(NameText);
 
 		UTextRenderComponent* ActionText = CreateDefaultSubobject<UTextRenderComponent>(
 			*FString::Printf(TEXT("LaneActionText_%d"), LaneIndex));
 		ActionText->SetupAttachment(Root);
-		SetTextComponentDefaults(ActionText, 14.0f);
+		SetTextComponentDefaults(ActionText, 4.6f);
 		LaneActionTexts.Add(ActionText);
 
 		for (int32 BulletIndex = 0; BulletIndex < MaxBulletsPerLane; ++BulletIndex)
@@ -111,6 +153,7 @@ ASDBetBulletPresentationActor::ASDBetBulletPresentationActor()
 			BulletMesh->SetCollisionObjectType(ECC_WorldDynamic);
 			BulletMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
 			BulletMesh->SetCanEverAffectNavigation(false);
+			BulletMesh->SetCastShadow(false);
 			if (BulletMeshAsset)
 			{
 				BulletMesh->SetStaticMesh(BulletMeshAsset);
@@ -193,23 +236,7 @@ void ASDBetBulletPresentationActor::RefreshVisuals()
 
 	if (HeaderText)
 	{
-		HeaderText->SetVisibility(bHasAnyLane);
-		HeaderText->SetText(FText::FromString(PresentationState.StatusText));
-		HeaderText->SetTextRenderColor(MakeTextColor(FLinearColor(1.0f, 0.9f, 0.68f, 1.0f)));
-
-		if (bHasAnyLane)
-		{
-			FVector HeaderLocation = FVector::ZeroVector;
-			for (const FSDBetBulletLaneState& LaneState : PresentationState.Lanes)
-			{
-				HeaderLocation += LaneState.WorldLocation;
-			}
-			HeaderLocation /= static_cast<float>(PresentationState.Lanes.Num());
-			HeaderLocation.Z += HeaderHeight;
-
-			const FRotator HeaderRotation = PresentationState.Lanes[0].WorldRotation;
-			HeaderText->SetWorldLocationAndRotation(HeaderLocation, HeaderRotation);
-		}
+		HeaderText->SetVisibility(false);
 	}
 
 	for (int32 LaneIndex = 0; LaneIndex < MaxLanes; ++LaneIndex)
@@ -233,40 +260,80 @@ void ASDBetBulletPresentationActor::RefreshLaneVisual(int32 LaneIndex, const FSD
 
 	const bool bLocalLane = IsLocalPlayerLane(*LaneState);
 	const FLinearColor BaseColor = GetLaneBaseColor(*LaneState);
-	const FColor TextColor = MakeTextColor(BaseColor);
+	const FLinearColor PlateColor = LaneState->bFolded
+		? FLinearColor(0.035f, 0.037f, 0.042f, 1.0f)
+		: FLinearColor(0.012f, 0.015f, 0.021f, 1.0f);
 	const FVector BaseLocation = LaneState->WorldLocation;
 	const FRotator BaseRotation = LaneState->WorldRotation;
+	const FVector ForwardDirection = FRotationMatrix(BaseRotation).GetUnitAxis(EAxis::X);
 	const FVector RightDirection = FRotationMatrix(BaseRotation).GetUnitAxis(EAxis::Y);
+	const int32 ActiveBullets = FMath::Clamp(
+		LaneState->bRouletteTarget ? LaneState->RouletteBulletCount : LaneState->BulletCount,
+		0,
+		MaxBulletsPerLane);
+	const FString BuiltStatusText = BuildLaneStatusText(*LaneState, bLocalLane);
+	const FString BuiltActionText = BuildLaneActionText(*LaneState);
+	const float PlateWidth = FMath::Clamp(45.0f + static_cast<float>(ActiveBullets) * 3.6f, 48.0f, 68.0f);
+	const float PlateHeight = BuiltActionText.IsEmpty() ? 13.5f : 18.0f;
+	const FVector TextLift = ForwardDirection * 1.4f;
+
+	if (LanePlateMeshes.IsValidIndex(LaneIndex) && LanePlateMeshes[LaneIndex])
+	{
+		UStaticMeshComponent* PlateMesh = LanePlateMeshes[LaneIndex];
+		PlateMesh->SetWorldLocationAndRotation(BaseLocation, BaseRotation);
+		PlateMesh->SetWorldScale3D(FVector(0.010f, PlateWidth / 100.0f, PlateHeight / 100.0f));
+		ApplyBulletColor(PlateMesh, PlateColor);
+	}
+
+	if (LaneAccentMeshes.IsValidIndex(LaneIndex) && LaneAccentMeshes[LaneIndex])
+	{
+		UStaticMeshComponent* AccentMesh = LaneAccentMeshes[LaneIndex];
+		const FVector AccentLocation =
+			BaseLocation
+			+ FVector::UpVector * (PlateHeight * 0.5f - 0.8f)
+			+ ForwardDirection * 0.8f;
+		AccentMesh->SetWorldLocationAndRotation(AccentLocation, BaseRotation);
+		AccentMesh->SetWorldScale3D(FVector(0.012f, PlateWidth / 100.0f, 0.012f));
+		ApplyBulletColor(AccentMesh, BaseColor);
+	}
 
 	if (LaneStatusTexts.IsValidIndex(LaneIndex) && LaneStatusTexts[LaneIndex])
 	{
 		UTextRenderComponent* StatusText = LaneStatusTexts[LaneIndex];
-		StatusText->SetText(FText::FromString(BuildLaneStatusText(*LaneState, bLocalLane)));
-		StatusText->SetTextRenderColor(TextColor);
-		StatusText->SetWorldLocationAndRotation(BaseLocation + FVector::UpVector * LaneStatusHeight, BaseRotation);
+		StatusText->SetText(FText::FromString(BuiltStatusText));
+		StatusText->SetVisibility(!BuiltStatusText.IsEmpty());
+		StatusText->SetTextRenderColor(MakeTextColor(BaseColor));
+		StatusText->SetWorldLocationAndRotation(
+			BaseLocation + FVector::UpVector * LaneStatusHeight + TextLift,
+			BaseRotation);
 	}
 
 	if (LaneNameTexts.IsValidIndex(LaneIndex) && LaneNameTexts[LaneIndex])
 	{
 		UTextRenderComponent* NameText = LaneNameTexts[LaneIndex];
+		const FString DisplayName = LaneState->DisplayName.TrimStartAndEnd().Left(14);
 		NameText->SetText(FText::FromString(FString::Printf(
-			TEXT("%s  BET %d"),
-			*LaneState->DisplayName,
-			FMath::Clamp(LaneState->BulletCount, 0, MaxBulletsPerLane))));
-		NameText->SetTextRenderColor(TextColor);
-		NameText->SetWorldLocationAndRotation(BaseLocation + FVector::UpVector * LaneNameHeight, BaseRotation);
+			TEXT("%s  %d/%d"),
+			*DisplayName,
+			FMath::Clamp(LaneState->BulletCount, 0, MaxBulletsPerLane),
+			FMath::Clamp(PresentationState.TableBet, 0, MaxBulletsPerLane))));
+		NameText->SetTextRenderColor(MakeTextColor(FLinearColor(0.92f, 0.96f, 1.0f, 1.0f)));
+		NameText->SetWorldLocationAndRotation(
+			BaseLocation + FVector::UpVector * LaneNameHeight + TextLift,
+			BaseRotation);
 	}
 
 	if (LaneActionTexts.IsValidIndex(LaneIndex) && LaneActionTexts[LaneIndex])
 	{
 		UTextRenderComponent* ActionText = LaneActionTexts[LaneIndex];
-		const FString BuiltActionText = BuildLaneActionText(*LaneState);
 		ActionText->SetText(FText::FromString(BuiltActionText));
 		ActionText->SetVisibility(!BuiltActionText.IsEmpty());
 		ActionText->SetTextRenderColor(MakeTextColor(LaneState->bRouletteTarget
-			? FLinearColor(1.0f, 0.05f, 0.02f, 1.0f)
-			: FLinearColor(1.0f, 0.92f, 0.55f, 1.0f)));
-		ActionText->SetWorldLocationAndRotation(BaseLocation + FVector::UpVector * LaneActionHeight, BaseRotation);
+			? FLinearColor(1.0f, 0.22f, 0.12f, 1.0f)
+			: FLinearColor(1.0f, 0.86f, 0.48f, 1.0f)));
+		ActionText->SetWorldLocationAndRotation(
+			BaseLocation + FVector::UpVector * LaneActionHeight + TextLift,
+			BaseRotation);
 	}
 
 	if (LastSeenActionRevisions.IsValidIndex(LaneIndex)
@@ -278,7 +345,6 @@ void ASDBetBulletPresentationActor::RefreshLaneVisual(int32 LaneIndex, const FSD
 		SetActorTickEnabled(true);
 	}
 
-	const int32 ActiveBullets = FMath::Clamp(LaneState->BulletCount, 0, MaxBulletsPerLane);
 	for (int32 BulletIndex = 0; BulletIndex < MaxBulletsPerLane; ++BulletIndex)
 	{
 		const int32 MeshIndex = GetBulletMeshIndex(LaneIndex, BulletIndex);
@@ -299,6 +365,7 @@ void ASDBetBulletPresentationActor::RefreshLaneVisual(int32 LaneIndex, const FSD
 		const FVector BulletLocation =
 			BaseLocation
 			+ FVector::UpVector * LaneBulletHeight
+			+ ForwardDirection * 2.2f
 			+ RightDirection * BulletSpacing * CenteredIndex;
 		BulletMesh->SetWorldLocationAndRotation(BulletLocation, BaseRotation);
 		BulletMesh->SetWorldScale3D(BulletScale * (LaneState->bCurrentTurn ? CurrentTurnPulseScale : 1.0f));
@@ -340,6 +407,14 @@ void ASDBetBulletPresentationActor::ApplyBulletColor(UStaticMeshComponent* Bulle
 
 void ASDBetBulletPresentationActor::SetLaneComponentsVisible(int32 LaneIndex, bool bVisible)
 {
+	if (LanePlateMeshes.IsValidIndex(LaneIndex) && LanePlateMeshes[LaneIndex])
+	{
+		LanePlateMeshes[LaneIndex]->SetVisibility(bVisible);
+	}
+	if (LaneAccentMeshes.IsValidIndex(LaneIndex) && LaneAccentMeshes[LaneIndex])
+	{
+		LaneAccentMeshes[LaneIndex]->SetVisibility(bVisible);
+	}
 	if (LaneStatusTexts.IsValidIndex(LaneIndex) && LaneStatusTexts[LaneIndex])
 	{
 		LaneStatusTexts[LaneIndex]->SetVisibility(bVisible);
@@ -370,8 +445,8 @@ FString ASDBetBulletPresentationActor::BuildLaneStatusText(
 	if (LaneState.bRouletteTarget)
 	{
 		return bLocalLane
-			? FString::Printf(TEXT("MY TARGET  %d"), LaneState.RouletteBulletCount)
-			: FString::Printf(TEXT("TARGET  %d"), LaneState.RouletteBulletCount);
+			? FString::Printf(TEXT("YOUR TARGET %d"), LaneState.RouletteBulletCount)
+			: FString::Printf(TEXT("TARGET %d"), LaneState.RouletteBulletCount);
 	}
 
 	if (LaneState.bFolded)
@@ -381,10 +456,10 @@ FString ASDBetBulletPresentationActor::BuildLaneStatusText(
 
 	if (LaneState.bCurrentTurn)
 	{
-		return bLocalLane ? TEXT("MY TURN") : TEXT("TURN");
+		return bLocalLane ? TEXT("YOUR TURN") : TEXT("TURN");
 	}
 
-	return FString::Printf(TEXT("BET %d"), PresentationState.TableBet);
+	return FString();
 }
 
 FString ASDBetBulletPresentationActor::BuildLaneActionText(const FSDBetBulletLaneState& LaneState) const

@@ -3335,17 +3335,17 @@ void AShowDownGameModeBase::RefreshBetActionPanel()
 
 FTransform AShowDownGameModeBase::BuildBetBulletLaneTransformForSide(EShowDownSide Side) const
 {
-	if (const USceneComponent* HeadSlot = GetHeadSlotForSide(Side))
-	{
-		return BuildBetBulletLaneTransformFromLocation(
-			HeadSlot->GetComponentLocation(),
-			Side == EShowDownSide::Player ? 0 : 2);
-	}
-
 	if (const USceneComponent* HandSlot = GetHandSlotForSide(Side))
 	{
 		return BuildBetBulletLaneTransformFromLocation(
 			HandSlot->GetComponentLocation(),
+			Side == EShowDownSide::Player ? 0 : 2);
+	}
+
+	if (const USceneComponent* HeadSlot = GetHeadSlotForSide(Side))
+	{
+		return BuildBetBulletLaneTransformFromLocation(
+			HeadSlot->GetComponentLocation(),
 			Side == EShowDownSide::Player ? 0 : 2);
 	}
 
@@ -3358,17 +3358,17 @@ FTransform AShowDownGameModeBase::BuildBetBulletLaneTransformForPlayer(const ASD
 {
 	if (Player)
 	{
-		if (const USceneComponent* HeadSlot = GetHeadSlotForPlayerState(const_cast<ASDPlayerState*>(Player)))
-		{
-			return BuildBetBulletLaneTransformFromLocation(
-				HeadSlot->GetComponentLocation(),
-				GetMultiplayerTurnOrderIndex(Player->ShowDownSlot));
-		}
-
 		if (const USceneComponent* HandSlot = GetHandSlotForPlayerState(const_cast<ASDPlayerState*>(Player)))
 		{
 			return BuildBetBulletLaneTransformFromLocation(
 				HandSlot->GetComponentLocation(),
+				GetMultiplayerTurnOrderIndex(Player->ShowDownSlot));
+		}
+
+		if (const USceneComponent* HeadSlot = GetHeadSlotForPlayerState(const_cast<ASDPlayerState*>(Player)))
+		{
+			return BuildBetBulletLaneTransformFromLocation(
+				HeadSlot->GetComponentLocation(),
 				GetMultiplayerTurnOrderIndex(Player->ShowDownSlot));
 		}
 	}
@@ -3395,7 +3395,7 @@ FTransform AShowDownGameModeBase::BuildBetBulletLaneTransformFromLocation(
 	Direction.Normalize();
 
 	FVector LaneLocation = TableCenter + Direction * FMath::Max(0.0f, BetBulletLaneDistanceFromCenter);
-	LaneLocation.Z = TableCenter.Z + BetBulletLaneHeightOffset;
+	LaneLocation.Z = TableCenter.Z + FMath::Clamp(BetBulletLaneHeightOffset, -12.0f, 24.0f);
 
 	FVector FacingDirection = TableCenter - LaneLocation;
 	FacingDirection.Z = 0.0f;
@@ -3491,13 +3491,13 @@ FString AShowDownGameModeBase::BuildSingleBetBulletStatusText(EShowDownSide Turn
 	const int32 TableBet = FMath::Max(PlayerState.CurrentBet, CollectorState.CurrentBet);
 	if (!bBettingPhase)
 	{
-		return FString::Printf(TEXT("BET DONE | TABLE %d"), TableBet);
+		return FString::Printf(TEXT("DONE %d"), TableBet);
 	}
 
 	return FString::Printf(
-		TEXT("TABLE %d | %s TURN"),
-		TableBet,
-		TurnSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"));
+		TEXT("%s TURN %d"),
+		TurnSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
+		TableBet);
 }
 
 FString AShowDownGameModeBase::BuildMultiplayerBetBulletStatusText(const ASDPlayerState* TurnPlayer) const
@@ -3505,10 +3505,10 @@ FString AShowDownGameModeBase::BuildMultiplayerBetBulletStatusText(const ASDPlay
 	const int32 TableBet = BettingSystem ? BettingSystem->GetCurrentBet() : 0;
 	if (!bBettingPhase || !TurnPlayer)
 	{
-		return FString::Printf(TEXT("BET DONE | TABLE %d"), TableBet);
+		return FString::Printf(TEXT("DONE %d"), TableBet);
 	}
 
-	return FString::Printf(TEXT("TABLE %d | %s TURN"), TableBet, *TurnPlayer->GetPlayerName());
+	return FString::Printf(TEXT("%s TURN %d"), *TurnPlayer->GetPlayerName(), TableBet);
 }
 
 void AShowDownGameModeBase::RecordSingleBetBulletAction(
@@ -3594,22 +3594,19 @@ void AShowDownGameModeBase::ClearBetBulletTransientState()
 
 FString AShowDownGameModeBase::BuildBetBulletActionText(
 	EShowDownBetAction Action,
-	int32 PreviousBet,
+	int32,
 	int32 TargetBet) const
 {
-	const int32 AddedBullets = FMath::Max(0, TargetBet - PreviousBet);
 	switch (Action)
 	{
 	case EShowDownBetAction::Check:
 		return TEXT("CHECK");
 	case EShowDownBetAction::Call:
-		return AddedBullets > 0
-			? FString::Printf(TEXT("CALL +%d  -> %d"), AddedBullets, TargetBet)
-			: FString::Printf(TEXT("CALL  %d"), TargetBet);
+		return TargetBet > 0
+			? FString::Printf(TEXT("CALL %d"), TargetBet)
+			: TEXT("CALL");
 	case EShowDownBetAction::Raise:
-		return AddedBullets > 0
-			? FString::Printf(TEXT("RAISE +%d  -> %d"), AddedBullets, TargetBet)
-			: FString::Printf(TEXT("RAISE  %d"), TargetBet);
+		return FString::Printf(TEXT("RAISE %d"), TargetBet);
 	case EShowDownBetAction::Fold:
 		return TEXT("FOLD");
 	default:

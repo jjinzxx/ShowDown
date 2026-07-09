@@ -1177,7 +1177,7 @@ void AShowDownCharacter::RefreshNameTag()
 	if (UShowDownNameTagWidget* NameTagWidget = Cast<UShowDownNameTagWidget>(NameTagWidgetComponent->GetUserWidgetObject()))
 	{
 		NameTagWidget->SetDisplayName(FText::FromString(DisplayName));
-		NameTagWidget->SetStatusText(FText::FromString(ResolveNameTagStatusText()));
+		NameTagWidget->SetStatusText(FText::GetEmpty());
 		NameTagWidget->SetTurnActive(IsNameTagTurnActive());
 		NameTagWidget->SetSpeakingIndicatorVisible(bVoiceTalking);
 	}

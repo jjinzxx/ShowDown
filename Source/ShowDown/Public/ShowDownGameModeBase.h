@@ -260,7 +260,7 @@ public:
 	float BetBulletLaneDistanceFromCenter = 168.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Bullets")
-	float BetBulletLaneHeightOffset = 58.0f;
+	float BetBulletLaneHeightOffset = 18.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions")
 	bool bUseBetActionPanel = true;

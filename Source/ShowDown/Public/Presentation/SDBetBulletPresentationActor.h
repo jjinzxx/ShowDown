@@ -80,28 +80,28 @@ public:
 	TObjectPtr<USceneComponent> Root;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Bullets")
-	float BulletSpacing = 12.0f;
+	float BulletSpacing = 4.6f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Bullets")
-	float LaneStatusHeight = 34.0f;
+	float LaneStatusHeight = 5.6f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Bullets")
-	float LaneNameHeight = 18.0f;
+	float LaneNameHeight = -4.4f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Bullets")
 	float LaneBulletHeight = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Bullets")
-	float LaneActionHeight = -18.0f;
+	float LaneActionHeight = -10.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Bullets")
-	float HeaderHeight = 112.0f;
+	float HeaderHeight = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Bullets")
-	FVector BulletScale = FVector(0.07f, 0.07f, 0.22f);
+	FVector BulletScale = FVector(0.055f, 0.055f, 0.018f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Bullets")
-	float CurrentTurnPulseScale = 1.18f;
+	float CurrentTurnPulseScale = 1.08f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Bullets")
 	float ActionPulseSeconds = 1.1f;
@@ -145,6 +145,12 @@ private:
 	TArray<TObjectPtr<UTextRenderComponent>> LaneActionTexts;
 
 	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> LanePlateMeshes;
+
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> LaneAccentMeshes;
+
+	UPROPERTY()
 	TArray<TObjectPtr<UStaticMeshComponent>> BulletMeshes;
 
 	UPROPERTY()
@@ -152,6 +158,9 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UStaticMesh> BulletMeshAsset;
+
+	UPROPERTY()
+	TObjectPtr<UStaticMesh> PlateMeshAsset;
 
 	UPROPERTY()
 	TObjectPtr<UMaterialInterface> BulletMaterial;
