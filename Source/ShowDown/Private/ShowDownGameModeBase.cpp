@@ -22,7 +22,6 @@
 #include "MovieSceneSequencePlaybackSettings.h"
 #include "PlayerPawn.h"
 #include "Presentation/SDBetActionPanelActor.h"
-#include "Presentation/SDBetBulletPresentationActor.h"
 #include "Presentation/SDSelfShotGunActor.h"
 #include "SDPlayerSeat.h"
 #include "SDPlayerState.h"
@@ -156,7 +155,19 @@ namespace
 		return Text.StartsWith(Prefix, ESearchCase::IgnoreCase);
 	}
 
-	FLinearColor GetBetStatusAccentColor(const FSDBetBulletLaneState& LaneState)
+	struct FShowDownBetStatusLaneState
+	{
+		EShowDownPlayerSlot Slot = EShowDownPlayerSlot::None;
+		FString DisplayName;
+		int32 BulletCount = 0;
+		bool bCurrentTurn = false;
+		bool bFolded = false;
+		bool bRouletteTarget = false;
+		int32 RouletteBulletCount = 0;
+		FString ActionText;
+	};
+
+	FLinearColor GetBetStatusAccentColor(const FShowDownBetStatusLaneState& LaneState)
 	{
 		const FString ActionText = LaneState.ActionText.TrimStartAndEnd();
 		if (LaneState.bFolded || StatusTextStartsWith(ActionText, TEXT("FOLD")))
@@ -183,7 +194,7 @@ namespace
 		return FLinearColor(1.0f, 0.72f, 0.18f, 1.0f);
 	}
 
-	FString GetBetStatusLabel(const FSDBetBulletLaneState& LaneState)
+	FString GetBetStatusLabel(const FShowDownBetStatusLaneState& LaneState)
 	{
 		const FString ActionText = LaneState.ActionText.TrimStartAndEnd();
 		if (!ActionText.IsEmpty())
@@ -3055,42 +3066,6 @@ void AShowDownGameModeBase::ContinueFoldAfterReveal(EShowDownSide FoldedSide, in
 	});
 }
 
-ASDBetBulletPresentationActor* AShowDownGameModeBase::EnsureBetBulletPresentationActor()
-{
-	if (!bUseBetBulletPresentation || !HasAuthority())
-	{
-		return nullptr;
-	}
-
-	if (IsValid(BetBulletPresentationActor))
-	{
-		return BetBulletPresentationActor;
-	}
-
-	UWorld* World = GetWorld();
-	if (!World)
-	{
-		return nullptr;
-	}
-
-	UClass* PresentationClass = BetBulletPresentationClass
-		? BetBulletPresentationClass.Get()
-		: ASDBetBulletPresentationActor::StaticClass();
-	if (!PresentationClass)
-	{
-		return nullptr;
-	}
-
-	FActorSpawnParameters SpawnParams;
-	SpawnParams.Owner = this;
-	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-	BetBulletPresentationActor = World->SpawnActor<ASDBetBulletPresentationActor>(
-		PresentationClass,
-		FTransform::Identity,
-		SpawnParams);
-	return BetBulletPresentationActor;
-}
-
 ASDBetActionPanelActor* AShowDownGameModeBase::EnsureBetActionPanelActor()
 {
 	if (!bUseBetActionPanel || !HasAuthority())
@@ -3134,12 +3109,6 @@ ASDBetActionPanelActor* AShowDownGameModeBase::EnsureBetActionPanelActor()
 void AShowDownGameModeBase::ClearBetBulletPresentation()
 {
 	ClearBetBulletTransientState();
-	if (IsValid(BetBulletPresentationActor))
-	{
-		FSDBetBulletPresentationState EmptyState;
-		EmptyState.Revision = BetBulletPresentationRevision;
-		BetBulletPresentationActor->SetPresentationState(EmptyState);
-	}
 	for (AShowDownCharacter* Character : GetShowDownCharacters())
 	{
 		if (IsValid(Character))
@@ -3152,6 +3121,8 @@ void AShowDownGameModeBase::ClearBetBulletPresentation()
 
 void AShowDownGameModeBase::RefreshBetBulletPresentation(const FString& StatusText)
 {
+	(void)StatusText;
+
 	if (!bUseBetBulletPresentation)
 	{
 		for (AShowDownCharacter* Character : GetShowDownCharacters())
@@ -3165,24 +3136,10 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation(const FString& StatusTe
 		return;
 	}
 
-	if (IsValid(BetBulletPresentationActor))
-	{
-		FSDBetBulletPresentationState EmptyState;
-		EmptyState.Revision = BetBulletPresentationRevision;
-		BetBulletPresentationActor->SetPresentationState(EmptyState);
-	}
-
-	FSDBetBulletPresentationState NewState;
-	NewState.TableBet = BettingSystem ? BettingSystem->GetCurrentBet() : 0;
-	NewState.StatusText = StatusText;
-	NewState.Revision = BetBulletPresentationRevision;
+	TArray<FShowDownBetStatusLaneState> LaneStates;
 
 	if (bMultiplayerMatchStarted)
 	{
-		NewState.StatusText = NewState.StatusText.IsEmpty()
-			? BuildMultiplayerBetBulletStatusText(MultiplayerCurrentBetter)
-			: NewState.StatusText;
-
 		TArray<ASDPlayerState*> OrderedPlayers;
 		for (ASDPlayerState* Player : MultiplayerPlayers)
 		{
@@ -3200,7 +3157,7 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation(const FString& StatusTe
 				continue;
 			}
 
-			FSDBetBulletLaneState LaneState;
+			FShowDownBetStatusLaneState LaneState;
 			LaneState.Slot = Player->ShowDownSlot;
 			LaneState.DisplayName = Player->GetPlayerName().IsEmpty()
 				? FString::Printf(TEXT("Player%d"), static_cast<int32>(Player->ShowDownSlot))
@@ -3221,7 +3178,6 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation(const FString& StatusTe
 					BetBulletAction,
 					BetBulletActionPreviousBet,
 					BetBulletActionTargetBet);
-				LaneState.ActionRevision = BetBulletPresentationRevision;
 			}
 
 			if (bHasBetBulletRouletteTarget
@@ -3230,19 +3186,13 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation(const FString& StatusTe
 			{
 				LaneState.bRouletteTarget = true;
 				LaneState.RouletteBulletCount = BetBulletRouletteBulletCount;
-				LaneState.ActionRevision = BetBulletPresentationRevision;
 			}
 
-			NewState.Lanes.Add(LaneState);
+			LaneStates.Add(LaneState);
 		}
 	}
 	else
 	{
-		NewState.StatusText = NewState.StatusText.IsEmpty()
-			? BuildSingleBetBulletStatusText(CurrentRoundFirstSide)
-			: NewState.StatusText;
-		NewState.TableBet = FMath::Max(PlayerState.CurrentBet, CollectorState.CurrentBet);
-
 		const EShowDownSide Sides[] = { EShowDownSide::Player, EShowDownSide::Collector };
 		for (EShowDownSide Side : Sides)
 		{
@@ -3250,7 +3200,7 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation(const FString& StatusTe
 				? PlayerState
 				: CollectorState;
 
-			FSDBetBulletLaneState LaneState;
+			FShowDownBetStatusLaneState LaneState;
 			LaneState.Slot = Side == EShowDownSide::Player ? EShowDownPlayerSlot::Player1 : EShowDownPlayerSlot::None;
 			LaneState.DisplayName = Side == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector");
 			LaneState.BulletCount = FMath::Clamp(ParticipantState.CurrentBet, 0, 6);
@@ -3268,7 +3218,6 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation(const FString& StatusTe
 					BetBulletAction,
 					BetBulletActionPreviousBet,
 					BetBulletActionTargetBet);
-				LaneState.ActionRevision = BetBulletPresentationRevision;
 				LaneState.bFolded = BetBulletAction == EShowDownBetAction::Fold;
 			}
 
@@ -3278,15 +3227,14 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation(const FString& StatusTe
 			{
 				LaneState.bRouletteTarget = true;
 				LaneState.RouletteBulletCount = BetBulletRouletteBulletCount;
-				LaneState.ActionRevision = BetBulletPresentationRevision;
 			}
 
-			NewState.Lanes.Add(LaneState);
+			LaneStates.Add(LaneState);
 		}
 	}
 
 	TSet<AShowDownCharacter*> UpdatedBetStatusCharacters;
-	for (const FSDBetBulletLaneState& LaneState : NewState.Lanes)
+	for (const FShowDownBetStatusLaneState& LaneState : LaneStates)
 	{
 		AShowDownCharacter* TargetCharacter = nullptr;
 		if (bMultiplayerMatchStarted)
@@ -3434,90 +3382,6 @@ void AShowDownGameModeBase::RefreshBetActionPanel()
 	PanelActor->SetPanelState(NewState);
 }
 
-FTransform AShowDownGameModeBase::BuildBetBulletLaneTransformForSide(EShowDownSide Side) const
-{
-	if (const ASDCardPlacementAnchor* HandAnchor = GetHandAnchorForSide(Side))
-	{
-		if (const USceneComponent* HandSlot = HandAnchor->GetSlotComponent())
-		{
-			return BuildBetBulletLaneTransformFromLocation(
-				HandSlot->GetComponentLocation(),
-				Side == EShowDownSide::Player ? 0 : 2);
-		}
-	}
-
-	if (const ASDPlayerSeat* Seat = GetSeatForSide(Side))
-	{
-		if (const USceneComponent* HandSlot = Seat->GetHandSlot())
-		{
-			return BuildBetBulletLaneTransformFromLocation(
-				HandSlot->GetComponentLocation(),
-				Side == EShowDownSide::Player ? 0 : 2);
-		}
-	}
-
-	const FVector TableCenter = ResolveSingleTableCenter(GetWorld());
-	const int32 SeatIndex = Side == EShowDownSide::Player ? 0 : 1;
-	return BuildBetBulletLaneTransformFromLocation(
-		BuildSingleTableSeatTransform(TableCenter, SeatIndex).GetLocation(),
-		Side == EShowDownSide::Player ? 0 : 2);
-}
-
-FTransform AShowDownGameModeBase::BuildBetBulletLaneTransformForPlayer(const ASDPlayerState* Player) const
-{
-	if (Player)
-	{
-		if (const ASDCardPlacementAnchor* HandAnchor = GetHandAnchorForPlayerSlot(Player->ShowDownSlot))
-		{
-			if (const USceneComponent* HandSlot = HandAnchor->GetSlotComponent())
-			{
-				return BuildBetBulletLaneTransformFromLocation(
-					HandSlot->GetComponentLocation(),
-					GetSeatIndexFromPlayerSlot(Player->ShowDownSlot));
-			}
-		}
-	}
-
-	const FVector TableCenter = ResolveSingleTableCenter(GetWorld());
-	const int32 SeatIndex = GetSeatIndexFromPlayerSlot(Player ? Player->ShowDownSlot : EShowDownPlayerSlot::None);
-	const int32 FallbackSeatIndex = SeatIndex == INDEX_NONE ? 0 : SeatIndex;
-	return BuildBetBulletLaneTransformFromLocation(
-		BuildSingleTableSeatTransform(TableCenter, FallbackSeatIndex).GetLocation(),
-		FallbackSeatIndex);
-}
-
-FTransform AShowDownGameModeBase::BuildBetBulletLaneTransformFromLocation(
-	const FVector& SourceLocation,
-	int32 FallbackOrderIndex) const
-{
-	const FVector TableCenter = ResolveSingleTableCenter(GetWorld());
-	FVector Direction = SourceLocation - TableCenter;
-	Direction.Z = 0.0f;
-
-	if (Direction.IsNearlyZero())
-	{
-		static const float FallbackYaws[] = { -90.0f, 0.0f, 90.0f, 180.0f };
-		const int32 FallbackIndex = FMath::Clamp(FallbackOrderIndex, 0, UE_ARRAY_COUNT(FallbackYaws) - 1);
-		Direction = FRotationMatrix(FRotator(0.0f, FallbackYaws[FallbackIndex], 0.0f)).GetUnitAxis(EAxis::X);
-	}
-	Direction.Normalize();
-
-	FVector LaneLocation = TableCenter + Direction * FMath::Max(0.0f, BetBulletLaneDistanceFromCenter);
-	LaneLocation.Z = TableCenter.Z + BetBulletLaneHeightOffset;
-
-	FVector FacingDirection = TableCenter - LaneLocation;
-	FacingDirection.Z = 0.0f;
-	if (FacingDirection.IsNearlyZero())
-	{
-		FacingDirection = -Direction;
-	}
-
-	FRotator LaneRotation = FacingDirection.Rotation();
-	LaneRotation.Pitch = 0.0f;
-	LaneRotation.Roll = 0.0f;
-	return FTransform(LaneRotation, LaneLocation);
-}
-
 FTransform AShowDownGameModeBase::BuildBetActionPanelTransformForSide(EShowDownSide Side) const
 {
 	if (const USceneComponent* HandSlot = GetHandSlotForSide(Side))
@@ -3592,31 +3456,6 @@ FTransform AShowDownGameModeBase::BuildBetActionPanelTransformFromLocation(
 		+ RightDirection * BetActionPanelRightOffset;
 	PanelLocation.Z = SourceLocation.Z + BetActionPanelHeightOffset;
 	return FTransform(PanelRotation, PanelLocation);
-}
-
-FString AShowDownGameModeBase::BuildSingleBetBulletStatusText(EShowDownSide TurnSide) const
-{
-	const int32 TableBet = FMath::Max(PlayerState.CurrentBet, CollectorState.CurrentBet);
-	if (!bBettingPhase)
-	{
-		return FString::Printf(TEXT("DONE %d"), TableBet);
-	}
-
-	return FString::Printf(
-		TEXT("%s TURN %d"),
-		TurnSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
-		TableBet);
-}
-
-FString AShowDownGameModeBase::BuildMultiplayerBetBulletStatusText(const ASDPlayerState* TurnPlayer) const
-{
-	const int32 TableBet = BettingSystem ? BettingSystem->GetCurrentBet() : 0;
-	if (!bBettingPhase || !TurnPlayer)
-	{
-		return FString::Printf(TEXT("DONE %d"), TableBet);
-	}
-
-	return FString::Printf(TEXT("%s TURN %d"), *TurnPlayer->GetPlayerName(), TableBet);
 }
 
 void AShowDownGameModeBase::RecordSingleBetBulletAction(
@@ -3732,7 +3571,7 @@ float AShowDownGameModeBase::PlaySinglePlayerCardRevealPresentation()
 		RevealCards.Add(CollectorState.ForeheadCard);
 	}
 
-	return PlayCardRevealPresentation(RevealCards, ResolveCardRevealFocusLocationForSingle());
+	return PlayCardRevealPresentation(RevealCards);
 }
 
 float AShowDownGameModeBase::PlayMultiplayerCardRevealPresentation(const TArray<ASDPlayerState*>& RevealedPlayers)
@@ -3749,10 +3588,10 @@ float AShowDownGameModeBase::PlayMultiplayerCardRevealPresentation(const TArray<
 		}
 	}
 
-	return PlayCardRevealPresentation(RevealCards, ResolveCardRevealFocusLocationForMultiplayer(OrderedPlayers));
+	return PlayCardRevealPresentation(RevealCards);
 }
 
-float AShowDownGameModeBase::PlayCardRevealPresentation(const TArray<ACard*>& Cards, const FVector& FocusLocation)
+float AShowDownGameModeBase::PlayCardRevealPresentation(const TArray<ACard*>& Cards)
 {
 	ClearCardRevealPresentationTimers();
 
@@ -3790,7 +3629,7 @@ float AShowDownGameModeBase::PlayCardRevealPresentation(const TArray<ACard*>& Ca
 		TotalSeconds = FMath::Max(TotalSeconds, RevealDelay + CardMotionSeconds);
 
 		TWeakObjectPtr<ACard> WeakCard(Card);
-		const auto RevealCard = [this, WeakCard, FocusLocation, CardIndex, CardCount]()
+		const auto RevealCard = [this, WeakCard, CardIndex, CardCount]()
 		{
 			ACard* RevealCardActor = WeakCard.Get();
 			if (!IsValid(RevealCardActor))
@@ -3800,7 +3639,6 @@ float AShowDownGameModeBase::PlayCardRevealPresentation(const TArray<ACard*>& Ca
 
 			const FTransform RevealTransform = BuildCardRevealPresentationTransform(
 				RevealCardActor,
-				FocusLocation,
 				CardIndex,
 				CardCount);
 			RevealCardActor->MoveToRevealTransform(RevealTransform, CardRevealVisualScale);
@@ -3832,7 +3670,6 @@ void AShowDownGameModeBase::ClearCardRevealPresentationTimers()
 
 FTransform AShowDownGameModeBase::BuildCardRevealPresentationTransform(
 	ACard* Card,
-	const FVector& FocusLocation,
 	int32 CardIndex,
 	int32 CardCount) const
 {
@@ -3841,67 +3678,19 @@ FTransform AShowDownGameModeBase::BuildCardRevealPresentationTransform(
 		return FTransform::Identity;
 	}
 
-	const FVector StartLocation = Card->GetActorLocation();
-	FVector FaceDirection = FocusLocation - StartLocation;
-	FaceDirection.Z = 0.0f;
-	if (FaceDirection.IsNearlyZero())
-	{
-		FaceDirection = Card->GetActorForwardVector();
-		FaceDirection.Z = 0.0f;
-	}
-	if (FaceDirection.IsNearlyZero())
-	{
-		FaceDirection = FVector::ForwardVector;
-	}
-	FaceDirection.Normalize();
-
-	const FRotator FaceRotation = FaceDirection.Rotation();
-	const FVector RightDirection = FRotationMatrix(FaceRotation).GetUnitAxis(EAxis::Y);
+	const FVector TableCenter = ResolveSingleTableCenter(GetWorld());
+	const FRotator TableRotation(0.0f, CardRevealTableYaw, 0.0f);
+	const FVector ForwardDirection = FRotationMatrix(TableRotation).GetUnitAxis(EAxis::X);
+	const FVector RightDirection = FRotationMatrix(TableRotation).GetUnitAxis(EAxis::Y);
 	const float CenteredIndex = static_cast<float>(CardIndex) - (static_cast<float>(CardCount) - 1.0f) * 0.5f;
 	const FVector RevealLocation =
-		StartLocation
-		+ FaceDirection * FMath::Max(0.0f, CardRevealForwardDistance)
+		TableCenter
+		+ ForwardDirection * FMath::Max(0.0f, CardRevealForwardDistance)
 		+ FVector::UpVector * CardRevealHeightOffset
 		+ RightDirection * CardRevealSideSpacing * CenteredIndex;
-	const FQuat RevealRotation = (FaceRotation.Quaternion() * CardRevealRotationOffset.Quaternion()).GetNormalized();
+	const FQuat RevealRotation = (TableRotation.Quaternion() * CardRevealRotationOffset.Quaternion()).GetNormalized();
 
 	return FTransform(RevealRotation, RevealLocation, Card->GetActorScale3D());
-}
-
-FVector AShowDownGameModeBase::ResolveCardRevealFocusLocationForSingle() const
-{
-	return ResolveSingleTableCenter(GetWorld());
-}
-
-FVector AShowDownGameModeBase::ResolveCardRevealFocusLocationForMultiplayer(
-	const TArray<ASDPlayerState*>& RevealedPlayers) const
-{
-	FVector FocusLocation = FVector::ZeroVector;
-	int32 FocusCount = 0;
-	for (const ASDPlayerState* Player : RevealedPlayers)
-	{
-		if (!Player)
-		{
-			continue;
-		}
-
-		if (Player->ForeheadCard)
-		{
-			FocusLocation += Player->ForeheadCard->GetActorLocation();
-			++FocusCount;
-			continue;
-		}
-
-		if (const USceneComponent* HeadSlot = GetHeadSlotForPlayerState(const_cast<ASDPlayerState*>(Player)))
-		{
-			FocusLocation += HeadSlot->GetComponentLocation();
-			++FocusCount;
-		}
-	}
-
-	return FocusCount > 0
-		? FocusLocation / static_cast<float>(FocusCount)
-		: ResolveSingleTableCenter(GetWorld());
 }
 
 void AShowDownGameModeBase::ApplyRouletteResult(EShowDownSide TargetSide, int32 BulletCount, TFunction<void()>&& Continuation)

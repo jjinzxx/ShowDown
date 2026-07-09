@@ -31,7 +31,6 @@ class APlayerController;
 class ASDPlayerState;
 class ALevelSequenceActor;
 class ASDBetActionPanelActor;
-class ASDBetBulletPresentationActor;
 class ULevelSequence;
 class ULevelSequencePlayer;
 class USceneComponent;
@@ -253,15 +252,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Bullets")
 	bool bUseBetBulletPresentation = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Bullets")
-	TSubclassOf<ASDBetBulletPresentationActor> BetBulletPresentationClass;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Bullets", meta = (ClampMin = "0.0"))
-	float BetBulletLaneDistanceFromCenter = 168.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Bullets")
-	float BetBulletLaneHeightOffset = 18.0f;
-
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions")
 	bool bUseBetActionPanel = true;
 
@@ -294,6 +284,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0"))
 	float CardRevealForwardDistance = 42.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal")
+	float CardRevealTableYaw = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal")
 	float CardRevealHeightOffset = 10.0f;
@@ -441,8 +434,6 @@ private:
 	UPROPERTY()
 	TObjectPtr<ASDSelfShotGunActor> ActiveSelfShotGunActor = nullptr;
 	UPROPERTY()
-	TObjectPtr<ASDBetBulletPresentationActor> BetBulletPresentationActor = nullptr;
-	UPROPERTY()
 	TObjectPtr<ASDBetActionPanelActor> BetActionPanelActor = nullptr;
 
 	bool bSelfShotGunPresentationInProgress = false;
@@ -527,18 +518,12 @@ private:
 	void ContinueFoldAfterReveal(EShowDownSide FoldedSide, int32 LoadCount);
 	void ClearBetBulletPresentation();
 	void RefreshBetBulletPresentation(const FString& StatusText);
-	ASDBetBulletPresentationActor* EnsureBetBulletPresentationActor();
 	void ClearBetActionPanel();
 	void RefreshBetActionPanel();
 	ASDBetActionPanelActor* EnsureBetActionPanelActor();
-	FTransform BuildBetBulletLaneTransformForSide(EShowDownSide Side) const;
-	FTransform BuildBetBulletLaneTransformForPlayer(const ASDPlayerState* Player) const;
-	FTransform BuildBetBulletLaneTransformFromLocation(const FVector& SourceLocation, int32 FallbackOrderIndex) const;
 	FTransform BuildBetActionPanelTransformForSide(EShowDownSide Side) const;
 	FTransform BuildBetActionPanelTransformForPlayer(const ASDPlayerState* Player) const;
 	FTransform BuildBetActionPanelTransformFromLocation(const FVector& SourceLocation, int32 FallbackOrderIndex) const;
-	FString BuildSingleBetBulletStatusText(EShowDownSide TurnSide) const;
-	FString BuildMultiplayerBetBulletStatusText(const ASDPlayerState* TurnPlayer) const;
 	void RecordSingleBetBulletAction(EShowDownSide Side, EShowDownBetAction Action, int32 PreviousBet, int32 TargetBet);
 	void RecordMultiplayerBetBulletAction(ASDPlayerState* Player, EShowDownBetAction Action, int32 PreviousBet, int32 TargetBet);
 	void MarkSingleBetBulletRouletteTarget(EShowDownSide TargetSide, int32 BulletCount);
@@ -547,11 +532,9 @@ private:
 	FString BuildBetBulletActionText(EShowDownBetAction Action, int32 PreviousBet, int32 TargetBet) const;
 	float PlaySinglePlayerCardRevealPresentation();
 	float PlayMultiplayerCardRevealPresentation(const TArray<ASDPlayerState*>& RevealedPlayers);
-	float PlayCardRevealPresentation(const TArray<ACard*>& Cards, const FVector& FocusLocation);
+	float PlayCardRevealPresentation(const TArray<ACard*>& Cards);
 	void ClearCardRevealPresentationTimers();
-	FTransform BuildCardRevealPresentationTransform(ACard* Card, const FVector& FocusLocation, int32 CardIndex, int32 CardCount) const;
-	FVector ResolveCardRevealFocusLocationForSingle() const;
-	FVector ResolveCardRevealFocusLocationForMultiplayer(const TArray<ASDPlayerState*>& RevealedPlayers) const;
+	FTransform BuildCardRevealPresentationTransform(ACard* Card, int32 CardIndex, int32 CardCount) const;
 	void ApplyRouletteResult(EShowDownSide TargetSide, int32 BulletCount, TFunction<void()>&& Continuation);
 	void EndRound();
 	void ClearForeheadCards();
