@@ -36,7 +36,6 @@ void AShowDownHubFlowManager::BeginPlay()
 	Super::BeginPlay();
 	ApplySinglePlayerVoiceSettings();
 
-	// GameInstanceSubsystem survives level travel, so returning players can skip login.
 	bool bHasSession = false;
 	bool bInMultiplayerLobby = false;
 	if (UGameInstance* GameInstance = GetGameInstance())

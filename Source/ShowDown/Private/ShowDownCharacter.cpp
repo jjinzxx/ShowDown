@@ -20,7 +20,6 @@
 #include "ShowDownCharacterAnimInstance.h"
 #include "ShowDownGameStateBase.h"
 #include "ShowDownNameTagWidget.h"
-#include "UObject/ConstructorHelpers.h"
 
 namespace
 {
@@ -98,28 +97,6 @@ AShowDownCharacter::AShowDownCharacter()
 	BetStatusWidgetComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	BetStatusWidgetComponent->SetGenerateOverlapEvents(false);
 	BetStatusWidgetComponent->SetVisibility(false);
-
-	static ConstructorHelpers::FObjectFinder<USkeletalMesh> DefaultMesh(
-		TEXT("/Game/Assets/asd/Idle.Idle"));
-	if (DefaultMesh.Succeeded())
-	{
-		CharacterMesh->SetSkeletalMesh(DefaultMesh.Object);
-	}
-
-	static ConstructorHelpers::FObjectFinder<UAnimationAsset> DefaultIdleAnimation(
-		TEXT("/Game/Assets/asd/Idle_Anim.Idle_Anim"));
-	static ConstructorHelpers::FClassFinder<UAnimInstance> DefaultAnimClass(
-		TEXT("/Game/BluePrints/Characters/ABP_ShowDownCharacter"));
-	if (DefaultAnimClass.Succeeded())
-	{
-		CharacterMesh->SetAnimInstanceClass(DefaultAnimClass.Class);
-		CachedAnimBlueprintClass = DefaultAnimClass.Class;
-	}
-	else if (DefaultIdleAnimation.Succeeded())
-	{
-		CharacterMesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
-		CharacterMesh->PlayAnimation(DefaultIdleAnimation.Object, true);
-	}
 
 	UCharacterMovementComponent* MovementComponent = GetCharacterMovement();
 	MovementComponent->bOrientRotationToMovement = true;
