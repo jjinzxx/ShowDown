@@ -63,6 +63,24 @@ struct FSDBetActionPanelState
 	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions")
 	bool bCanFold = false;
 
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions|Animation")
+	float ButtonAnimationDuration = 0.34f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions|Animation")
+	float ButtonAnimationStaggerDelay = 0.035f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions|Animation")
+	float ButtonBounceStrength = 0.14f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions|Animation")
+	float BulletAnimationDuration = 0.26f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions|Animation")
+	float BulletRevealStaggerDelay = 0.055f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions|Animation")
+	float BulletBounceStrength = 0.20f;
+
 	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions")
 	FVector WorldLocation = FVector::ZeroVector;
 
@@ -132,6 +150,12 @@ private:
 	void EnsureBulletPreview();
 	void RefreshVisuals();
 	void RefreshBulletPreview(bool bVisible);
+	void StartBulletVisibilityAnimation(bool bVisible);
+	void TriggerBulletChangeAnimation(int32 PreviousTarget, int32 NewTarget);
+	void UpdateBulletAnimations(float DeltaSeconds);
+	void ApplyBulletAnimatedVisuals();
+	bool HasActiveBulletAnimation() const;
+	void RefreshTickState();
 	void RefreshSelectedRaiseTarget();
 	void AdjustSelectedRaiseTarget(int32 Delta);
 	int32 GetDefaultRaiseTarget() const;
@@ -155,6 +179,13 @@ private:
 	UPROPERTY()
 	TArray<TObjectPtr<UMaterialInstanceDynamic>> BulletPreviewMaterials;
 
+	TArray<float> BulletVisualAlphas;
+	TArray<float> BulletVisualScales;
+	TArray<float> BulletTransitionStartAlphas;
+	TArray<float> BulletTransitionStartScales;
+	TArray<float> BulletTransitionElapsedTimes;
+	TArray<float> BulletPulseElapsedTimes;
+
 	UPROPERTY()
 	TObjectPtr<UStaticMesh> BulletPreviewMeshAsset;
 
@@ -170,6 +201,11 @@ private:
 	int32 LastSeenCurrentPlayerBet = INDEX_NONE;
 	EShowDownPlayerSlot LastSeenTurnSlot = EShowDownPlayerSlot::None;
 	EShowDownPlayerSlot LastResolvedLocalPlayerSlot = EShowDownPlayerSlot::None;
+	FVector CachedBulletPanelLocation = FVector::ZeroVector;
+	FRotator CachedBulletPanelRotation = FRotator::ZeroRotator;
+	bool bHasCachedBulletPanelTransform = false;
+	bool bBulletTargetVisible = false;
+	bool bBulletVisibilityTransitionActive = false;
 };
 
 UCLASS()
@@ -190,7 +226,10 @@ public:
 		const FVector2D& Size,
 		bool bVisible,
 		bool bEnabled,
-		const FTransform& WorldTransform);
+		const FTransform& WorldTransform,
+		float AnimationDelay,
+		float AnimationDuration,
+		float BounceStrength);
 
 	virtual bool CanInteract_Implementation(AActor* Interactor) const override;
 	virtual void Interact_Implementation(AActor* Interactor) override;
@@ -254,8 +293,15 @@ private:
 	bool bButtonEnabled = false;
 	bool bTargetVisible = false;
 	bool bPointerPressed = false;
+	bool bVisibilityTransitionActive = false;
 	float VisualAlpha = 0.0f;
+	float VisualScale = 0.0f;
 	float PressVisualAlpha = 0.0f;
+	float VisibilityTransitionElapsed = 0.0f;
+	float VisibilityTransitionDuration = 0.34f;
+	float VisibilityTransitionStartAlpha = 0.0f;
+	float VisibilityTransitionStartScale = 0.0f;
+	float VisibilityBounceStrength = 0.14f;
 	float CurrentButtonWidth = 1.0f;
 	float CurrentButtonHeight = 1.0f;
 	float CurrentHighlightHeight = 0.4f;

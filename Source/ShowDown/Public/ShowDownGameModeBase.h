@@ -305,6 +305,24 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (DisplayName = "Bullet Row Offset"))
 	FVector BetActionBulletRowOffset = FVector(0.0f, 0.0f, 18.0f);
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions|Animation", meta = (ClampMin = "0.05", ClampMax = "1.0", DisplayName = "Button Pop Duration"))
+	float BetActionButtonAnimationDuration = 0.34f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions|Animation", meta = (ClampMin = "0.0", ClampMax = "0.25", DisplayName = "Button Stagger Delay"))
+	float BetActionButtonAnimationStagger = 0.035f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions|Animation", meta = (ClampMin = "0.0", ClampMax = "0.5", DisplayName = "Button Bounce Strength"))
+	float BetActionButtonBounceStrength = 0.14f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions|Animation", meta = (ClampMin = "0.05", ClampMax = "1.0", DisplayName = "Bullet Pop Duration"))
+	float BetActionBulletAnimationDuration = 0.26f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions|Animation", meta = (ClampMin = "0.0", ClampMax = "0.25", DisplayName = "Bullet Reveal Stagger"))
+	float BetActionBulletRevealStagger = 0.055f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions|Animation", meta = (ClampMin = "0.0", ClampMax = "0.5", DisplayName = "Bullet Bounce Strength"))
+	float BetActionBulletBounceStrength = 0.20f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal")
 	bool bUseCardRevealPresentation = true;
 

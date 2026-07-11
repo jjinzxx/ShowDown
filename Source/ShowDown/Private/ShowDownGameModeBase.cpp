@@ -3323,6 +3323,12 @@ void AShowDownGameModeBase::ClearBetActionPanel()
 
 	FSDBetActionPanelState EmptyState;
 	EmptyState.Revision = BetActionPanelRevision;
+	EmptyState.ButtonAnimationDuration = FMath::Clamp(BetActionButtonAnimationDuration, 0.05f, 1.0f);
+	EmptyState.ButtonAnimationStaggerDelay = FMath::Clamp(BetActionButtonAnimationStagger, 0.0f, 0.25f);
+	EmptyState.ButtonBounceStrength = FMath::Clamp(BetActionButtonBounceStrength, 0.0f, 0.5f);
+	EmptyState.BulletAnimationDuration = FMath::Clamp(BetActionBulletAnimationDuration, 0.05f, 1.0f);
+	EmptyState.BulletRevealStaggerDelay = FMath::Clamp(BetActionBulletRevealStagger, 0.0f, 0.25f);
+	EmptyState.BulletBounceStrength = FMath::Clamp(BetActionBulletBounceStrength, 0.0f, 0.5f);
 	PanelActor->SetPanelState(EmptyState);
 }
 
@@ -3378,6 +3384,12 @@ void AShowDownGameModeBase::RefreshBetActionPanel()
 	FSDBetActionPanelState NewState;
 	NewState.Revision = ++BetActionPanelRevision;
 	NewState.MaxRaiseTarget = 6;
+	NewState.ButtonAnimationDuration = FMath::Clamp(BetActionButtonAnimationDuration, 0.05f, 1.0f);
+	NewState.ButtonAnimationStaggerDelay = FMath::Clamp(BetActionButtonAnimationStagger, 0.0f, 0.25f);
+	NewState.ButtonBounceStrength = FMath::Clamp(BetActionButtonBounceStrength, 0.0f, 0.5f);
+	NewState.BulletAnimationDuration = FMath::Clamp(BetActionBulletAnimationDuration, 0.05f, 1.0f);
+	NewState.BulletRevealStaggerDelay = FMath::Clamp(BetActionBulletRevealStagger, 0.0f, 0.25f);
+	NewState.BulletBounceStrength = FMath::Clamp(BetActionBulletBounceStrength, 0.0f, 0.5f);
 
 	if (bMultiplayerMatchStarted)
 	{

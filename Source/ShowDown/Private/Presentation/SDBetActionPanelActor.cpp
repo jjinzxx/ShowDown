@@ -38,6 +38,75 @@ namespace
 			Color.B * 0.34f,
 			1.0f);
 	}
+
+	float Smooth01(float Alpha)
+	{
+		return FMath::SmoothStep(0.0f, 1.0f, FMath::Clamp(Alpha, 0.0f, 1.0f));
+	}
+
+	float EvaluatePopInScale(float Progress, float BounceStrength)
+	{
+		const float ClampedProgress = FMath::Clamp(Progress, 0.0f, 1.0f);
+		const float Bounce = FMath::Max(0.0f, BounceStrength);
+		if (Bounce <= KINDA_SMALL_NUMBER)
+		{
+			return Smooth01(ClampedProgress);
+		}
+
+		constexpr float OvershootPoint = 0.72f;
+		if (ClampedProgress < OvershootPoint)
+		{
+			const float Alpha = ClampedProgress / OvershootPoint;
+			const float EaseOut = 1.0f - FMath::Pow(1.0f - Alpha, 3.0f);
+			return (1.0f + Bounce) * EaseOut;
+		}
+
+		const float SettleAlpha = Smooth01((ClampedProgress - OvershootPoint) / (1.0f - OvershootPoint));
+		return FMath::Lerp(1.0f + Bounce, 1.0f, SettleAlpha);
+	}
+
+	float EvaluatePopOutScale(float Progress, float BounceStrength)
+	{
+		const float ClampedProgress = FMath::Clamp(Progress, 0.0f, 1.0f);
+		const float Bounce = FMath::Max(0.0f, BounceStrength);
+		if (Bounce <= KINDA_SMALL_NUMBER)
+		{
+			return 1.0f - Smooth01(ClampedProgress);
+		}
+
+		constexpr float AnticipationPoint = 0.22f;
+		if (ClampedProgress < AnticipationPoint)
+		{
+			const float Alpha = ClampedProgress / AnticipationPoint;
+			return 1.0f + Bounce * FMath::Sin(Alpha * PI);
+		}
+
+		const float CollapseAlpha = Smooth01((ClampedProgress - AnticipationPoint) / (1.0f - AnticipationPoint));
+		return 1.0f - CollapseAlpha;
+	}
+
+	float EvaluateBulletPulseScale(float Progress, float BounceStrength)
+	{
+		const float ClampedProgress = FMath::Clamp(Progress, 0.0f, 1.0f);
+		const float Bounce = FMath::Max(0.0f, BounceStrength);
+		const float CompressedScale = 1.0f - FMath::Clamp(0.08f + Bounce * 0.35f, 0.08f, 0.2f);
+		if (ClampedProgress < 0.22f)
+		{
+			return FMath::Lerp(1.0f, CompressedScale, Smooth01(ClampedProgress / 0.22f));
+		}
+		if (ClampedProgress < 0.64f)
+		{
+			return FMath::Lerp(
+				CompressedScale,
+				1.0f + Bounce,
+				Smooth01((ClampedProgress - 0.22f) / 0.42f));
+		}
+
+		return FMath::Lerp(
+			1.0f + Bounce,
+			1.0f,
+			Smooth01((ClampedProgress - 0.64f) / 0.36f));
+	}
 }
 
 ASDBetActionPanelActor::ASDBetActionPanelActor()
@@ -66,6 +135,7 @@ ASDBetActionPanelActor::ASDBetActionPanelActor()
 		BulletMesh->SetupAttachment(Root);
 		BulletMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		BulletMesh->SetCastShadow(false);
+		BulletMesh->SetVisibility(false, true);
 		if (BulletPreviewMeshAsset)
 		{
 			BulletMesh->SetStaticMesh(BulletPreviewMeshAsset);
@@ -88,23 +158,26 @@ void ASDBetActionPanelActor::BeginPlay()
 void ASDBetActionPanelActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	UpdateBulletAnimations(DeltaSeconds);
 
-	if (!PanelState.bVisible)
+	if (PanelState.bVisible)
 	{
-		SetActorTickEnabled(false);
-		return;
+		const EShowDownPlayerSlot CurrentLocalPlayerSlot = ResolveLocalPlayerSlot();
+		const bool bShouldBeVisible =
+			PanelState.TurnSlot != EShowDownPlayerSlot::None
+			&& CurrentLocalPlayerSlot == PanelState.TurnSlot;
+
+		if (CurrentLocalPlayerSlot != LastResolvedLocalPlayerSlot || bShouldBeVisible != bBulletTargetVisible)
+		{
+			RefreshVisuals();
+		}
 	}
 
-	const EShowDownPlayerSlot CurrentLocalPlayerSlot = ResolveLocalPlayerSlot();
-	const bool bShouldBeVisible =
-		PanelState.bVisible
-		&& PanelState.TurnSlot != EShowDownPlayerSlot::None
-		&& CurrentLocalPlayerSlot == PanelState.TurnSlot;
-
-	if (CurrentLocalPlayerSlot != LastResolvedLocalPlayerSlot || bShouldBeVisible == IsHidden())
+	if (!bBulletTargetVisible && !HasActiveBulletAnimation())
 	{
-		RefreshVisuals();
+		SetActorHiddenInGame(true);
 	}
+	RefreshTickState();
 }
 
 void ASDBetActionPanelActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -198,6 +271,22 @@ void ASDBetActionPanelActor::EnsureBulletPreview()
 	}
 
 	BulletPreviewMaterials.SetNum(BulletPreviewMeshes.Num());
+	const int32 PreviousAnimationCount = BulletVisualAlphas.Num();
+	BulletVisualAlphas.SetNum(BulletPreviewMeshes.Num());
+	BulletVisualScales.SetNum(BulletPreviewMeshes.Num());
+	BulletTransitionStartAlphas.SetNum(BulletPreviewMeshes.Num());
+	BulletTransitionStartScales.SetNum(BulletPreviewMeshes.Num());
+	BulletTransitionElapsedTimes.SetNum(BulletPreviewMeshes.Num());
+	BulletPulseElapsedTimes.SetNum(BulletPreviewMeshes.Num());
+	for (int32 BulletIndex = PreviousAnimationCount; BulletIndex < BulletPreviewMeshes.Num(); ++BulletIndex)
+	{
+		BulletVisualAlphas[BulletIndex] = 0.0f;
+		BulletVisualScales[BulletIndex] = 0.0f;
+		BulletTransitionStartAlphas[BulletIndex] = 0.0f;
+		BulletTransitionStartScales[BulletIndex] = 0.0f;
+		BulletTransitionElapsedTimes[BulletIndex] = 0.0f;
+		BulletPulseElapsedTimes[BulletIndex] = -1.0f;
+	}
 	for (int32 BulletIndex = 0; BulletIndex < BulletPreviewMeshes.Num(); ++BulletIndex)
 	{
 		if (BulletPreviewMeshes[BulletIndex] && !BulletPreviewMaterials[BulletIndex] && BulletPreviewTintMaterial)
@@ -215,8 +304,10 @@ void ASDBetActionPanelActor::RefreshVisuals()
 
 	LastResolvedLocalPlayerSlot = ResolveLocalPlayerSlot();
 	const bool bPanelVisible = IsPanelVisibleForLocalPlayer();
-	SetActorHiddenInGame(!bPanelVisible);
-	SetActorTickEnabled(PanelState.bVisible);
+	if (bPanelVisible)
+	{
+		SetActorHiddenInGame(false);
+	}
 	RefreshBulletPreview(bPanelVisible);
 
 	for (ESDBetActionPanelButtonKind ButtonKind : ButtonKinds)
@@ -228,14 +319,24 @@ void ASDBetActionPanelActor::RefreshVisuals()
 		}
 
 		const bool bEnabled = CanPressButton(ButtonKind);
+		const int32 StaggerIndex = bPanelVisible
+			? ButtonIndex
+			: ButtonCount - 1 - ButtonIndex;
+		const float AnimationDelay = static_cast<float>(StaggerIndex)
+			* FMath::Clamp(PanelState.ButtonAnimationStaggerDelay, 0.0f, 0.25f);
 		ButtonActors[ButtonIndex]->SetButtonState(
 			BuildButtonLabel(ButtonKind),
 			GetButtonColor(ButtonKind, bEnabled),
 			GetButtonSize(ButtonKind),
 			bPanelVisible,
 			bEnabled,
-			BuildButtonTransform(ButtonKind));
+			BuildButtonTransform(ButtonKind),
+			AnimationDelay,
+			FMath::Clamp(PanelState.ButtonAnimationDuration, 0.05f, 1.0f),
+			FMath::Clamp(PanelState.ButtonBounceStrength, 0.0f, 0.5f));
 	}
+
+	RefreshTickState();
 }
 
 void ASDBetActionPanelActor::RefreshBulletPreview(bool bVisible)
@@ -243,7 +344,30 @@ void ASDBetActionPanelActor::RefreshBulletPreview(bool bVisible)
 	const float LayoutScale = FMath::Max(0.1f, PanelVisualScale);
 	const int32 LoadedCount = FMath::Clamp(PanelState.LoadedBulletCount, 0, 6);
 	const int32 RaiseTarget = FMath::Clamp(SelectedRaiseTarget, LoadedCount, 6);
-	const FRotator PanelRotation = PanelState.WorldRotation;
+	bool bHasVisibleBulletPresentation = bBulletTargetVisible;
+	for (const float VisualAlpha : BulletVisualAlphas)
+	{
+		bHasVisibleBulletPresentation = bHasVisibleBulletPresentation || VisualAlpha > KINDA_SMALL_NUMBER;
+	}
+	const bool bPreserveVisiblePresentation = !bVisible && bHasVisibleBulletPresentation;
+	if (bPreserveVisiblePresentation)
+	{
+		if (bVisible != bBulletTargetVisible)
+		{
+			StartBulletVisibilityAnimation(bVisible);
+		}
+		ApplyBulletAnimatedVisuals();
+		return;
+	}
+
+	if (bVisible || !bHasCachedBulletPanelTransform)
+	{
+		CachedBulletPanelLocation = PanelState.WorldLocation;
+		CachedBulletPanelRotation = PanelState.WorldRotation;
+		bHasCachedBulletPanelTransform = true;
+	}
+
+	const FRotator PanelRotation = CachedBulletPanelRotation;
 	const FVector RightDirection = FRotationMatrix(PanelRotation).GetUnitAxis(EAxis::Y);
 	const FVector BulletRowWorldOffset = PanelRotation.RotateVector(BulletRowOffset * LayoutScale);
 
@@ -263,17 +387,14 @@ void ASDBetActionPanelActor::RefreshBulletPreview(bool bVisible)
 				? FLinearColor(1.0f, 0.025f, 0.015f, 1.0f)
 				: FLinearColor(0.22f, 0.72f, 1.0f, 0.24f));
 
-		BulletMesh->SetVisibility(bVisible, true);
 		// The panel faces the viewer from the opposite side of its local right
 		// axis, so reverse the visual slot index to fill left-to-right on screen.
 		const int32 VisualSlotIndex = BulletPreviewMeshes.Num() - 1 - BulletIndex;
 		BulletMesh->SetWorldLocationAndRotation(
-			PanelState.WorldLocation
+			CachedBulletPanelLocation
 				+ BulletRowWorldOffset
 				+ RightDirection * ((static_cast<float>(VisualSlotIndex) - 2.5f) * BulletSpacing * LayoutScale),
 			PanelRotation + FRotator(-90.0f, 0.0f, 0.0f));
-		const float BulletScale = FMath::Max(0.001f, BulletPreviewScale) * (LayoutScale / 0.35f);
-		BulletMesh->SetWorldScale3D(FVector(BulletScale));
 		if (bAlreadyLoaded && BulletPreviewNormalMaterial)
 		{
 			BulletMesh->SetMaterial(0, BulletPreviewNormalMaterial);
@@ -286,6 +407,196 @@ void ASDBetActionPanelActor::RefreshBulletPreview(bool bVisible)
 			BulletPreviewMaterials[BulletIndex]->SetScalarParameterValue(TEXT("Opacity"), BulletColor.A);
 		}
 	}
+
+	if (bVisible != bBulletTargetVisible)
+	{
+		StartBulletVisibilityAnimation(bVisible);
+	}
+	ApplyBulletAnimatedVisuals();
+}
+
+void ASDBetActionPanelActor::StartBulletVisibilityAnimation(bool bVisible)
+{
+	bBulletTargetVisible = bVisible;
+	bBulletVisibilityTransitionActive = BulletPreviewMeshes.Num() > 0;
+	const float StaggerDelay = FMath::Clamp(PanelState.BulletRevealStaggerDelay, 0.0f, 0.25f);
+
+	for (int32 BulletIndex = 0; BulletIndex < BulletPreviewMeshes.Num(); ++BulletIndex)
+	{
+		if (!BulletVisualAlphas.IsValidIndex(BulletIndex)
+			|| !BulletVisualScales.IsValidIndex(BulletIndex)
+			|| !BulletTransitionStartAlphas.IsValidIndex(BulletIndex)
+			|| !BulletTransitionStartScales.IsValidIndex(BulletIndex)
+			|| !BulletTransitionElapsedTimes.IsValidIndex(BulletIndex))
+		{
+			continue;
+		}
+
+		const int32 DelayIndex = bVisible
+			? BulletIndex
+			: BulletPreviewMeshes.Num() - 1 - BulletIndex;
+		BulletTransitionStartAlphas[BulletIndex] = BulletVisualAlphas[BulletIndex];
+		BulletTransitionStartScales[BulletIndex] = BulletVisualScales[BulletIndex];
+		BulletTransitionElapsedTimes[BulletIndex] = -static_cast<float>(DelayIndex) * StaggerDelay;
+	}
+
+	if (bVisible)
+	{
+		SetActorHiddenInGame(false);
+	}
+	RefreshTickState();
+}
+
+void ASDBetActionPanelActor::TriggerBulletChangeAnimation(int32 PreviousTarget, int32 NewTarget)
+{
+	const int32 FirstChangedBullet = FMath::Min(PreviousTarget, NewTarget);
+	const int32 LastChangedBullet = FMath::Max(PreviousTarget, NewTarget);
+	for (int32 BulletIndex = FirstChangedBullet; BulletIndex < LastChangedBullet; ++BulletIndex)
+	{
+		if (BulletPulseElapsedTimes.IsValidIndex(BulletIndex))
+		{
+			BulletPulseElapsedTimes[BulletIndex] = 0.0f;
+		}
+	}
+
+	ApplyBulletAnimatedVisuals();
+	RefreshTickState();
+}
+
+void ASDBetActionPanelActor::UpdateBulletAnimations(float DeltaSeconds)
+{
+	const float Duration = FMath::Clamp(PanelState.BulletAnimationDuration, 0.05f, 1.0f);
+	const float BounceStrength = FMath::Clamp(PanelState.BulletBounceStrength, 0.0f, 0.5f);
+	bool bAnyVisibilityTransitionActive = false;
+
+	if (bBulletVisibilityTransitionActive)
+	{
+		for (int32 BulletIndex = 0; BulletIndex < BulletPreviewMeshes.Num(); ++BulletIndex)
+		{
+			if (!BulletVisualAlphas.IsValidIndex(BulletIndex)
+				|| !BulletVisualScales.IsValidIndex(BulletIndex)
+				|| !BulletTransitionStartAlphas.IsValidIndex(BulletIndex)
+				|| !BulletTransitionStartScales.IsValidIndex(BulletIndex)
+				|| !BulletTransitionElapsedTimes.IsValidIndex(BulletIndex))
+			{
+				continue;
+			}
+
+			BulletTransitionElapsedTimes[BulletIndex] += DeltaSeconds;
+			if (BulletTransitionElapsedTimes[BulletIndex] < 0.0f)
+			{
+				bAnyVisibilityTransitionActive = true;
+				continue;
+			}
+
+			const float Progress = FMath::Clamp(BulletTransitionElapsedTimes[BulletIndex] / Duration, 0.0f, 1.0f);
+			const float TargetAlpha = bBulletTargetVisible ? 1.0f : 0.0f;
+			const float TargetScale = TargetAlpha;
+			const float SmoothProgress = Smooth01(Progress);
+			BulletVisualAlphas[BulletIndex] = FMath::Lerp(
+				BulletTransitionStartAlphas[BulletIndex],
+				TargetAlpha,
+				SmoothProgress);
+
+			const bool bFullReveal = bBulletTargetVisible
+				&& BulletTransitionStartAlphas[BulletIndex] <= KINDA_SMALL_NUMBER;
+			const bool bFullHide = !bBulletTargetVisible
+				&& BulletTransitionStartAlphas[BulletIndex] >= 1.0f - KINDA_SMALL_NUMBER;
+			if (bFullReveal)
+			{
+				BulletVisualScales[BulletIndex] = EvaluatePopInScale(Progress, BounceStrength);
+			}
+			else if (bFullHide)
+			{
+				BulletVisualScales[BulletIndex] = EvaluatePopOutScale(Progress, BounceStrength);
+			}
+			else
+			{
+				BulletVisualScales[BulletIndex] = FMath::Lerp(
+					BulletTransitionStartScales[BulletIndex],
+					TargetScale,
+					SmoothProgress);
+			}
+
+			if (Progress < 1.0f)
+			{
+				bAnyVisibilityTransitionActive = true;
+			}
+			else
+			{
+				BulletVisualAlphas[BulletIndex] = TargetAlpha;
+				BulletVisualScales[BulletIndex] = TargetScale;
+			}
+		}
+	}
+	bBulletVisibilityTransitionActive = bAnyVisibilityTransitionActive;
+
+	for (float& PulseElapsedTime : BulletPulseElapsedTimes)
+	{
+		if (PulseElapsedTime < 0.0f)
+		{
+			continue;
+		}
+		PulseElapsedTime += DeltaSeconds;
+		if (PulseElapsedTime >= Duration)
+		{
+			PulseElapsedTime = -1.0f;
+		}
+	}
+
+	ApplyBulletAnimatedVisuals();
+}
+
+void ASDBetActionPanelActor::ApplyBulletAnimatedVisuals()
+{
+	const float LayoutScale = FMath::Max(0.1f, PanelVisualScale);
+	const float BaseBulletScale = FMath::Max(0.001f, BulletPreviewScale) * (LayoutScale / 0.35f);
+	const float Duration = FMath::Clamp(PanelState.BulletAnimationDuration, 0.05f, 1.0f);
+	const float BounceStrength = FMath::Clamp(PanelState.BulletBounceStrength, 0.0f, 0.5f);
+
+	for (int32 BulletIndex = 0; BulletIndex < BulletPreviewMeshes.Num(); ++BulletIndex)
+	{
+		UStaticMeshComponent* BulletMesh = BulletPreviewMeshes[BulletIndex];
+		if (!BulletMesh || !BulletVisualAlphas.IsValidIndex(BulletIndex) || !BulletVisualScales.IsValidIndex(BulletIndex))
+		{
+			continue;
+		}
+
+		float PulseScale = 1.0f;
+		if (BulletPulseElapsedTimes.IsValidIndex(BulletIndex) && BulletPulseElapsedTimes[BulletIndex] >= 0.0f)
+		{
+			PulseScale = EvaluateBulletPulseScale(BulletPulseElapsedTimes[BulletIndex] / Duration, BounceStrength);
+		}
+
+		const float AnimatedScale = FMath::Max(0.0f, BulletVisualScales[BulletIndex]) * PulseScale;
+		BulletMesh->SetWorldScale3D(FVector(BaseBulletScale * AnimatedScale));
+		BulletMesh->SetVisibility(
+			BulletVisualAlphas[BulletIndex] > KINDA_SMALL_NUMBER || AnimatedScale > KINDA_SMALL_NUMBER,
+			true);
+	}
+}
+
+bool ASDBetActionPanelActor::HasActiveBulletAnimation() const
+{
+	if (bBulletVisibilityTransitionActive)
+	{
+		return true;
+	}
+	for (const float PulseElapsedTime : BulletPulseElapsedTimes)
+	{
+		if (PulseElapsedTime >= 0.0f)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+void ASDBetActionPanelActor::RefreshTickState()
+{
+	const bool bNeedsSmoothTick = HasActiveBulletAnimation();
+	SetActorTickInterval(bNeedsSmoothTick ? 0.0f : 0.15f);
+	SetActorTickEnabled(bNeedsSmoothTick || PanelState.bVisible);
 }
 
 void ASDBetActionPanelActor::RefreshSelectedRaiseTarget()
@@ -312,8 +623,13 @@ void ASDBetActionPanelActor::RefreshSelectedRaiseTarget()
 
 void ASDBetActionPanelActor::AdjustSelectedRaiseTarget(int32 Delta)
 {
+	const int32 PreviousRaiseTarget = SelectedRaiseTarget;
 	SelectedRaiseTarget = ClampRaiseTarget(SelectedRaiseTarget + Delta);
 	RefreshVisuals();
+	if (SelectedRaiseTarget != PreviousRaiseTarget)
+	{
+		TriggerBulletChangeAnimation(PreviousRaiseTarget, SelectedRaiseTarget);
+	}
 	if (PanelState.bMultiplayer)
 	{
 		if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(UGameplayStatics::GetPlayerController(this, 0)))
@@ -650,12 +966,41 @@ void ASDBetActionButtonActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	const float TargetAlpha = bTargetVisible ? 1.0f : 0.0f;
-	const float InterpSpeed = bTargetVisible ? 9.0f : 11.0f;
-	VisualAlpha = FMath::FInterpTo(VisualAlpha, TargetAlpha, DeltaSeconds, InterpSpeed);
-	if (FMath::IsNearlyEqual(VisualAlpha, TargetAlpha, 0.01f))
+	if (bVisibilityTransitionActive)
 	{
-		VisualAlpha = TargetAlpha;
+		VisibilityTransitionElapsed += DeltaSeconds;
+		if (VisibilityTransitionElapsed >= 0.0f)
+		{
+			const float Progress = FMath::Clamp(
+				VisibilityTransitionElapsed / FMath::Max(0.05f, VisibilityTransitionDuration),
+				0.0f,
+				1.0f);
+			const float TargetAlpha = bTargetVisible ? 1.0f : 0.0f;
+			const float SmoothProgress = Smooth01(Progress);
+			VisualAlpha = FMath::Lerp(VisibilityTransitionStartAlpha, TargetAlpha, SmoothProgress);
+
+			const bool bFullReveal = bTargetVisible && VisibilityTransitionStartAlpha <= KINDA_SMALL_NUMBER;
+			const bool bFullHide = !bTargetVisible && VisibilityTransitionStartAlpha >= 1.0f - KINDA_SMALL_NUMBER;
+			if (bFullReveal)
+			{
+				VisualScale = EvaluatePopInScale(Progress, VisibilityBounceStrength);
+			}
+			else if (bFullHide)
+			{
+				VisualScale = EvaluatePopOutScale(Progress, VisibilityBounceStrength);
+			}
+			else
+			{
+				VisualScale = FMath::Lerp(VisibilityTransitionStartScale, TargetAlpha, SmoothProgress);
+			}
+
+			if (Progress >= 1.0f)
+			{
+				VisualAlpha = TargetAlpha;
+				VisualScale = TargetAlpha;
+				bVisibilityTransitionActive = false;
+			}
+		}
 	}
 
 	const float TargetPressAlpha = bPointerPressed ? 1.0f : 0.0f;
@@ -666,11 +1011,8 @@ void ASDBetActionButtonActor::Tick(float DeltaSeconds)
 	}
 	ApplyAnimatedVisuals();
 
-	if (!bTargetVisible && VisualAlpha <= KINDA_SMALL_NUMBER && PressVisualAlpha <= KINDA_SMALL_NUMBER)
-	{
-		SetActorTickEnabled(false);
-	}
-	else if (bTargetVisible && VisualAlpha >= 1.0f && PressVisualAlpha <= KINDA_SMALL_NUMBER && !bPointerPressed)
+	const bool bPressAnimationSettled = FMath::IsNearlyEqual(PressVisualAlpha, TargetPressAlpha, 0.01f);
+	if (!bVisibilityTransitionActive && bPressAnimationSettled)
 	{
 		SetActorTickEnabled(false);
 	}
@@ -721,21 +1063,48 @@ void ASDBetActionButtonActor::SetButtonState(
 	const FVector2D& Size,
 	bool bVisible,
 	bool bEnabled,
-	const FTransform& WorldTransform)
+	const FTransform& WorldTransform,
+	float AnimationDelay,
+	float AnimationDuration,
+	float BounceStrength)
 {
-	SetActorTransform(WorldTransform);
-	if (bVisible && !bTargetVisible)
+	const bool bPreserveVisiblePresentation = !bVisible
+		&& (bTargetVisible || VisualAlpha > KINDA_SMALL_NUMBER || VisualScale > KINDA_SMALL_NUMBER);
+	if (bVisible || VisualAlpha <= KINDA_SMALL_NUMBER)
+	{
+		SetActorTransform(WorldTransform);
+	}
+
+	const bool bVisibilityChanged = bVisible != bTargetVisible;
+	if (bVisible && bVisibilityChanged)
 	{
 		SetActorHiddenInGame(false);
 	}
 
+	VisibilityTransitionDuration = FMath::Clamp(AnimationDuration, 0.05f, 1.0f);
+	VisibilityBounceStrength = FMath::Clamp(BounceStrength, 0.0f, 0.5f);
+	if (bVisibilityChanged)
+	{
+		VisibilityTransitionStartAlpha = VisualAlpha;
+		VisibilityTransitionStartScale = VisualScale;
+		VisibilityTransitionElapsed = -FMath::Clamp(AnimationDelay, 0.0f, 1.0f);
+		bVisibilityTransitionActive = true;
+	}
 	bTargetVisible = bVisible;
 	bButtonEnabled = bVisible && bEnabled;
 	if (!bButtonEnabled)
 	{
 		bPointerPressed = false;
 	}
-	SetActorTickEnabled(true);
+	if (bVisibilityTransitionActive)
+	{
+		SetActorTickEnabled(true);
+	}
+	if (bPreserveVisiblePresentation)
+	{
+		ApplyAnimatedVisuals();
+		return;
+	}
 
 	if (ClickBounds)
 	{
@@ -832,14 +1201,17 @@ void ASDBetActionButtonActor::Interact_Implementation(AActor* Interactor)
 
 void ASDBetActionButtonActor::ApplyAnimatedVisuals()
 {
-	const bool bDrawVisible = bTargetVisible || VisualAlpha > KINDA_SMALL_NUMBER;
+	const bool bDrawVisible = bTargetVisible
+		|| VisualAlpha > KINDA_SMALL_NUMBER
+		|| VisualScale > KINDA_SMALL_NUMBER;
 	SetActorHiddenInGame(!bDrawVisible);
 
 	const float Alpha = FMath::Clamp(VisualAlpha, 0.0f, 1.0f);
 	const float PressAlpha = FMath::SmoothStep(0.0f, 1.0f, FMath::Clamp(PressVisualAlpha, 0.0f, 1.0f));
 	const float PressOffsetX = -CurrentPressDepth * PressAlpha;
-	const float RevealOffsetZ = (1.0f - Alpha) * -1.65f;
-	SetActorScale3D(FVector::OneVector);
+	const float RevealOffsetZ = 0.0f;
+	const float PressScale = FMath::Lerp(1.0f, 0.95f, PressAlpha);
+	SetActorScale3D(FVector(FMath::Max(0.0f, VisualScale) * PressScale));
 
 	if (ClickBounds)
 	{
