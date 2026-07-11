@@ -3726,13 +3726,16 @@ FTransform AShowDownGameModeBase::BuildCardRevealPresentationTransform(
 	}
 
 	const FVector TableCenter = ResolveSingleTableCenter(GetWorld());
+	const FRotator TableRotation(0.0f, CardRevealTableYaw, 0.0f);
+	const FVector ForwardDirection = FRotationMatrix(TableRotation).GetUnitAxis(EAxis::X);
 	const float CenteredIndex =
 		static_cast<float>(CardIndex) - (static_cast<float>(CardCount) - 1.0f) * 0.5f;
 	const FVector RevealLocation =
 		TableCenter
-		+ FVector::RightVector * CardRevealSideSpacing * CenteredIndex
+		+ ForwardDirection * (CardRevealForwardDistance + CardRevealSideSpacing * CenteredIndex)
 		+ FVector::UpVector * CardRevealHeightOffset;
-	const FQuat RevealRotation = FQuat::Identity;
+	const FQuat RevealRotation =
+		(TableRotation.Quaternion() * CardRevealRotationOffset.Quaternion()).GetNormalized();
 
 	return FTransform(RevealRotation, RevealLocation, Card->GetActorScale3D());
 }

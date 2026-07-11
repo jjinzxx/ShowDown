@@ -305,13 +305,23 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (DisplayName = "Bullet Row Offset"))
 	FVector BetActionBulletRowOffset = FVector(0.0f, 0.0f, 18.0f);
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal")
 	bool bUseCardRevealPresentation = true;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0"))
 	float CardRevealLeadInSeconds = 0.12f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0"))
 	float CardRevealStepSeconds = 0.24f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0"))
 	float CardRevealHoldSeconds = 0.8f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (DisplayName = "Forward Distance"))
+	float CardRevealForwardDistance = 42.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (DisplayName = "Table Yaw"))
+	float CardRevealTableYaw = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (DisplayName = "Height"))
 	float CardRevealHeightOffset = 10.0f;
@@ -319,7 +329,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0", DisplayName = "Spacing"))
 	float CardRevealSideSpacing = 10.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.1"))
 	float CardRevealVisualScale = 1.12f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (DisplayName = "Rotation Offset"))
+	FRotator CardRevealRotationOffset = FRotator(-90.0f, 0.0f, 0.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro")
 	bool bPlaySinglePlayerIntro = true;
