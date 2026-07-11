@@ -213,7 +213,13 @@ void AShowDownCharacter::PlayBettingAnimation(float Duration)
 
 void AShowDownCharacter::SetPlayerViewRotation(FRotator ViewRotation)
 {
+	ViewRotation.Normalize();
 	ViewRotation.Roll = 0.0f;
+	if (HasAuthority() && ReplicatedPlayerViewRotation.Equals(ViewRotation, 0.1f))
+	{
+		return;
+	}
+
 	ApplyPlayerViewRotation(ViewRotation);
 	if (HasAuthority())
 	{

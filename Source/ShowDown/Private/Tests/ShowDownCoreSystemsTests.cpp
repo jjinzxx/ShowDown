@@ -1,6 +1,8 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "BettingSystem.h"
+#include "CardSystem.h"
+#include "CollectorAISystem.h"
 #include "Misc/AutomationTest.h"
 #include "RoundResolver.h"
 #include "RouletteSystem.h"
@@ -89,6 +91,78 @@ bool FShowDownRouletteSystemTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Six bullets always hit"), RouletteSystem->RollRoulette(6));
 	TestFalse(TEXT("Negative bullets are clamped to empty"), RouletteSystem->RollRoulette(-1));
 	TestTrue(TEXT("Excess bullets are clamped to full"), RouletteSystem->RollRoulette(99));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownCardSystemTest,
+	"ShowDown.Core.CardSystem",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownCardSystemTest::RunTest(const FString& Parameters)
+{
+	UCardSystem* CardSystem = NewObject<UCardSystem>();
+	TestNotNull(TEXT("Card system can be created"), CardSystem);
+	if (!CardSystem)
+	{
+		return false;
+	}
+
+	CardSystem->ResetDeck(2);
+	TestEqual(TEXT("Two copies of seven ranks create fourteen cards"), CardSystem->GetRemainingCardCount(), 14);
+
+	TArray<int32> DealtCards;
+	TestTrue(TEXT("The complete deck can be dealt"), CardSystem->DealCards(14, DealtCards));
+	TestEqual(TEXT("Dealing the complete deck returns fourteen cards"), DealtCards.Num(), 14);
+	TestEqual(TEXT("The deck is empty after all cards are dealt"), CardSystem->GetRemainingCardCount(), 0);
+
+	TArray<int32> RankCounts;
+	RankCounts.Init(0, 8);
+	for (const int32 Rank : DealtCards)
+	{
+		TestTrue(TEXT("Dealt ranks stay in the supported range"), Rank >= 1 && Rank <= 7);
+		if (RankCounts.IsValidIndex(Rank))
+		{
+			++RankCounts[Rank];
+		}
+	}
+	for (int32 Rank = 1; Rank <= 7; ++Rank)
+	{
+		TestEqual(*FString::Printf(TEXT("Rank %d keeps its configured copy count"), Rank), RankCounts[Rank], 2);
+	}
+
+	TestFalse(TEXT("Dealing from an empty deck fails"), CardSystem->DealCards(1, DealtCards));
+	TestEqual(TEXT("A failed deal clears the output"), DealtCards.Num(), 0);
+	CardSystem->ResetDeck(-1);
+	TestEqual(TEXT("Negative deck copies clamp to an empty deck"), CardSystem->GetRemainingCardCount(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownCollectorAISystemTest,
+	"ShowDown.Core.CollectorAI",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownCollectorAISystemTest::RunTest(const FString& Parameters)
+{
+	UCollectorAISystem* CollectorAI = NewObject<UCollectorAISystem>();
+	TestNotNull(TEXT("Collector AI system can be created"), CollectorAI);
+	if (!CollectorAI)
+	{
+		return false;
+	}
+
+	const TArray<int32> HandRanks = {5, 2, 7, 3};
+	CollectorAI->Settings.GiveStrategy = ECollectorGiveStrategy::Lowest;
+	TestEqual(TEXT("Lowest strategy chooses the lowest card"), CollectorAI->ChooseCardToGive(HandRanks), 2);
+	CollectorAI->Settings.GiveStrategy = ECollectorGiveStrategy::Highest;
+	TestEqual(TEXT("Highest strategy chooses the highest card"), CollectorAI->ChooseCardToGive(HandRanks), 7);
+	TestEqual(TEXT("An empty hand has no card to give"), CollectorAI->ChooseCardToGive({}), 0);
+
+	TestEqual(TEXT("High confidence raises below capacity"), CollectorAI->ChooseBetAction(0.8f, 2), EShowDownBetAction::Raise);
+	TestEqual(TEXT("Low confidence folds against a large bet"), CollectorAI->ChooseBetAction(0.2f, 3), EShowDownBetAction::Fold);
+	TestEqual(TEXT("A neutral opening action checks"), CollectorAI->ChooseBetAction(0.5f, 0), EShowDownBetAction::Check);
+	TestEqual(TEXT("A neutral response calls an existing bet"), CollectorAI->ChooseBetAction(0.5f, 2), EShowDownBetAction::Call);
 	return true;
 }
 

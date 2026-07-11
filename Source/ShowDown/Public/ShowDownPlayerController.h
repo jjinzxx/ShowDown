@@ -502,6 +502,9 @@ private:
 	float CharacterPlayerCameraRetryElapsedTime = 0.0f;
 	float CharacterHeadLookReplicationElapsedTime = 0.0f;
 	FRotator LastSubmittedCharacterHeadLookRotation = FRotator::ZeroRotator;
+	mutable uint64 PrimaryInteractionTraceFrame = MAX_uint64;
+	mutable bool bCachedPrimaryInteractionTraceHit = false;
+	mutable FHitResult CachedPrimaryInteractionTraceHit;
 	bool bFixedCameraInvertMouseY = true;
 	bool bVoiceChatEventsBound = false;
 	bool bVoiceSubsystemEventsBound = false;

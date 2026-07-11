@@ -576,6 +576,8 @@ private:
 	void StartTinnitusSound();
 	void UpdateTinnitusSound(float DeltaSeconds);
 	void StopTinnitusSound();
+	bool IsRuntimeTickRequired() const;
+	void RefreshRuntimeTickState();
 	void SetBlackoutInstant(float Alpha, bool bHoldWhenFinished);
 	ASDArtToneController* ResolveHitSequenceArtToneController();
 	bool ResolveCurrentShotIsLive() const;

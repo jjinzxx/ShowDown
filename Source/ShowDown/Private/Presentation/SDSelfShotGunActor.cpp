@@ -68,6 +68,7 @@ namespace
 ASDSelfShotGunActor::ASDSelfShotGunActor()
 {
 	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bStartWithTickEnabled = false;
 	bReplicates = true;
 	bAlwaysRelevant = true;
 
@@ -212,6 +213,12 @@ void ASDSelfShotGunActor::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
 	ApplyAmmoStatusDisplaySettings();
+#if WITH_EDITOR
+	if (!GetWorld() || !GetWorld()->IsGameWorld())
+	{
+		SetActorTickEnabled(bEnableRevolverPlacementDevMode || bRevolverPlacementDevPreviewActive);
+	}
+#endif
 }
 
 #if WITH_EDITOR
@@ -247,6 +254,8 @@ void ASDSelfShotGunActor::BeginPlay()
 			this,
 			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
 	}
+
+	RefreshRuntimeTickState();
 }
 
 void ASDSelfShotGunActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -280,11 +289,8 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 
 	if (AnimState == EGunAnimState::Idle)
 	{
-		if (UpdateRevolverPlacementDevPreview())
-		{
-			return;
-		}
-
+		UpdateRevolverPlacementDevPreview();
+		RefreshRuntimeTickState();
 		return;
 	}
 
@@ -366,6 +372,8 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 	default:
 		break;
 	}
+
+	RefreshRuntimeTickState();
 }
 
 void ASDSelfShotGunActor::UseGun()
@@ -732,6 +740,7 @@ void ASDSelfShotGunActor::StartGunUse()
 	StartSelfShotCinematicCamera();
 	AnimState = EGunAnimState::Raising;
 	bPresentationFinishPending = true;
+	SetActorTickEnabled(true);
 
 	if (bDisableCollisionWhileUsing)
 	{
@@ -1419,6 +1428,28 @@ void ASDSelfShotGunActor::StopTinnitusSound()
 
 	TinnitusElapsedTime = 0.0f;
 	bTinnitusFadeOutStarted = false;
+}
+
+bool ASDSelfShotGunActor::IsRuntimeTickRequired() const
+{
+	const bool bPresentationActive = AnimState != EGunAnimState::Idle
+		|| HitSequenceState != EHitSequenceState::Idle
+		|| MuzzleFlashElapsedTime > 0.0f
+		|| bSelfShotCinematicCameraActive
+		|| bSelfShotCinematicCameraStartPending
+		|| bCinematicCameraShakeActive
+		|| TinnitusAudioComponent != nullptr;
+
+#if WITH_EDITOR
+	return bPresentationActive || bEnableRevolverPlacementDevMode || bRevolverPlacementDevPreviewActive;
+#else
+	return bPresentationActive;
+#endif
+}
+
+void ASDSelfShotGunActor::RefreshRuntimeTickState()
+{
+	SetActorTickEnabled(IsRuntimeTickRequired());
 }
 
 void ASDSelfShotGunActor::SetBlackoutInstant(float Alpha, bool bHoldWhenFinished)

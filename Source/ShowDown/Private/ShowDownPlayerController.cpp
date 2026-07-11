@@ -39,6 +39,8 @@
 namespace
 {
 	const TCHAR* DefaultInteractionOutlineMaterialPath = TEXT("/Game/ArtTone/M_PP_InteractionOutline.M_PP_InteractionOutline");
+	constexpr float CharacterHeadLookReplicationInterval = 0.05f;
+	constexpr float CharacterHeadLookReplicationAngleThreshold = 0.5f;
 
 	bool IsOutlineablePrimitive(const UPrimitiveComponent* Component)
 	{
@@ -558,6 +560,7 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 	}
 
 	UpdateCharacterPlayerCamera(DeltaTime);
+	PrimaryInteractionTraceFrame = MAX_uint64;
 	UpdateFocusedInteractable();
 	UpdateHoveredCard();
 	UpdateCenterCrosshairVisibility();
@@ -815,22 +818,41 @@ void AShowDownPlayerController::TraceCardUnderCursor()
 
 bool AShowDownPlayerController::TracePrimaryInteraction(FHitResult& OutHit) const
 {
-	if (bShowMouseCursor && TraceUnderCursor(OutHit))
+	if (PrimaryInteractionTraceFrame == GFrameCounter)
 	{
-		return true;
+		OutHit = CachedPrimaryInteractionTraceHit;
+		return bCachedPrimaryInteractionTraceHit;
 	}
 
-	if (bHandleShowDownGameplayInput && !bChatOpen)
+	FHitResult TraceHit;
+	bool bHasHit = false;
+	if (bShowMouseCursor)
 	{
-		return bUseCenterScreenTraceWhenCursorHidden && TraceFromScreenCenter(OutHit);
+		bHasHit = TraceUnderCursor(TraceHit);
 	}
 
-	if (TraceUnderCursor(OutHit))
+	if (!bHasHit && bHandleShowDownGameplayInput && !bChatOpen)
 	{
-		return true;
+		bHasHit = bUseCenterScreenTraceWhenCursorHidden && TraceFromScreenCenter(TraceHit);
+	}
+	else if (!bHasHit)
+	{
+		if (!bShowMouseCursor)
+		{
+			bHasHit = TraceUnderCursor(TraceHit);
+		}
+		if (!bHasHit && bUseCenterScreenTraceWhenCursorHidden)
+		{
+			bHasHit = TraceFromScreenCenter(TraceHit);
+		}
 	}
 
-	return bUseCenterScreenTraceWhenCursorHidden && TraceFromScreenCenter(OutHit);
+	PrimaryInteractionTraceFrame = GFrameCounter;
+	bCachedPrimaryInteractionTraceHit = bHasHit;
+	CachedPrimaryInteractionTraceHit = bHasHit ? TraceHit : FHitResult();
+	OutHit = CachedPrimaryInteractionTraceHit;
+
+	return bHasHit;
 }
 
 bool AShowDownPlayerController::TraceUnderCursor(FHitResult& OutHit) const
@@ -1983,7 +2005,10 @@ void AShowDownPlayerController::SubmitCharacterHeadLookRotation(const FRotator& 
 	CharacterHeadLookReplicationElapsedTime += DeltaTime;
 	const float PitchDelta = FMath::Abs(FRotator::NormalizeAxis(LookRotation.Pitch - LastSubmittedCharacterHeadLookRotation.Pitch));
 	const float YawDelta = FMath::Abs(FRotator::NormalizeAxis(LookRotation.Yaw - LastSubmittedCharacterHeadLookRotation.Yaw));
-	if (CharacterHeadLookReplicationElapsedTime < 0.05f && PitchDelta < 0.5f && YawDelta < 0.5f)
+	const bool bReplicationIntervalElapsed = CharacterHeadLookReplicationElapsedTime >= CharacterHeadLookReplicationInterval;
+	const bool bRotationChanged = PitchDelta >= CharacterHeadLookReplicationAngleThreshold
+		|| YawDelta >= CharacterHeadLookReplicationAngleThreshold;
+	if (!bReplicationIntervalElapsed || !bRotationChanged)
 	{
 		return;
 	}
