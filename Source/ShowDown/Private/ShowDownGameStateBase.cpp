@@ -50,7 +50,7 @@ namespace
 
 void AShowDownGameStateBase::SetPhase(EShowDownPhase NewPhase)
 {
-	if (CurrentPhase == NewPhase)
+	if (!HasAuthority() || CurrentPhase == NewPhase)
 	{
 		return;
 	}
@@ -205,7 +205,7 @@ void AShowDownGameStateBase::SetNameTagPlayerLoadedBulletCount(
 
 void AShowDownGameStateBase::EventStart(EShowDownPhase Phase)
 {
-	if (Phase == EShowDownPhase::None)
+	if (!HasAuthority() || Phase == EShowDownPhase::None)
 	{
 		return;
 	}
@@ -232,7 +232,7 @@ void AShowDownGameStateBase::EventStart(EShowDownPhase Phase)
 
 void AShowDownGameStateBase::EventEnd(EShowDownPhase Phase)
 {
-	if (Phase == EShowDownPhase::None || !bPresentationPlaying)
+	if (!HasAuthority() || Phase == EShowDownPhase::None || !bPresentationPlaying)
 	{
 		return;
 	}

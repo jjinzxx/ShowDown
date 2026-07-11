@@ -384,6 +384,7 @@ private:
 	FTimerHandle RevealDelayHandle;
 	FTimerHandle MultiplayerRevealContinuationTimerHandle;
 	TArray<FTimerHandle> CardRevealPresentationTimerHandles;
+	TArray<FTimerHandle> MultiplayerRoundTimerHandles;
 	int32 BettingRaisesLeft = 6;
 	bool bHasLastRaiser = false;
 	EShowDownSide LastRaiser = EShowDownSide::Player;
@@ -575,6 +576,7 @@ private:
 	float PlayMultiplayerCardRevealPresentation(const TArray<ASDPlayerState*>& RevealedPlayers);
 	float PlayCardRevealPresentation(const TArray<ACard*>& Cards);
 	void ClearCardRevealPresentationTimers();
+	void ClearMultiplayerRoundTimers();
 	FTransform BuildCardRevealPresentationTransform(ACard* Card, int32 CardIndex, int32 CardCount) const;
 	void ApplyRouletteResult(EShowDownSide TargetSide, int32 BulletCount, TFunction<void()>&& Continuation);
 	void EndRound();

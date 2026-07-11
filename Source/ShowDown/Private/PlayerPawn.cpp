@@ -473,7 +473,7 @@ void APlayerPawn::SubmitDialogueInput(const FString& Text)
 		return;
 	}
 
-	ServerSubmitDialogueInput(TrimmedText, GetChatSenderName());
+	ServerSubmitDialogueInput(TrimmedText);
 }
 
 void APlayerPawn::RequestPlayerCheck()
@@ -547,13 +547,21 @@ AShowDownGameModeBase* APlayerPawn::ResolveGameMode()
 	return ModeBase;
 }
 
-void APlayerPawn::ServerSubmitDialogueInput_Implementation(const FString& Text, const FString& SenderName)
+void APlayerPawn::ServerSubmitDialogueInput_Implementation(const FString& Text)
 {
-	const FString TrimmedText = Text.TrimStartAndEnd();
+	const FString TrimmedText = Text.TrimStartAndEnd().Left(240);
 	if (!TrimmedText.IsEmpty())
 	{
 		if (AShowDownGameModeBase* GameMode = ResolveGameMode())
 		{
+			const APlayerState* CurrentPlayerState = GetPlayerState();
+			FString SenderName = CurrentPlayerState ? CurrentPlayerState->GetPlayerName() : TEXT("Player");
+			SenderName = SenderName.TrimStartAndEnd().Left(32);
+			if (SenderName.IsEmpty() || SenderName.StartsWith(TEXT("DESKTOP-")))
+			{
+				SenderName = TEXT("Player");
+			}
+
 			GameMode->SubmitPlayerDialogueInputFromPlayer(TrimmedText, SenderName);
 		}
 	}

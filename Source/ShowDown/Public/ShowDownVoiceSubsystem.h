@@ -176,6 +176,8 @@ private:
 	FString LastTranscribedText;
 	FString LastVoiceError;
 	FShowDownVoiceTextCallback PendingTranscriptionCallback;
+	TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> ActiveTranscriptionRequest;
+	TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> ActiveSpeechRequest;
 
 	UPROPERTY(Transient)
 	TObjectPtr<USoundWaveProcedural> ActiveSpeechWave;

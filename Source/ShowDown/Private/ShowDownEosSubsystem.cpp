@@ -183,9 +183,12 @@ IOnlineSessionPtr UShowDownEosSubsystem::GetSessionInterface() const
 void UShowDownEosSubsystem::ClearOnlineDelegateHandles()
 {
 	const IOnlineIdentityPtr IdentityInterface = GetIdentityInterface();
-	if (IdentityInterface.IsValid() && LoginCompleteDelegateHandle.IsValid())
+	if (LoginCompleteDelegateHandle.IsValid())
 	{
-		IdentityInterface->ClearOnLoginCompleteDelegate_Handle(LocalUserNum, LoginCompleteDelegateHandle);
+		if (IdentityInterface.IsValid())
+		{
+			IdentityInterface->ClearOnLoginCompleteDelegate_Handle(LocalUserNum, LoginCompleteDelegateHandle);
+		}
 		LoginCompleteDelegateHandle.Reset();
 	}
 
@@ -286,8 +289,8 @@ void UShowDownEosSubsystem::LoginWithSupabaseSession()
 
 	if (LoginCompleteDelegateHandle.IsValid())
 	{
-		IdentityInterface->ClearOnLoginCompleteDelegate_Handle(LocalUserNum, LoginCompleteDelegateHandle);
-		LoginCompleteDelegateHandle.Reset();
+		OnEosLoginResult.Broadcast(false, TEXT("Logging in to EOS..."));
+		return;
 	}
 
 	LoginCompleteDelegateHandle = IdentityInterface->AddOnLoginCompleteDelegate_Handle(
@@ -953,8 +956,8 @@ void UShowDownEosSubsystem::HandleLoginComplete(
 	if (const IOnlineIdentityPtr IdentityInterface = GetIdentityInterface(); IdentityInterface.IsValid())
 	{
 		IdentityInterface->ClearOnLoginCompleteDelegate_Handle(InLocalUserNum, LoginCompleteDelegateHandle);
-		LoginCompleteDelegateHandle.Reset();
 	}
+	LoginCompleteDelegateHandle.Reset();
 
 	if (!bWasSuccessful)
 	{
@@ -977,8 +980,8 @@ void UShowDownEosSubsystem::HandleCreateSessionComplete(FName SessionName, bool 
 	if (SessionInterface.IsValid())
 	{
 		SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteDelegateHandle);
-		CreateSessionCompleteDelegateHandle.Reset();
 	}
+	CreateSessionCompleteDelegateHandle.Reset();
 
 	if (!bWasSuccessful)
 	{
@@ -1004,7 +1007,14 @@ void UShowDownEosSubsystem::HandleCreateSessionComplete(FName SessionName, bool 
 	if (UWorld* World = GetWorld())
 	{
 		UGameplayStatics::OpenLevel(World, PendingHostMapName, true, TEXT("listen"));
+		return;
 	}
+
+	PendingSessionFlow = ESessionFlow::None;
+	bInMultiplayerLobby = false;
+	bLobbyHost = false;
+	LobbyCode.Empty();
+	OnSessionResult.Broadcast(false, TEXT("World is unavailable for lobby travel."));
 }
 
 void UShowDownEosSubsystem::HandleUpdateSessionComplete(FName SessionName, bool bWasSuccessful)
@@ -1013,8 +1023,8 @@ void UShowDownEosSubsystem::HandleUpdateSessionComplete(FName SessionName, bool 
 	if (SessionInterface.IsValid())
 	{
 		SessionInterface->ClearOnUpdateSessionCompleteDelegate_Handle(UpdateSessionCompleteDelegateHandle);
-		UpdateSessionCompleteDelegateHandle.Reset();
 	}
+	UpdateSessionCompleteDelegateHandle.Reset();
 
 	if (!bWasSuccessful)
 	{
@@ -1030,8 +1040,8 @@ void UShowDownEosSubsystem::HandleFindSessionsComplete(bool bWasSuccessful)
 	if (SessionInterface.IsValid())
 	{
 		SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegateHandle);
-		FindSessionsCompleteDelegateHandle.Reset();
 	}
+	FindSessionsCompleteDelegateHandle.Reset();
 
 	const bool bPollingLobbyStart = PendingSessionFlow == ESessionFlow::PollLobbyStart;
 	if (bPollingLobbyStart)
@@ -1266,8 +1276,8 @@ void UShowDownEosSubsystem::HandleJoinSessionComplete(
 	if (SessionInterface.IsValid())
 	{
 		SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(JoinSessionCompleteDelegateHandle);
-		JoinSessionCompleteDelegateHandle.Reset();
 	}
+	JoinSessionCompleteDelegateHandle.Reset();
 
 	if (Result != EOnJoinSessionCompleteResult::Success || !SessionInterface.IsValid())
 	{
@@ -1370,8 +1380,8 @@ void UShowDownEosSubsystem::HandleDestroySessionComplete(FName SessionName, bool
 	if (SessionInterface.IsValid())
 	{
 		SessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(DestroySessionCompleteDelegateHandle);
-		DestroySessionCompleteDelegateHandle.Reset();
 	}
+	DestroySessionCompleteDelegateHandle.Reset();
 
 	if (PendingSessionFlow == ESessionFlow::LeaveLobby)
 	{

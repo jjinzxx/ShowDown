@@ -56,7 +56,7 @@ public:
 	UPROPERTY(ReplicatedUsing = OnRep_CardVisual, EditAnywhere, BlueprintReadWrite, Category = "Card", meta = (ClampMin = "1", ClampMax = "7"))
 	int32 Rank = 1;
 
-	UPROPERTY(Replicated, EditAnywhere, BlueprintReadWrite, Category = "Card")
+	UPROPERTY(ReplicatedUsing = OnRep_Selectable, EditAnywhere, BlueprintReadWrite, Category = "Card")
 	bool bSelectable = true;
 
 	UPROPERTY(ReplicatedUsing = OnRep_CardVisual, EditAnywhere, BlueprintReadWrite, Category = "Card")
@@ -177,6 +177,9 @@ protected:
 
 	UFUNCTION()
 	void OnRep_CardVisual();
+
+	UFUNCTION()
+	void OnRep_Selectable();
 
 	UFUNCTION()
 	void OnRep_TargetVisualScaleMultiplier();

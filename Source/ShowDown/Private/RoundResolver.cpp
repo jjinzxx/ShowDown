@@ -22,5 +22,5 @@ EShowDownRoundResult URoundResolver::ResolveRevealedCards(int32 PlayerCard, int3
 
 int32 URoundResolver::GetFoldLoadCount(int32 FoldedForeheadCard, int32 CurrentBet, bool bSevenFoldLoadsSix) const
 {
-	return bSevenFoldLoadsSix && FoldedForeheadCard == 7 ? 6 : FMath::Clamp(CurrentBet, 1, 6);
+	return bSevenFoldLoadsSix && FoldedForeheadCard == 7 ? 6 : FMath::Clamp(CurrentBet, 0, 6);
 }

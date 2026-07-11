@@ -600,9 +600,11 @@ void AShowDownGameModeBase::Logout(AController* Exiting)
 
 void AShowDownGameModeBase::ResetForHubReturn()
 {
-	GetWorldTimerManager().ClearTimer(CardPlacementDelayHandle);
-	GetWorldTimerManager().ClearTimer(RevealDelayHandle);
-	GetWorldTimerManager().ClearTimer(CollectorActionPresentationTimerHandle);
+	// This GameMode stays alive while the hub UI replaces the table flow. Stop
+	// every callback bound to it so a delayed reveal, roulette, or AI retry from
+	// the previous game cannot mutate the freshly reset board.
+	GetWorldTimerManager().ClearAllTimersForObject(this);
+	ClearMultiplayerRoundTimers();
 	ClearCardRevealPresentationTimers();
 	ClearBetBulletPresentation();
 	if (ActiveSelfShotGunActor)
@@ -610,6 +612,12 @@ void AShowDownGameModeBase::ResetForHubReturn()
 		ActiveSelfShotGunActor->OnGunPresentationFinished.RemoveDynamic(
 			this,
 			&AShowDownGameModeBase::HandleSelfShotGunPresentationFinished);
+		ActiveSelfShotGunActor->OnGunFired.RemoveDynamic(
+			this,
+			&AShowDownGameModeBase::HandleSelfShotGunShotResolved);
+		ActiveSelfShotGunActor->OnGunEmptyFired.RemoveDynamic(
+			this,
+			&AShowDownGameModeBase::HandleSelfShotGunShotResolved);
 	}
 
 	bBettingPhase = false;
@@ -620,6 +628,10 @@ void AShowDownGameModeBase::ResetForHubReturn()
 	bPlayerHasActedInBetting = false;
 	bCollectorHasActedInBetting = false;
 	bCollectorBetDecisionInProgress = false;
+	bBossChatReplyInFlight = false;
+	bHasPendingBossChatReply = false;
+	PendingBossChatReplyDialogue.Empty();
+	bPendingSelfShotRouletteResult = false;
 	CardPlacementDelayContinuation = TFunction<void()>();
 	CollectorActionPresentationContinuation = TFunction<void()>();
 	SelfShotGunPresentationContinuation = TFunction<void()>();
@@ -639,9 +651,12 @@ void AShowDownGameModeBase::PlayerSelectedCard(ACard* SelectedCard)
 
 void AShowDownGameModeBase::PlayerSelectedCardFromController(AController* SubmittingController, ACard* SelectedCard)
 {
-	if (GetNetMode() != NM_Standalone && bMultiplayerMatchStarted)
+	if (GetNetMode() != NM_Standalone)
 	{
-		HandleMultiplayerSelectedCard(GetPlayerStateForController(SubmittingController), SelectedCard);
+		if (bMultiplayerMatchStarted)
+		{
+			HandleMultiplayerSelectedCard(GetPlayerStateForController(SubmittingController), SelectedCard);
+		}
 		return;
 	}
 
@@ -2104,9 +2119,12 @@ void AShowDownGameModeBase::RequestPlayerBetActionFromController(
 	EShowDownBetAction Action,
 	int32 TargetBet)
 {
-	if (GetNetMode() != NM_Standalone && bMultiplayerMatchStarted)
+	if (GetNetMode() != NM_Standalone)
 	{
-		HandleMultiplayerBetAction(GetPlayerStateForController(SubmittingController), Action, TargetBet);
+		if (bMultiplayerMatchStarted)
+		{
+			HandleMultiplayerBetAction(GetPlayerStateForController(SubmittingController), Action, TargetBet);
+		}
 		return;
 	}
 
@@ -3715,6 +3733,15 @@ void AShowDownGameModeBase::ClearCardRevealPresentationTimers()
 	CardRevealPresentationTimerHandles.Reset();
 }
 
+void AShowDownGameModeBase::ClearMultiplayerRoundTimers()
+{
+	for (FTimerHandle& TimerHandle : MultiplayerRoundTimerHandles)
+	{
+		GetWorldTimerManager().ClearTimer(TimerHandle);
+	}
+	MultiplayerRoundTimerHandles.Reset();
+}
+
 FTransform AShowDownGameModeBase::BuildCardRevealPresentationTransform(
 	ACard* Card,
 	int32 CardIndex,
@@ -4206,6 +4233,8 @@ void AShowDownGameModeBase::TryStartMultiplayerMatch()
 
 void AShowDownGameModeBase::StartMultiplayerMatch(const TArray<ASDPlayerState*>& Players)
 {
+	ClearMultiplayerRoundTimers();
+	ClearCardRevealPresentationTimers();
 	ClearMultiplayerForeheadCards();
 	ClearMultiplayerHands();
 	ClearLooseMultiplayerCards();
@@ -5156,11 +5185,18 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 				MultiplayerLiveRoundCount,
 				FoldRevealDelay,
 				false);
-		const auto ContinueAfterRoulette = [this, SubmittingPlayer, CurrentBet, FindNextActivePlayer]()
+		const TWeakObjectPtr<ASDPlayerState> WeakSubmittingPlayer(SubmittingPlayer);
+		const auto ContinueAfterRoulette = [this, WeakSubmittingPlayer, CurrentBet, FindNextActivePlayer]()
 		{
-			MultiplayerNextFirstPlayer = SubmittingPlayer;
-			MultiplayerPlayersActed.Add(SubmittingPlayer);
-			MultiplayerCurrentBetter = FindNextActivePlayer(SubmittingPlayer);
+			ASDPlayerState* ResolvedSubmittingPlayer = WeakSubmittingPlayer.Get();
+			if (!ResolvedSubmittingPlayer || !MultiplayerPlayers.Contains(ResolvedSubmittingPlayer))
+			{
+				return;
+			}
+
+			MultiplayerNextFirstPlayer = ResolvedSubmittingPlayer;
+			MultiplayerPlayersActed.Add(ResolvedSubmittingPlayer);
+			MultiplayerCurrentBetter = FindNextActivePlayer(ResolvedSubmittingPlayer);
 			if (CountActiveMultiplayerPlayers() <= 1 || !MultiplayerCurrentBetter || AreAllActiveMultiplayerPlayersDoneBetting(CurrentBet))
 			{
 				FinishMultiplayerRoundByReveal();
@@ -5185,6 +5221,7 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 			ContinueDelegate.BindWeakLambda(this, ContinueAfterRoulette);
 			FTimerHandle ContinueTimerHandle;
 			GetWorldTimerManager().SetTimer(ContinueTimerHandle, ContinueDelegate, RouletteDelay + 0.05f, false);
+			MultiplayerRoundTimerHandles.Add(ContinueTimerHandle);
 		}
 		else
 		{
@@ -5250,10 +5287,37 @@ void AShowDownGameModeBase::FinishMultiplayerRoundByReveal()
 	const float RevealPresentationSeconds = PlayMultiplayerCardRevealPresentation(RevealedPlayers);
 	if (RevealPresentationSeconds > KINDA_SMALL_NUMBER)
 	{
-		FTimerDelegate ContinueDelegate;
-		ContinueDelegate.BindWeakLambda(this, [this, RevealedPlayers, Winners]()
+		TArray<TWeakObjectPtr<ASDPlayerState>> WeakRevealedPlayers;
+		TArray<TWeakObjectPtr<ASDPlayerState>> WeakWinners;
+		for (ASDPlayerState* RevealedPlayer : RevealedPlayers)
 		{
-			ContinueMultiplayerRoundAfterReveal(RevealedPlayers, Winners);
+			WeakRevealedPlayers.Add(RevealedPlayer);
+		}
+		for (ASDPlayerState* Winner : Winners)
+		{
+			WeakWinners.Add(Winner);
+		}
+
+		FTimerDelegate ContinueDelegate;
+		ContinueDelegate.BindWeakLambda(this, [this, WeakRevealedPlayers, WeakWinners]()
+		{
+			TArray<ASDPlayerState*> ValidRevealedPlayers;
+			TArray<ASDPlayerState*> ValidWinners;
+			for (const TWeakObjectPtr<ASDPlayerState>& WeakPlayer : WeakRevealedPlayers)
+			{
+				if (ASDPlayerState* Player = WeakPlayer.Get(); Player && MultiplayerPlayers.Contains(Player))
+				{
+					ValidRevealedPlayers.Add(Player);
+				}
+			}
+			for (const TWeakObjectPtr<ASDPlayerState>& WeakWinner : WeakWinners)
+			{
+				if (ASDPlayerState* Winner = WeakWinner.Get(); Winner && MultiplayerPlayers.Contains(Winner))
+				{
+					ValidWinners.Add(Winner);
+				}
+			}
+			ContinueMultiplayerRoundAfterReveal(MoveTemp(ValidRevealedPlayers), MoveTemp(ValidWinners));
 		});
 
 		GetWorldTimerManager().SetTimer(
@@ -5273,7 +5337,7 @@ void AShowDownGameModeBase::ContinueMultiplayerRoundAfterReveal(
 {
 	RevealedPlayers.RemoveAll([](const ASDPlayerState* Player)
 	{
-		return !Player || Player->Lives <= 0 || !Player->ForeheadCard;
+		return !IsValid(Player) || Player->Lives <= 0 || !Player->ForeheadCard;
 	});
 	Winners.RemoveAll([&RevealedPlayers](const ASDPlayerState* Player)
 	{
@@ -5377,6 +5441,7 @@ void AShowDownGameModeBase::ContinueMultiplayerRoundAfterReveal(
 			});
 			FTimerHandle EndRoundTimerHandle;
 			GetWorldTimerManager().SetTimer(EndRoundTimerHandle, EndRoundDelegate, MaxRouletteDelay + 0.05f, false);
+			MultiplayerRoundTimerHandles.Add(EndRoundTimerHandle);
 			return;
 		}
 	}
@@ -5451,7 +5516,7 @@ void AShowDownGameModeBase::FinishMultiplayerRoundByFold(ASDPlayerState* FoldedP
 
 void AShowDownGameModeBase::ContinueMultiplayerRoundAfterFoldReveal(ASDPlayerState* FoldedPlayer, int32 LoadCount)
 {
-	if (!FoldedPlayer)
+	if (!IsValid(FoldedPlayer) || !MultiplayerPlayers.Contains(FoldedPlayer))
 	{
 		EndMultiplayerRound();
 		return;
@@ -5467,6 +5532,7 @@ void AShowDownGameModeBase::ContinueMultiplayerRoundAfterFoldReveal(ASDPlayerSta
 		});
 		FTimerHandle EndRoundTimerHandle;
 		GetWorldTimerManager().SetTimer(EndRoundTimerHandle, EndRoundDelegate, RouletteDelay + 0.05f, false);
+		MultiplayerRoundTimerHandles.Add(EndRoundTimerHandle);
 		return;
 	}
 
@@ -5574,7 +5640,7 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 	auto BroadcastResult = [this, WeakTargetPlayer, TargetSlot, TargetName, ClampedBulletCount, bHit, LiveRoundsAfterShot, ChambersAfterShot]()
 	{
 		ASDPlayerState* ResolvedTargetPlayer = WeakTargetPlayer.Get();
-		if (!ResolvedTargetPlayer)
+		if (!ResolvedTargetPlayer || !MultiplayerPlayers.Contains(ResolvedTargetPlayer))
 		{
 			return;
 		}
@@ -5679,6 +5745,7 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 		ResultDelegate.BindWeakLambda(this, BroadcastResult);
 		FTimerHandle ResultTimerHandle;
 		GetWorldTimerManager().SetTimer(ResultTimerHandle, ResultDelegate, ResultDelay, false);
+		MultiplayerRoundTimerHandles.Add(ResultTimerHandle);
 	};
 
 	if (SafeStartDelay <= KINDA_SMALL_NUMBER)
@@ -5691,6 +5758,7 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 		StartDelegate.BindWeakLambda(this, StartPresentation);
 		FTimerHandle StartTimerHandle;
 		GetWorldTimerManager().SetTimer(StartTimerHandle, StartDelegate, SafeStartDelay, false);
+		MultiplayerRoundTimerHandles.Add(StartTimerHandle);
 	}
 
 	return SafeStartDelay + FinishDelay;
@@ -5698,6 +5766,7 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 
 void AShowDownGameModeBase::EndMultiplayerRound()
 {
+	ClearMultiplayerRoundTimers();
 	ClearCardRevealPresentationTimers();
 	SetMultiplayerSelectableHand(nullptr);
 	ClearBetBulletPresentation();
@@ -6302,12 +6371,15 @@ ASDCardPlacementAnchor* AShowDownGameModeBase::GetCardPlacementAnchorByRole(ESDC
 		{
 			return CachedAnchor->Get();
 		}
+	}
 
-		RefreshCardPlacementAnchorCache();
-		if (const TWeakObjectPtr<ASDCardPlacementAnchor>* RefreshedAnchor = CachedCardPlacementAnchors.Find(TargetRole))
-		{
-			return RefreshedAnchor->Get();
-		}
+	// Anchors can appear after the first lookup (for example after a streamed
+	// level becomes visible). A cache miss must therefore be refreshed too, not
+	// just an entry whose weak pointer expired.
+	RefreshCardPlacementAnchorCache();
+	if (const TWeakObjectPtr<ASDCardPlacementAnchor>* RefreshedAnchor = CachedCardPlacementAnchors.Find(TargetRole))
+	{
+		return RefreshedAnchor->Get();
 	}
 
 	return nullptr;
@@ -6408,12 +6480,14 @@ ASDPlayerSeat* AShowDownGameModeBase::GetSeatForSide(EShowDownSide Side) const
 		{
 			return CachedSeat->Get();
 		}
+	}
 
-		RefreshPlayerSeatCache();
-		if (const TWeakObjectPtr<ASDPlayerSeat>* RefreshedSeat = CachedPlayerSeats.Find(Side))
-		{
-			return RefreshedSeat->Get();
-		}
+	// Seats may be provided by a streamed level, so recover from both an
+	// expired weak pointer and a role that was absent during the first scan.
+	RefreshPlayerSeatCache();
+	if (const TWeakObjectPtr<ASDPlayerSeat>* RefreshedSeat = CachedPlayerSeats.Find(Side))
+	{
+		return RefreshedSeat->Get();
 	}
 
 	// Old maps may have a single SDPlayerSeat without an explicit side set yet.

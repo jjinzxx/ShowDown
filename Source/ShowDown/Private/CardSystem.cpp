@@ -95,7 +95,15 @@ bool UCardSystem::SpawnHandCards(
 		ACard* NewCard = World->SpawnActor<ACard>(CardClass, SpawnTransform);
 		if (!NewCard)
 		{
-			continue;
+			for (ACard* SpawnedCard : OutCards)
+			{
+				if (IsValid(SpawnedCard))
+				{
+					SpawnedCard->Destroy();
+				}
+			}
+			OutCards.Reset();
+			return false;
 		}
 
 		NewCard->SetCard(Rank);
@@ -105,7 +113,7 @@ bool UCardSystem::SpawnHandCards(
 		OutCards.Add(NewCard);
 	}
 
-	return OutCards.Num() == CardsToDeal;
+	return true;
 }
 
 bool UCardSystem::LayoutHandCards(

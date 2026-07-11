@@ -4,6 +4,7 @@
 #include "Components/Button.h"
 #include "Components/EditableTextBox.h"
 #include "Components/TextBlock.h"
+#include "Engine/GameInstance.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "GameFramework/PlayerController.h"
@@ -25,53 +26,56 @@ void UShowDownMainMenuWidget::NativeConstruct()
 	
 	// SupabaseSubsystem의 닉네임 변경 완료 이벤트를 MainMenu UI 함수에 연결합니다.
 	// Change 버튼을 눌러 닉네임 변경이 끝나면 HandleNicknameUpdated가 호출됩니다.
-	if (USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()->GetSubsystem<USupabaseSubsystem>())
+	if (UGameInstance* GameInstance = GetGameInstance())
 	{
-		SupabaseSubsystem->OnPlayerDataLoaded.AddDynamic(
-			this,
-			&UShowDownMainMenuWidget::HandlePlayerDataLoaded
-		);
+		if (USupabaseSubsystem* SupabaseSubsystem = GameInstance->GetSubsystem<USupabaseSubsystem>())
+		{
+			SupabaseSubsystem->OnPlayerDataLoaded.AddUniqueDynamic(
+				this,
+				&UShowDownMainMenuWidget::HandlePlayerDataLoaded
+			);
 
-		SupabaseSubsystem->OnCosmeticDataLoaded.AddDynamic(
-			this,
-			&UShowDownMainMenuWidget::HandleCosmeticDataLoaded
-		);
+			SupabaseSubsystem->OnCosmeticDataLoaded.AddUniqueDynamic(
+				this,
+				&UShowDownMainMenuWidget::HandleCosmeticDataLoaded
+			);
 
-		SupabaseSubsystem->OnNicknameUpdated.AddDynamic(
-			this,
-			&UShowDownMainMenuWidget::HandleNicknameUpdated
-		);
+			SupabaseSubsystem->OnNicknameUpdated.AddUniqueDynamic(
+				this,
+				&UShowDownMainMenuWidget::HandleNicknameUpdated
+			);
+		}
 	}
 
 	// 버튼들이 WBP와 정상 연결되어 있으면 각각의 클릭 이벤트를 C++ 함수에 연결합니다.
 	if (Button_ChangeNickname)
 	{
-		Button_ChangeNickname->OnClicked.AddDynamic(this, &UShowDownMainMenuWidget::HandleChangeNicknameClicked);
+		Button_ChangeNickname->OnClicked.AddUniqueDynamic(this, &UShowDownMainMenuWidget::HandleChangeNicknameClicked);
 	}
 
 	if (Button_SinglePlay)
 	{
-		Button_SinglePlay->OnClicked.AddDynamic(this, &UShowDownMainMenuWidget::HandleSinglePlayClicked);
+		Button_SinglePlay->OnClicked.AddUniqueDynamic(this, &UShowDownMainMenuWidget::HandleSinglePlayClicked);
 	}
 
 	if (Button_Multiplayer)
 	{
-		Button_Multiplayer->OnClicked.AddDynamic(this, &UShowDownMainMenuWidget::HandleMultiplayerClicked);
+		Button_Multiplayer->OnClicked.AddUniqueDynamic(this, &UShowDownMainMenuWidget::HandleMultiplayerClicked);
 	}
 
 	if (Button_Shop)
 	{
-		Button_Shop->OnClicked.AddDynamic(this, &UShowDownMainMenuWidget::HandleShopClicked);
+		Button_Shop->OnClicked.AddUniqueDynamic(this, &UShowDownMainMenuWidget::HandleShopClicked);
 	}
 
 	if (Button_Ranking)
 	{
-		Button_Ranking->OnClicked.AddDynamic(this, &UShowDownMainMenuWidget::HandleRankingClicked);
+		Button_Ranking->OnClicked.AddUniqueDynamic(this, &UShowDownMainMenuWidget::HandleRankingClicked);
 	}
 
 	if (Button_Quit)
 	{
-		Button_Quit->OnClicked.AddDynamic(this, &UShowDownMainMenuWidget::HandleQuitClicked);
+		Button_Quit->OnClicked.AddUniqueDynamic(this, &UShowDownMainMenuWidget::HandleQuitClicked);
 	}
 
 	// 위젯이 처음 뜰 때 로그인 후 불러온 플레이어 정보를 표시합니다.
@@ -81,24 +85,52 @@ void UShowDownMainMenuWidget::NativeConstruct()
 
 void UShowDownMainMenuWidget::NativeDestruct()
 {
+	if (Button_ChangeNickname)
+	{
+		Button_ChangeNickname->OnClicked.RemoveDynamic(this, &UShowDownMainMenuWidget::HandleChangeNicknameClicked);
+	}
+	if (Button_SinglePlay)
+	{
+		Button_SinglePlay->OnClicked.RemoveDynamic(this, &UShowDownMainMenuWidget::HandleSinglePlayClicked);
+	}
+	if (Button_Multiplayer)
+	{
+		Button_Multiplayer->OnClicked.RemoveDynamic(this, &UShowDownMainMenuWidget::HandleMultiplayerClicked);
+	}
+	if (Button_Shop)
+	{
+		Button_Shop->OnClicked.RemoveDynamic(this, &UShowDownMainMenuWidget::HandleShopClicked);
+	}
+	if (Button_Ranking)
+	{
+		Button_Ranking->OnClicked.RemoveDynamic(this, &UShowDownMainMenuWidget::HandleRankingClicked);
+	}
+	if (Button_Quit)
+	{
+		Button_Quit->OnClicked.RemoveDynamic(this, &UShowDownMainMenuWidget::HandleQuitClicked);
+	}
+
 	// 위젯이 사라질 때 닉네임 변경 이벤트 연결을 해제합니다.
 	// 같은 위젯이 다시 생성될 때 이벤트가 중복으로 연결되는 것을 막습니다.
-	if (USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()->GetSubsystem<USupabaseSubsystem>())
+	if (UGameInstance* GameInstance = GetGameInstance())
 	{
-		SupabaseSubsystem->OnPlayerDataLoaded.RemoveDynamic(
-			this,
-			&UShowDownMainMenuWidget::HandlePlayerDataLoaded
-		);
+		if (USupabaseSubsystem* SupabaseSubsystem = GameInstance->GetSubsystem<USupabaseSubsystem>())
+		{
+			SupabaseSubsystem->OnPlayerDataLoaded.RemoveDynamic(
+				this,
+				&UShowDownMainMenuWidget::HandlePlayerDataLoaded
+			);
 
-		SupabaseSubsystem->OnCosmeticDataLoaded.RemoveDynamic(
-			this,
-			&UShowDownMainMenuWidget::HandleCosmeticDataLoaded
-		);
+			SupabaseSubsystem->OnCosmeticDataLoaded.RemoveDynamic(
+				this,
+				&UShowDownMainMenuWidget::HandleCosmeticDataLoaded
+			);
 
-		SupabaseSubsystem->OnNicknameUpdated.RemoveDynamic(
-			this,
-			&UShowDownMainMenuWidget::HandleNicknameUpdated
-		);
+			SupabaseSubsystem->OnNicknameUpdated.RemoveDynamic(
+				this,
+				&UShowDownMainMenuWidget::HandleNicknameUpdated
+			);
+		}
 	}
 
 	Super::NativeDestruct();
@@ -171,7 +203,10 @@ void UShowDownMainMenuWidget::HandleChangeNicknameClicked()
 
 	// SupabaseSubsystem에 닉네임 변경 요청을 맡깁니다.
 	// 실제 HTTP PATCH 요청은 SupabaseSubsystem에서 처리합니다.
-	if (USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()->GetSubsystem<USupabaseSubsystem>())
+	USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
+		: nullptr;
+	if (SupabaseSubsystem)
 	{
 		SupabaseSubsystem->UpdateNickname(NewNickname);
 	}
@@ -281,7 +316,10 @@ void UShowDownMainMenuWidget::HandleShopClicked()
 
 	UE_LOG(LogTemp, Log, TEXT("Shop clicked"));
 
-	if (USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()->GetSubsystem<USupabaseSubsystem>())
+	USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
+		: nullptr;
+	if (SupabaseSubsystem)
 	{
 		SupabaseSubsystem->LoadCosmeticData();
 

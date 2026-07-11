@@ -96,7 +96,10 @@ void ASDBetActionPanelActor::Tick(float DeltaSeconds)
 	}
 
 	const EShowDownPlayerSlot CurrentLocalPlayerSlot = ResolveLocalPlayerSlot();
-	const bool bShouldBeVisible = PanelState.TurnSlot != EShowDownPlayerSlot::None;
+	const bool bShouldBeVisible =
+		PanelState.bVisible
+		&& PanelState.TurnSlot != EShowDownPlayerSlot::None
+		&& CurrentLocalPlayerSlot == PanelState.TurnSlot;
 
 	if (CurrentLocalPlayerSlot != LastResolvedLocalPlayerSlot || bShouldBeVisible == IsHidden())
 	{
@@ -211,7 +214,7 @@ void ASDBetActionPanelActor::RefreshVisuals()
 	RefreshSelectedRaiseTarget();
 
 	LastResolvedLocalPlayerSlot = ResolveLocalPlayerSlot();
-	const bool bPanelVisible = PanelState.bVisible && PanelState.TurnSlot != EShowDownPlayerSlot::None;
+	const bool bPanelVisible = IsPanelVisibleForLocalPlayer();
 	SetActorHiddenInGame(!bPanelVisible);
 	SetActorTickEnabled(PanelState.bVisible);
 	RefreshBulletPreview(bPanelVisible);
@@ -350,7 +353,9 @@ EShowDownPlayerSlot ASDBetActionPanelActor::ResolveLocalPlayerSlot() const
 
 bool ASDBetActionPanelActor::IsPanelVisibleForLocalPlayer() const
 {
-	return PanelState.bVisible && PanelState.TurnSlot != EShowDownPlayerSlot::None;
+	return PanelState.bVisible
+		&& PanelState.TurnSlot != EShowDownPlayerSlot::None
+		&& ResolveLocalPlayerSlot() == PanelState.TurnSlot;
 }
 
 bool ASDBetActionPanelActor::CanPressButton(ESDBetActionPanelButtonKind ButtonKind) const

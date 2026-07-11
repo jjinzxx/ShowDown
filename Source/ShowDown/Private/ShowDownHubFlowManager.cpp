@@ -75,7 +75,8 @@ void AShowDownHubFlowManager::BeginPlay()
 	{
 		if (AShowDownGameStateBase* ShowDownGameState = World->GetGameState<AShowDownGameStateBase>())
 		{
-			ShowDownGameState->OnGameOver.AddDynamic(this, &AShowDownHubFlowManager::HandleGameOver);
+			BoundGameState = ShowDownGameState;
+			ShowDownGameState->OnGameOver.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleGameOver);
 		}
 	}
 
@@ -100,6 +101,42 @@ void AShowDownHubFlowManager::BeginPlay()
 	}
 }
 
+void AShowDownHubFlowManager::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(ReturnToHubTimerHandle);
+	}
+
+	if (AShowDownGameStateBase* ShowDownGameState = BoundGameState.Get())
+	{
+		ShowDownGameState->OnGameOver.RemoveDynamic(this, &AShowDownHubFlowManager::HandleGameOver);
+	}
+	BoundGameState.Reset();
+
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
+		{
+			EosSubsystem->OnEosLoginResult.RemoveDynamic(this, &AShowDownHubFlowManager::HandleEosLoginForMultiplayer);
+			EosSubsystem->OnSessionResult.RemoveDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
+			EosSubsystem->OnPublicRoomsUpdated.RemoveDynamic(this, &AShowDownHubFlowManager::HandlePublicRoomsUpdated);
+			EosSubsystem->StopLobbyStartPolling();
+		}
+	}
+
+	bPendingMultiplayerOpenAfterEosLogin = false;
+	SetActiveWidget(nullptr);
+	LoginWidget = nullptr;
+	MainMenuWidget = nullptr;
+	ShopWidget = nullptr;
+	RankWidget = nullptr;
+	MultiplayerWidget = nullptr;
+	LobbyWidget = nullptr;
+
+	Super::EndPlay(EndPlayReason);
+}
+
 void AShowDownHubFlowManager::ShowLogin()
 {
 	PlayCamera(LoginCamera);
@@ -122,7 +159,7 @@ void AShowDownHubFlowManager::ShowLogin()
 	}
 
 	LoginWidget->SetUseLegacyNavigation(false);
-	LoginWidget->OnLoginSucceeded.AddDynamic(this, &AShowDownHubFlowManager::HandleLoginSucceeded);
+	LoginWidget->OnLoginSucceeded.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleLoginSucceeded);
 
 	SetActiveWidget(LoginWidget);
 	SetUiOnlyInput(LoginWidget);
@@ -151,11 +188,11 @@ void AShowDownHubFlowManager::ShowMainMenu()
 	}
 
 	MainMenuWidget->SetUseLegacyNavigation(false);
-	MainMenuWidget->OnSinglePlayRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleSinglePlayRequested);
-	MainMenuWidget->OnMultiplayerRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleMultiplayerRequested);
-	MainMenuWidget->OnShopRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleShopRequested);
-	MainMenuWidget->OnRankingRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleRankingRequested);
-	MainMenuWidget->OnQuitRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleQuitRequested);
+	MainMenuWidget->OnSinglePlayRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleSinglePlayRequested);
+	MainMenuWidget->OnMultiplayerRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleMultiplayerRequested);
+	MainMenuWidget->OnShopRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleShopRequested);
+	MainMenuWidget->OnRankingRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleRankingRequested);
+	MainMenuWidget->OnQuitRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleQuitRequested);
 
 	SetActiveWidget(MainMenuWidget);
 	SetUiOnlyInput(MainMenuWidget);
@@ -193,7 +230,7 @@ void AShowDownHubFlowManager::ShowShop()
 	}
 
 	ShopWidget->SetUseLegacyBackNavigation(false);
-	ShopWidget->OnBackRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleShopBackRequested);
+	ShopWidget->OnBackRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleShopBackRequested);
 
 	SetActiveWidget(ShopWidget);
 	SetUiOnlyInput(ShopWidget);
@@ -227,7 +264,7 @@ void AShowDownHubFlowManager::ShowRanking()
 	}
 
 	// 랭킹 화면의 "뒤로" 버튼을 메인메뉴 복귀에 연결합니다.
-	RankWidget->OnBackRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleRankBackRequested);
+	RankWidget->OnBackRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleRankBackRequested);
 
 	SetActiveWidget(RankWidget);
 	SetUiOnlyInput(RankWidget);
@@ -256,12 +293,12 @@ void AShowDownHubFlowManager::ShowMultiplayerMenu()
 		return;
 	}
 
-	MultiplayerWidget->OnHostRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleHostMultiplayerRequested);
-	MultiplayerWidget->OnPrivateHostRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleHostPrivateMultiplayerRequested);
-	MultiplayerWidget->OnJoinRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleJoinMultiplayerRequested);
-	MultiplayerWidget->OnRefreshRoomsRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleRefreshPublicRoomsRequested);
-	MultiplayerWidget->OnJoinPublicRoomRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleJoinPublicRoomRequested);
-	MultiplayerWidget->OnBackRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleMultiplayerBackRequested);
+	MultiplayerWidget->OnHostRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleHostMultiplayerRequested);
+	MultiplayerWidget->OnPrivateHostRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleHostPrivateMultiplayerRequested);
+	MultiplayerWidget->OnJoinRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleJoinMultiplayerRequested);
+	MultiplayerWidget->OnRefreshRoomsRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleRefreshPublicRoomsRequested);
+	MultiplayerWidget->OnJoinPublicRoomRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleJoinPublicRoomRequested);
+	MultiplayerWidget->OnBackRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleMultiplayerBackRequested);
 
 	SetActiveWidget(MultiplayerWidget);
 	SetUiOnlyInput(MultiplayerWidget);
@@ -310,8 +347,8 @@ void AShowDownHubFlowManager::ShowLobby()
 		}
 	}
 
-	LobbyWidget->OnStartRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleLobbyStartRequested);
-	LobbyWidget->OnLeaveRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleLobbyLeaveRequested);
+	LobbyWidget->OnStartRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleLobbyStartRequested);
+	LobbyWidget->OnLeaveRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleLobbyLeaveRequested);
 
 	SetActiveWidget(LobbyWidget);
 	SetUiOnlyInput(LobbyWidget);

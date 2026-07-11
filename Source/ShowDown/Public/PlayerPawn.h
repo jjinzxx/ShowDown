@@ -178,7 +178,7 @@ public:
 	void RequestPlayerFold();
 
 	UFUNCTION(Server, Reliable)
-	void ServerSubmitDialogueInput(const FString& Text, const FString& SenderName);
+	void ServerSubmitDialogueInput(const FString& Text);
 
 	UFUNCTION(Server, Reliable)
 	void ServerSubmitSelectedCard(ACard* SelectedCard);

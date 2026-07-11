@@ -31,12 +31,12 @@ void UShowDownLobbyWidget::NativeConstruct()
 
 	if (Button_Start)
 	{
-		Button_Start->OnClicked.AddDynamic(this, &UShowDownLobbyWidget::HandleStartClicked);
+		Button_Start->OnClicked.AddUniqueDynamic(this, &UShowDownLobbyWidget::HandleStartClicked);
 	}
 
 	if (Button_Leave)
 	{
-		Button_Leave->OnClicked.AddDynamic(this, &UShowDownLobbyWidget::HandleLeaveClicked);
+		Button_Leave->OnClicked.AddUniqueDynamic(this, &UShowDownLobbyWidget::HandleLeaveClicked);
 	}
 
 	RefreshLobbyText();

@@ -15,8 +15,8 @@ void UShowDownRankWidget::NativeConstruct()
 	{
 		if (USupabaseSubsystem* SupabaseSubsystem = GameInstance->GetSubsystem<USupabaseSubsystem>())
 		{
-			SupabaseSubsystem->OnPlayerDataLoaded.AddDynamic(this, &UShowDownRankWidget::HandlePlayerDataLoaded);
-			SupabaseSubsystem->OnLeaderboardLoaded.AddDynamic(this, &UShowDownRankWidget::HandleLeaderboardLoaded);
+			SupabaseSubsystem->OnPlayerDataLoaded.AddUniqueDynamic(this, &UShowDownRankWidget::HandlePlayerDataLoaded);
+			SupabaseSubsystem->OnLeaderboardLoaded.AddUniqueDynamic(this, &UShowDownRankWidget::HandleLeaderboardLoaded);
 
 			// 화면이 뜰 때 전체 리더보드를 서버에서 불러옵니다.
 			bLeaderboardRequestInFlight = true;
@@ -28,7 +28,7 @@ void UShowDownRankWidget::NativeConstruct()
 	// "뒤로" 버튼이 있으면 클릭 시 메인메뉴 복귀 요청을 보냅니다.
 	if (Button_Back)
 	{
-		Button_Back->OnClicked.AddDynamic(this, &UShowDownRankWidget::HandleBackClicked);
+		Button_Back->OnClicked.AddUniqueDynamic(this, &UShowDownRankWidget::HandleBackClicked);
 	}
 
 	// 위젯이 뜰 때 현재 캐시된 내 점수를 즉시 표시합니다(리더보드는 응답 오면 채워짐).
@@ -41,6 +41,11 @@ void UShowDownRankWidget::NativeConstruct()
 
 void UShowDownRankWidget::NativeDestruct()
 {
+	if (Button_Back)
+	{
+		Button_Back->OnClicked.RemoveDynamic(this, &UShowDownRankWidget::HandleBackClicked);
+	}
+
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
 		if (USupabaseSubsystem* SupabaseSubsystem = GameInstance->GetSubsystem<USupabaseSubsystem>())
@@ -127,8 +132,6 @@ void UShowDownRankWidget::PopulateLeaderboard()
 	{
 		return;
 	}
-
-	const FString MyNickname = SupabaseSubsystem->GetNickname();
 
 	// "순위. 닉네임   점수" 한 줄씩 코드로 만들어 박스에 추가합니다.
 	for (const FShowDownRankEntry& Entry : SupabaseSubsystem->GetLeaderboard())

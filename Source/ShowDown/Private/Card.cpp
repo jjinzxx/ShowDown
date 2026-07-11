@@ -247,6 +247,19 @@ void ACard::OnRep_CardVisual()
 	RefreshVisual();
 }
 
+void ACard::OnRep_Selectable()
+{
+	if (bSelectable)
+	{
+		return;
+	}
+
+	bSelected = false;
+	bHovered = false;
+	UpdateTargetTransform();
+	EnableMotionTick();
+}
+
 void ACard::OnRep_TargetVisualScaleMultiplier()
 {
 	StartVisualScaleMotion(TargetVisualScaleMultiplier);
@@ -295,7 +308,7 @@ void ACard::RefreshVisual()
 
 void ACard::SelectCard(bool bNewSelected)
 {
-	bSelected = bNewSelected;
+	bSelected = bNewSelected && bSelectable;
 	UpdateTargetTransform();
 	EnableMotionTick();
 }

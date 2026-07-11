@@ -62,6 +62,8 @@ private:
 	UPROPERTY()
 	AShowDownPlayerController* OwningShowDownController = nullptr;
 
+	TWeakObjectPtr<class AShowDownGameStateBase> BoundGameState;
+
 	UPROPERTY(meta = (BindWidgetOptional))
 	UEditableTextBox* EditableTextBox_ChatInput = nullptr;
 

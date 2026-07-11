@@ -1269,7 +1269,7 @@ void AShowDownPlayerController::SubmitDialogueInput(const FString& Text)
 		return;
 	}
 
-	ServerSubmitDialogueInput(TrimmedText, GetChatSenderName());
+	ServerSubmitDialogueInput(TrimmedText);
 }
 
 void AShowDownPlayerController::SDVoiceSubmitText(const FString& Text)
@@ -2567,14 +2567,20 @@ void AShowDownPlayerController::ServerSubmitSelectedCard_Implementation(ACard* S
 	}
 }
 
-void AShowDownPlayerController::ServerSubmitDialogueInput_Implementation(const FString& Text, const FString& SenderName)
+void AShowDownPlayerController::ServerSubmitDialogueInput_Implementation(const FString& Text)
 {
-	const FString TrimmedText = Text.TrimStartAndEnd();
+	const FString TrimmedText = Text.TrimStartAndEnd().Left(240);
 	if (!TrimmedText.IsEmpty())
 	{
 		if (AShowDownGameModeBase* GameMode = ResolveGameMode())
 		{
-			GameMode->SubmitPlayerDialogueInputFromPlayer(TrimmedText, SenderName);
+			FString SenderName = PlayerState ? PlayerState->GetPlayerName().TrimStartAndEnd() : FString();
+			if (SenderName.IsEmpty() || SenderName.StartsWith(TEXT("DESKTOP-")))
+			{
+				SenderName = TEXT("Player");
+			}
+
+			GameMode->SubmitPlayerDialogueInputFromPlayer(TrimmedText, SenderName.Left(32));
 		}
 	}
 }

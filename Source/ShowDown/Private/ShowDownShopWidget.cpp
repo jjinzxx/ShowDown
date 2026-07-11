@@ -8,6 +8,7 @@
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
+#include "Engine/GameInstance.h"
 #include "Input/Reply.h"
 #include "InputCoreTypes.h"
 #include "ShowDownMainMenuWidget.h"
@@ -39,27 +40,30 @@ void UShowDownShopWidget::NativeConstruct()
 	SetIsFocusable(true);
 	SetKeyboardFocus();
 
-	if (USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()->GetSubsystem<USupabaseSubsystem>())
+	if (UGameInstance* GameInstance = GetGameInstance())
 	{
-		SupabaseSubsystem->OnCosmeticDataLoaded.AddDynamic(
-			this,
-			&UShowDownShopWidget::HandleCosmeticDataLoaded
-		);
+		if (USupabaseSubsystem* SupabaseSubsystem = GameInstance->GetSubsystem<USupabaseSubsystem>())
+		{
+			SupabaseSubsystem->OnCosmeticDataLoaded.AddUniqueDynamic(
+				this,
+				&UShowDownShopWidget::HandleCosmeticDataLoaded
+			);
 
-		SupabaseSubsystem->OnSkinEquipped.AddDynamic(
-			this,
-			&UShowDownShopWidget::HandleSkinEquipped
-		);
+			SupabaseSubsystem->OnSkinEquipped.AddUniqueDynamic(
+				this,
+				&UShowDownShopWidget::HandleSkinEquipped
+			);
 
-		SupabaseSubsystem->OnSkinSetPurchased.AddDynamic(
-			this,
-			&UShowDownShopWidget::HandleSkinSetPurchased
-		);
+			SupabaseSubsystem->OnSkinSetPurchased.AddUniqueDynamic(
+				this,
+				&UShowDownShopWidget::HandleSkinSetPurchased
+			);
+		}
 	}
 
 	if (ComboBox_Skins)
 	{
-		ComboBox_Skins->OnSelectionChanged.AddDynamic(
+		ComboBox_Skins->OnSelectionChanged.AddUniqueDynamic(
 			this,
 			&UShowDownShopWidget::HandleSkinSelectionChanged
 		);
@@ -67,22 +71,22 @@ void UShowDownShopWidget::NativeConstruct()
 
 	if (Button_Equip)
 	{
-		Button_Equip->OnClicked.AddDynamic(this, &UShowDownShopWidget::HandleEquipClicked);
+		Button_Equip->OnClicked.AddUniqueDynamic(this, &UShowDownShopWidget::HandleEquipClicked);
 	}
 
 	if (Button_Buy)
 	{
-		Button_Buy->OnClicked.AddDynamic(this, &UShowDownShopWidget::HandleBuyClicked);
+		Button_Buy->OnClicked.AddUniqueDynamic(this, &UShowDownShopWidget::HandleBuyClicked);
 	}
 
 	if (Button_Refresh)
 	{
-		Button_Refresh->OnClicked.AddDynamic(this, &UShowDownShopWidget::HandleRefreshClicked);
+		Button_Refresh->OnClicked.AddUniqueDynamic(this, &UShowDownShopWidget::HandleRefreshClicked);
 	}
 
 	if (Button_Back)
 	{
-		Button_Back->OnClicked.AddDynamic(this, &UShowDownShopWidget::HandleBackClicked);
+		Button_Back->OnClicked.AddUniqueDynamic(this, &UShowDownShopWidget::HandleBackClicked);
 	}
 
 	RefreshSkinOptions();
@@ -90,23 +94,47 @@ void UShowDownShopWidget::NativeConstruct()
 
 void UShowDownShopWidget::NativeDestruct()
 {
-	// Shop을 열고 닫을 때 이벤트가 중복 연결되지 않도록 제거합니다.
-	if (USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()->GetSubsystem<USupabaseSubsystem>())
+	if (ComboBox_Skins)
 	{
-		SupabaseSubsystem->OnCosmeticDataLoaded.RemoveDynamic(
-			this,
-			&UShowDownShopWidget::HandleCosmeticDataLoaded
-		);
+		ComboBox_Skins->OnSelectionChanged.RemoveDynamic(this, &UShowDownShopWidget::HandleSkinSelectionChanged);
+	}
+	if (Button_Equip)
+	{
+		Button_Equip->OnClicked.RemoveDynamic(this, &UShowDownShopWidget::HandleEquipClicked);
+	}
+	if (Button_Buy)
+	{
+		Button_Buy->OnClicked.RemoveDynamic(this, &UShowDownShopWidget::HandleBuyClicked);
+	}
+	if (Button_Refresh)
+	{
+		Button_Refresh->OnClicked.RemoveDynamic(this, &UShowDownShopWidget::HandleRefreshClicked);
+	}
+	if (Button_Back)
+	{
+		Button_Back->OnClicked.RemoveDynamic(this, &UShowDownShopWidget::HandleBackClicked);
+	}
 
-		SupabaseSubsystem->OnSkinEquipped.RemoveDynamic(
-			this,
-			&UShowDownShopWidget::HandleSkinEquipped
-		);
+	// Shop을 열고 닫을 때 이벤트가 중복 연결되지 않도록 제거합니다.
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (USupabaseSubsystem* SupabaseSubsystem = GameInstance->GetSubsystem<USupabaseSubsystem>())
+		{
+			SupabaseSubsystem->OnCosmeticDataLoaded.RemoveDynamic(
+				this,
+				&UShowDownShopWidget::HandleCosmeticDataLoaded
+			);
 
-		SupabaseSubsystem->OnSkinSetPurchased.RemoveDynamic(
-			this,
-			&UShowDownShopWidget::HandleSkinSetPurchased
-		);
+			SupabaseSubsystem->OnSkinEquipped.RemoveDynamic(
+				this,
+				&UShowDownShopWidget::HandleSkinEquipped
+			);
+
+			SupabaseSubsystem->OnSkinSetPurchased.RemoveDynamic(
+				this,
+				&UShowDownShopWidget::HandleSkinSetPurchased
+			);
+		}
 	}
 
 	Super::NativeDestruct();
@@ -435,7 +463,10 @@ void UShowDownShopWidget::HandleEquipClicked()
 		return;
 	}
 
-	if (USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()->GetSubsystem<USupabaseSubsystem>())
+	USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
+		: nullptr;
+	if (SupabaseSubsystem)
 	{
 		if (!SupabaseSubsystem->IsSkinOwned(SelectedSkin->Id))
 		{
@@ -467,7 +498,10 @@ void UShowDownShopWidget::HandleBuyClicked()
 		return;
 	}
 
-	if (USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()->GetSubsystem<USupabaseSubsystem>())
+	USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
+		: nullptr;
+	if (SupabaseSubsystem)
 	{
 		if (SupabaseSubsystem->IsSkinOwned(SelectedSkin->Id))
 		{
@@ -485,7 +519,10 @@ void UShowDownShopWidget::HandleBuyClicked()
 
 void UShowDownShopWidget::HandleRefreshClicked()
 {
-	if (USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()->GetSubsystem<USupabaseSubsystem>())
+	USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
+		: nullptr;
+	if (SupabaseSubsystem)
 	{
 		SupabaseSubsystem->LoadCosmeticData();
 	}

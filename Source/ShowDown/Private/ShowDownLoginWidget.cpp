@@ -4,6 +4,7 @@
 #include "Components/Button.h"
 #include "Components/EditableTextBox.h"
 #include "Components/TextBlock.h"
+#include "Engine/GameInstance.h"
 #include "ShowDownMainMenuWidget.h"
 
 void UShowDownLoginWidget::SetUseLegacyNavigation(bool bInUseLegacyNavigation)
@@ -19,14 +20,17 @@ void UShowDownLoginWidget::NativeConstruct()
 	// 버튼 클릭 이벤트를 C++ 함수 HandleLoginClicked에 연결합니다.
 	if (Button_Login)
 	{
-		Button_Login->OnClicked.AddDynamic(this, &UShowDownLoginWidget::HandleLoginClicked);
+		Button_Login->OnClicked.AddUniqueDynamic(this, &UShowDownLoginWidget::HandleLoginClicked);
 	}
 
 	// GameInstance에 등록된 SupabaseSubsystem을 가져옵니다.
 	// 로그인 요청 결과를 UI가 받을 수 있도록 OnLoginResult 이벤트에 함수를 연결합니다.
-	if (USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()->GetSubsystem<USupabaseSubsystem>())
+	if (UGameInstance* GameInstance = GetGameInstance())
 	{
-		SupabaseSubsystem->OnLoginResult.AddDynamic(this, &UShowDownLoginWidget::HandleLoginResult);
+		if (USupabaseSubsystem* SupabaseSubsystem = GameInstance->GetSubsystem<USupabaseSubsystem>())
+		{
+			SupabaseSubsystem->OnLoginResult.AddUniqueDynamic(this, &UShowDownLoginWidget::HandleLoginResult);
+		}
 	}
 
 	// 위젯이 처음 뜰 때 기본 상태 메시지를 표시합니다.
@@ -39,11 +43,19 @@ void UShowDownLoginWidget::NativeConstruct()
 
 void UShowDownLoginWidget::NativeDestruct()
 {
+	if (Button_Login)
+	{
+		Button_Login->OnClicked.RemoveDynamic(this, &UShowDownLoginWidget::HandleLoginClicked);
+	}
+
 	// 위젯이 제거될 때 SupabaseSubsystem에 연결했던 이벤트를 해제합니다.
 	// 이걸 하지 않으면 위젯이 사라진 뒤에도 이벤트가 호출될 수 있습니다.
-	if (USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()->GetSubsystem<USupabaseSubsystem>())
+	if (UGameInstance* GameInstance = GetGameInstance())
 	{
-		SupabaseSubsystem->OnLoginResult.RemoveDynamic(this, &UShowDownLoginWidget::HandleLoginResult);
+		if (USupabaseSubsystem* SupabaseSubsystem = GameInstance->GetSubsystem<USupabaseSubsystem>())
+		{
+			SupabaseSubsystem->OnLoginResult.RemoveDynamic(this, &UShowDownLoginWidget::HandleLoginResult);
+		}
 	}
 
 	Super::NativeDestruct();
@@ -98,7 +110,10 @@ void UShowDownLoginWidget::HandleLoginClicked()
 
 	// SupabaseSubsystem을 가져와서 실제 로그인 요청을 보냅니다.
 	// HTTP 요청과 토큰 처리는 SupabaseSubsystem 쪽에서 담당합니다.
-	if (USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()->GetSubsystem<USupabaseSubsystem>())
+	USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
+		: nullptr;
+	if (SupabaseSubsystem)
 	{
 		SupabaseSubsystem->LoginWithId(LoginId, Password);
 	}

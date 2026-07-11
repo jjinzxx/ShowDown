@@ -89,6 +89,7 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
 	// Login WBP shown when the player has no active session.
@@ -166,6 +167,7 @@ private:
 	FString CurrentRewardMatchId;
 	bool bPendingMultiplayerOpenAfterEosLogin = false;
 	bool bCurrentMatchAllowsOnlineReward = false;
+	TWeakObjectPtr<AShowDownGameStateBase> BoundGameState;
 
 	UPROPERTY()
 	UShowDownLoginWidget* LoginWidget;

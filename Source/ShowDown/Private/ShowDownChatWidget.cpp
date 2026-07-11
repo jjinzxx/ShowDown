@@ -185,6 +185,7 @@ void UShowDownChatWidget::NativeConstruct()
 	BuildNativeChatLayout();
 
 	bChatHistoryUsesDynamicRows = ScrollBox_ChatHistory != nullptr;
+	RenderedChatLines.Reset();
 	if (bChatHistoryUsesDynamicRows)
 	{
 		ScrollBox_ChatHistory->ClearChildren();
@@ -196,7 +197,7 @@ void UShowDownChatWidget::NativeConstruct()
 
 	if (Button_Send)
 	{
-		Button_Send->OnClicked.AddDynamic(this, &UShowDownChatWidget::HandleSendClicked);
+		Button_Send->OnClicked.AddUniqueDynamic(this, &UShowDownChatWidget::HandleSendClicked);
 	}
 
 	if (EditableTextBox_ChatInput)
@@ -204,14 +205,15 @@ void UShowDownChatWidget::NativeConstruct()
 		EditableTextBox_ChatInput->SetHintText(FText::FromString(TEXT("메시지 입력...")));
 		EditableTextBox_ChatInput->SetForegroundColor(ChatMessageColor);
 		EditableTextBox_ChatInput->WidgetStyle.SetFont(MakePretendardFont(13.0f));
-		EditableTextBox_ChatInput->OnTextCommitted.AddDynamic(this, &UShowDownChatWidget::HandleInputCommitted);
+		EditableTextBox_ChatInput->OnTextCommitted.AddUniqueDynamic(this, &UShowDownChatWidget::HandleInputCommitted);
 	}
 
-	if (AShowDownGameStateBase* ShowDownGameState = GetWorld() ? GetWorld()->GetGameState<AShowDownGameStateBase>() : nullptr)
+	BoundGameState = GetWorld() ? GetWorld()->GetGameState<AShowDownGameStateBase>() : nullptr;
+	if (AShowDownGameStateBase* ShowDownGameState = BoundGameState.Get())
 	{
-		ShowDownGameState->OnCollectorLLMDecision.AddDynamic(this, &UShowDownChatWidget::HandleCollectorLLMDecision);
-		ShowDownGameState->OnCollectorLLMStatus.AddDynamic(this, &UShowDownChatWidget::HandleCollectorLLMStatus);
-		ShowDownGameState->OnChatMessageReceived.AddDynamic(this, &UShowDownChatWidget::HandleChatMessageReceived);
+		ShowDownGameState->OnCollectorLLMDecision.AddUniqueDynamic(this, &UShowDownChatWidget::HandleCollectorLLMDecision);
+		ShowDownGameState->OnCollectorLLMStatus.AddUniqueDynamic(this, &UShowDownChatWidget::HandleCollectorLLMStatus);
+		ShowDownGameState->OnChatMessageReceived.AddUniqueDynamic(this, &UShowDownChatWidget::HandleChatMessageReceived);
 	}
 
 	if (Border_ChatHistoryBackground)
@@ -238,12 +240,13 @@ void UShowDownChatWidget::NativeDestruct()
 		EditableTextBox_ChatInput->OnTextCommitted.RemoveDynamic(this, &UShowDownChatWidget::HandleInputCommitted);
 	}
 
-	if (AShowDownGameStateBase* ShowDownGameState = GetWorld() ? GetWorld()->GetGameState<AShowDownGameStateBase>() : nullptr)
+	if (AShowDownGameStateBase* ShowDownGameState = BoundGameState.Get())
 	{
 		ShowDownGameState->OnCollectorLLMDecision.RemoveDynamic(this, &UShowDownChatWidget::HandleCollectorLLMDecision);
 		ShowDownGameState->OnCollectorLLMStatus.RemoveDynamic(this, &UShowDownChatWidget::HandleCollectorLLMStatus);
 		ShowDownGameState->OnChatMessageReceived.RemoveDynamic(this, &UShowDownChatWidget::HandleChatMessageReceived);
 	}
+	BoundGameState.Reset();
 
 	Super::NativeDestruct();
 }
