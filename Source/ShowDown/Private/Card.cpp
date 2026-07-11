@@ -1,9 +1,11 @@
 #include "Card.h"
 
+#include "Camera/PlayerCameraManager.h"
 #include "Components/BoxComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
+#include "GameFramework/GameStateBase.h"
 #include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
 #include "SDPlayerState.h"
@@ -98,21 +100,43 @@ void ACard::BeginPlay()
 	Super::BeginPlay();
 
 	ConfigureInteractionComponents();
+	if (CardText)
+	{
+		BaseCardTextRelativeRotation = CardText->GetRelativeRotation().Quaternion();
+	}
 	DefaultLocation = GetActorLocation();
 	TargetLocation = DefaultLocation;
 	CurrentVisualWorldOffset = FVector::ZeroVector;
 	TargetVisualWorldOffset = FVector::ZeroVector;
+	CurrentLocalViewerOrientationAlpha = 0.0f;
+	TargetLocalViewerOrientationAlpha = 0.0f;
 	DefaultRotation = GetActorRotation();
 	TargetRotation = DefaultRotation;
 	if (HasAuthority())
 	{
 		ReplicatedMovementTarget.Location = DefaultLocation;
 		ReplicatedMovementTarget.Rotation = DefaultRotation;
+		ReplicatedMovementTarget.MotionDuration = SlotAttachDuration;
+		ReplicatedMovementTarget.ArcHeight = SlotAttachArcHeight;
+		ReplicatedMovementTarget.OvershootDistance = SlotAttachOvershootDistance;
+		ReplicatedMovementTarget.bUseSettleMotion = true;
+		ReplicatedMovementTarget.bOrientToLocalViewer = false;
+		ReplicatedMovementTarget.VisualScaleMultiplier = TargetVisualScaleMultiplier;
+		ReplicatedMovementTarget.ServerStartTime = GetWorld() && GetWorld()->GetGameState()
+			? GetWorld()->GetGameState()->GetServerWorldTimeSeconds()
+			: -1.0f;
+	}
+	if (!HasAuthority() && ReplicatedMovementTarget.Revision != 0)
+	{
+		TargetVisualScaleMultiplier = FMath::Max(0.1f, ReplicatedMovementTarget.VisualScaleMultiplier);
 	}
 	if (VisualRoot)
 	{
 		BaseVisualRootScale = VisualRoot->GetRelativeScale3D();
 		CurrentVisualScaleMultiplier = TargetVisualScaleMultiplier;
+		VisualScaleStartMultiplier = TargetVisualScaleMultiplier;
+		bVisualScaleMotionActive = false;
+		VisualScaleElapsedTime = 0.0f;
 		VisualRoot->SetRelativeScale3D(BaseVisualRootScale * CurrentVisualScaleMultiplier);
 	}
 	RefreshVisual();
@@ -120,7 +144,15 @@ void ACard::BeginPlay()
 
 	if (!HasAuthority() && ReplicatedMovementTarget.Revision != 0)
 	{
-		ApplyMovementTarget(FTransform(ReplicatedMovementTarget.Rotation, ReplicatedMovementTarget.Location), ReplicatedMovementTarget.bUseSlotAttachMotion);
+		ApplyMovementTarget(
+			FTransform(ReplicatedMovementTarget.Rotation, ReplicatedMovementTarget.Location),
+			ReplicatedMovementTarget.bUseSlotAttachMotion,
+			ReplicatedMovementTarget.MotionDuration,
+			ReplicatedMovementTarget.ArcHeight,
+			ReplicatedMovementTarget.OvershootDistance,
+			ReplicatedMovementTarget.bUseSettleMotion,
+			ReplicatedMovementTarget.bOrientToLocalViewer,
+			ReplicatedMovementTarget.ServerStartTime);
 	}
 }
 
@@ -135,6 +167,7 @@ void ACard::Tick(float DeltaTime)
 	FRotator VisualRelativeRotation = FRotator::ZeroRotator;
 	UpdateVisualScale(DeltaTime);
 	UpdateSlotAttachSettle(DeltaTime, VisualWorldOffset, VisualRelativeRotation);
+	UpdateLocalViewerOrientation(DeltaTime);
 
 	if (VisualRoot)
 	{
@@ -142,6 +175,14 @@ void ACard::Tick(float DeltaTime)
 		VisualRoot->SetRelativeLocation(VisualRelativeOffset);
 		VisualRoot->SetRelativeRotation(VisualRelativeRotation);
 		VisualRoot->SetRelativeScale3D(BaseVisualRootScale * CurrentVisualScaleMultiplier);
+	}
+	if (CardText)
+	{
+		const FQuat LocalViewerRotation = FQuat::Slerp(
+			FQuat::Identity,
+			BuildLocalViewerVisualRotation(),
+			CurrentLocalViewerOrientationAlpha).GetNormalized();
+		CardText->SetRelativeRotation((LocalViewerRotation * BaseCardTextRelativeRotation).GetNormalized());
 	}
 
 	if (bSlotAttachMotionActive)
@@ -152,7 +193,9 @@ void ACard::Tick(float DeltaTime)
 
 	if (RootComp && RootComp->GetAttachParent())
 	{
-		if (!bVisualScaleMotionActive && !bSlotAttachSettleActive)
+		if (!bVisualScaleMotionActive
+			&& !bSlotAttachSettleActive
+			&& FMath::IsNearlyEqual(CurrentLocalViewerOrientationAlpha, TargetLocalViewerOrientationAlpha))
 		{
 			SetActorTickEnabled(false);
 		}
@@ -166,7 +209,11 @@ void ACard::Tick(float DeltaTime)
 	const bool bVisualAtTarget = CurrentVisualWorldOffset.Equals(TargetVisualWorldOffset, 0.1f);
 	const bool bActorAtTarget = GetActorLocation().Equals(TargetLocation, 0.1f)
 		&& GetActorRotation().Equals(TargetRotation, 0.1f);
-	if (bVisualAtTarget && bActorAtTarget && !bVisualScaleMotionActive && !bSlotAttachSettleActive)
+	if (bVisualAtTarget
+		&& bActorAtTarget
+		&& !bVisualScaleMotionActive
+		&& !bSlotAttachSettleActive
+		&& FMath::IsNearlyEqual(CurrentLocalViewerOrientationAlpha, TargetLocalViewerOrientationAlpha))
 	{
 		CurrentVisualWorldOffset = TargetVisualWorldOffset;
 		if (VisualRoot)
@@ -238,7 +285,6 @@ void ACard::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimePro
 	DOREPLIFETIME(ACard, bFaceUp);
 	DOREPLIFETIME(ACard, HiddenFromSlot);
 	DOREPLIFETIME(ACard, HandOwnerSlot);
-	DOREPLIFETIME(ACard, TargetVisualScaleMultiplier);
 	DOREPLIFETIME(ACard, ReplicatedMovementTarget);
 }
 
@@ -260,15 +306,25 @@ void ACard::OnRep_Selectable()
 	EnableMotionTick();
 }
 
-void ACard::OnRep_TargetVisualScaleMultiplier()
-{
-	StartVisualScaleMotion(TargetVisualScaleMultiplier);
-	EnableMotionTick();
-}
-
 void ACard::OnRep_MovementTarget()
 {
-	ApplyMovementTarget(FTransform(ReplicatedMovementTarget.Rotation, ReplicatedMovementTarget.Location), ReplicatedMovementTarget.bUseSlotAttachMotion);
+	if (!HasActorBegunPlay())
+	{
+		return;
+	}
+	ApplyMovementTarget(
+		FTransform(ReplicatedMovementTarget.Rotation, ReplicatedMovementTarget.Location),
+		ReplicatedMovementTarget.bUseSlotAttachMotion,
+		ReplicatedMovementTarget.MotionDuration,
+		ReplicatedMovementTarget.ArcHeight,
+		ReplicatedMovementTarget.OvershootDistance,
+		ReplicatedMovementTarget.bUseSettleMotion,
+		ReplicatedMovementTarget.bOrientToLocalViewer,
+		ReplicatedMovementTarget.ServerStartTime);
+	ApplySynchronizedVisualScale(
+		ReplicatedMovementTarget.VisualScaleMultiplier,
+		ReplicatedMovementTarget.ServerStartTime,
+		ReplicatedMovementTarget.MotionDuration);
 }
 
 void ACard::RefreshVisual()
@@ -454,12 +510,40 @@ void ACard::MoveToHandTransform(const FTransform& NewTransform)
 	PublishMovementTarget(NewTransform, false);
 }
 
+void ACard::MoveToPresentationTransform(
+	const FTransform& NewTransform,
+	float VisualScaleMultiplier,
+	float MotionDuration,
+	float ArcHeight,
+	bool bUseSettleMotion,
+	bool bOrientToLocalViewer)
+{
+	ClearPendingSlotAttachment();
+	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+	bSelected = false;
+	bHovered = false;
+	SetSelectable(false);
+	const float SafeDuration = FMath::Max(0.05f, MotionDuration);
+	const float SafeArcHeight = FMath::Max(0.0f, ArcHeight);
+	ApplyMovementTarget(NewTransform, true, SafeDuration, SafeArcHeight, 0.0f, bUseSettleMotion, bOrientToLocalViewer);
+	SetTargetVisualScaleMultiplier(VisualScaleMultiplier);
+	PublishMovementTarget(NewTransform, true, SafeDuration, SafeArcHeight, 0.0f, bUseSettleMotion, bOrientToLocalViewer);
+}
+
 void ACard::EnableMotionTick()
 {
 	SetActorTickEnabled(true);
 }
 
-void ACard::PublishMovementTarget(const FTransform& NewTransform, bool bPlaySlotAttachMotion)
+void ACard::PublishMovementTarget(
+	const FTransform& NewTransform,
+	bool bPlaySlotAttachMotion,
+	float MotionDuration,
+	float ArcHeight,
+	float OvershootDistance,
+	bool bUseSettleMotion,
+	bool bOrientToLocalViewer,
+	float ServerStartTime)
 {
 	if (!HasAuthority())
 	{
@@ -468,7 +552,25 @@ void ACard::PublishMovementTarget(const FTransform& NewTransform, bool bPlaySlot
 
 	ReplicatedMovementTarget.Location = NewTransform.GetLocation();
 	ReplicatedMovementTarget.Rotation = NewTransform.GetRotation().Rotator();
-	ReplicatedMovementTarget.bUseSlotAttachMotion = bPlaySlotAttachMotion && bUseSlotAttachMotion;
+	ReplicatedMovementTarget.bUseSlotAttachMotion = bPlaySlotAttachMotion;
+	ReplicatedMovementTarget.MotionDuration = MotionDuration >= 0.0f ? MotionDuration : SlotAttachDuration;
+	ReplicatedMovementTarget.ArcHeight = ArcHeight >= 0.0f ? ArcHeight : SlotAttachArcHeight;
+	ReplicatedMovementTarget.OvershootDistance = OvershootDistance >= 0.0f ? OvershootDistance : SlotAttachOvershootDistance;
+	ReplicatedMovementTarget.bUseSettleMotion = bUseSettleMotion;
+	ReplicatedMovementTarget.bOrientToLocalViewer = bOrientToLocalViewer;
+	ReplicatedMovementTarget.VisualScaleMultiplier = TargetVisualScaleMultiplier;
+	if (ServerStartTime >= 0.0f)
+	{
+		ReplicatedMovementTarget.ServerStartTime = ServerStartTime;
+	}
+	else if (GetWorld() && GetWorld()->GetGameState())
+	{
+		ReplicatedMovementTarget.ServerStartTime = GetWorld()->GetGameState()->GetServerWorldTimeSeconds();
+	}
+	else
+	{
+		ReplicatedMovementTarget.ServerStartTime = -1.0f;
+	}
 	++ReplicatedMovementTarget.Revision;
 	if (ReplicatedMovementTarget.Revision == 0)
 	{
@@ -477,17 +579,52 @@ void ACard::PublishMovementTarget(const FTransform& NewTransform, bool bPlaySlot
 	ForceNetUpdate();
 }
 
-void ACard::ApplyMovementTarget(const FTransform& NewTransform, bool bPlaySlotAttachMotion)
+void ACard::ApplyMovementTarget(
+	const FTransform& NewTransform,
+	bool bPlaySlotAttachMotion,
+	float MotionDuration,
+	float ArcHeight,
+	float OvershootDistance,
+	bool bUseSettleMotion,
+	bool bOrientToLocalViewer,
+	float ServerStartTime)
 {
 	ResetTravelMotionState();
+	ActiveSlotAttachDuration = MotionDuration >= 0.0f ? MotionDuration : SlotAttachDuration;
+	ActiveSlotAttachArcHeight = ArcHeight >= 0.0f ? ArcHeight : SlotAttachArcHeight;
+	ActiveSlotAttachOvershootDistance = OvershootDistance >= 0.0f ? OvershootDistance : SlotAttachOvershootDistance;
+	bActiveSlotAttachSettleMotion = bUseSettleMotion;
+	bActiveOrientToLocalViewer = bOrientToLocalViewer;
+	TargetLocalViewerOrientationAlpha = bActiveOrientToLocalViewer ? 1.0f : 0.0f;
 	DefaultLocation = NewTransform.GetLocation();
 	DefaultRotation = NewTransform.GetRotation().Rotator();
 	UpdateTargetTransform();
 	EnableMotionTick();
 
-	if (bPlaySlotAttachMotion && bUseSlotAttachMotion)
+	if (bPlaySlotAttachMotion)
 	{
 		StartSlotAttachMotion(FTransform(DefaultRotation, DefaultLocation));
+		if (!HasAuthority() && ServerStartTime >= 0.0f && GetWorld() && GetWorld()->GetGameState())
+		{
+			const float ServerNow = GetWorld()->GetGameState()->GetServerWorldTimeSeconds();
+			const float ElapsedBeforeReceipt = FMath::Max(0.0f, ServerNow - ServerStartTime);
+			if (ElapsedBeforeReceipt > KINDA_SMALL_NUMBER)
+			{
+				const float MotionDurationSeconds = FMath::Max(0.05f, ActiveSlotAttachDuration);
+				UpdateSlotAttachMotion(FMath::Min(ElapsedBeforeReceipt, MotionDurationSeconds));
+				UpdateLocalViewerOrientation(FMath::Min(ElapsedBeforeReceipt, MotionDurationSeconds));
+				if (bSlotAttachSettleActive && ElapsedBeforeReceipt > MotionDurationSeconds)
+				{
+					SlotAttachSettleElapsedTime = FMath::Min(
+						ElapsedBeforeReceipt - MotionDurationSeconds,
+						FMath::Max(0.0f, SlotAttachSettleDuration));
+					if (SlotAttachSettleElapsedTime >= SlotAttachSettleDuration)
+					{
+						bSlotAttachSettleActive = false;
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -564,14 +701,14 @@ void ACard::StartSlotAttachMotion(const FTransform& TargetTransform)
 void ACard::UpdateSlotAttachMotion(float DeltaTime)
 {
 	SlotAttachElapsedTime += DeltaTime;
-	const float Duration = FMath::Max(0.05f, SlotAttachDuration);
+	const float Duration = FMath::Max(0.05f, ActiveSlotAttachDuration);
 	const float Alpha = FMath::Clamp(SlotAttachElapsedTime / Duration, 0.0f, 1.0f);
 	const float EasedAlpha = FMath::InterpEaseInOut(0.0f, 1.0f, Alpha, 2.0f);
 	const float ArcAlpha = FMath::Sin(Alpha * PI);
 	const float OvershootAlpha = FMath::Clamp((Alpha - 0.72f) / 0.28f, 0.0f, 1.0f);
-	const float OvershootAmount = FMath::Sin(OvershootAlpha * PI) * SlotAttachOvershootDistance;
+	const float OvershootAmount = FMath::Sin(OvershootAlpha * PI) * ActiveSlotAttachOvershootDistance;
 
-	const FVector ArcOffset = FVector::UpVector * SlotAttachArcHeight * ArcAlpha;
+	const FVector ArcOffset = FVector::UpVector * ActiveSlotAttachArcHeight * ArcAlpha;
 	const FVector OvershootOffset = SlotAttachTravelDirection * OvershootAmount;
 	const FVector NewLocation =
 		FMath::Lerp(SlotAttachStartLocation, SlotAttachTargetLocation, EasedAlpha)
@@ -586,7 +723,7 @@ void ACard::UpdateSlotAttachMotion(float DeltaTime)
 	if (Alpha >= 1.0f)
 	{
 		bSlotAttachMotionActive = false;
-		bSlotAttachSettleActive = SlotAttachSettleDuration > KINDA_SMALL_NUMBER;
+		bSlotAttachSettleActive = bActiveSlotAttachSettleMotion && SlotAttachSettleDuration > KINDA_SMALL_NUMBER;
 		SlotAttachSettleElapsedTime = 0.0f;
 		SetActorLocationAndRotation(SlotAttachTargetLocation, SlotAttachTargetRotation);
 		AttachToPendingSlot();
@@ -641,6 +778,40 @@ void ACard::StartVisualScaleMotion(float NewTargetScaleMultiplier)
 	}
 }
 
+void ACard::ApplySynchronizedVisualScale(
+	float NewTargetScaleMultiplier,
+	float ServerStartTime,
+	float MotionDuration)
+{
+	TargetVisualScaleMultiplier = FMath::Max(0.1f, NewTargetScaleMultiplier);
+	StartVisualScaleMotion(TargetVisualScaleMultiplier);
+	if (!bVisualScaleMotionActive
+		|| ServerStartTime < 0.0f
+		|| !GetWorld()
+		|| !GetWorld()->GetGameState())
+	{
+		return;
+	}
+
+	const float Duration = FMath::Max(0.05f, MotionDuration);
+	VisualScaleElapsedTime = FMath::Clamp(
+		GetWorld()->GetGameState()->GetServerWorldTimeSeconds() - ServerStartTime,
+		0.0f,
+		Duration);
+	const float Alpha = FMath::Clamp(VisualScaleElapsedTime / Duration, 0.0f, 1.0f);
+	const float EasedAlpha = FMath::InterpEaseInOut(0.0f, 1.0f, Alpha, 2.0f);
+	CurrentVisualScaleMultiplier = FMath::Lerp(
+		VisualScaleStartMultiplier,
+		TargetVisualScaleMultiplier,
+		EasedAlpha);
+	if (Alpha >= 1.0f)
+	{
+		CurrentVisualScaleMultiplier = TargetVisualScaleMultiplier;
+		bVisualScaleMotionActive = false;
+		VisualScaleElapsedTime = 0.0f;
+	}
+}
+
 void ACard::UpdateVisualScale(float DeltaTime)
 {
 	if (!bVisualScaleMotionActive)
@@ -649,7 +820,7 @@ void ACard::UpdateVisualScale(float DeltaTime)
 	}
 
 	VisualScaleElapsedTime += DeltaTime;
-	const float Duration = FMath::Max(0.05f, SlotAttachDuration);
+	const float Duration = FMath::Max(0.05f, ActiveSlotAttachDuration);
 	const float Alpha = FMath::Clamp(VisualScaleElapsedTime / Duration, 0.0f, 1.0f);
 	const float EasedAlpha = FMath::InterpEaseInOut(0.0f, 1.0f, Alpha, 2.0f);
 	CurrentVisualScaleMultiplier = FMath::Lerp(VisualScaleStartMultiplier, TargetVisualScaleMultiplier, EasedAlpha);
@@ -660,6 +831,45 @@ void ACard::UpdateVisualScale(float DeltaTime)
 		bVisualScaleMotionActive = false;
 		VisualScaleElapsedTime = 0.0f;
 	}
+}
+
+FQuat ACard::BuildLocalViewerVisualRotation() const
+{
+	const APlayerController* LocalPlayerController = UGameplayStatics::GetPlayerController(this, 0);
+	const APlayerCameraManager* CameraManager = LocalPlayerController
+		? LocalPlayerController->PlayerCameraManager
+		: nullptr;
+	if (!CameraManager)
+	{
+		return FQuat::Identity;
+	}
+
+	const FQuat ActorRotation = GetActorQuat();
+	const FVector RotationAxis = ActorRotation.RotateVector(FVector::ForwardVector).GetSafeNormal();
+	const FVector CurrentLongAxis = ActorRotation.RotateVector(FVector::UpVector).GetSafeNormal();
+	FVector DesiredLongAxis = GetActorLocation() - CameraManager->GetCameraLocation();
+	DesiredLongAxis -= RotationAxis * FVector::DotProduct(DesiredLongAxis, RotationAxis);
+	DesiredLongAxis = DesiredLongAxis.GetSafeNormal();
+	if (DesiredLongAxis.IsNearlyZero() || CurrentLongAxis.IsNearlyZero())
+	{
+		return FQuat::Identity;
+	}
+
+	const float SinAngle = FVector::DotProduct(
+		RotationAxis,
+		FVector::CrossProduct(CurrentLongAxis, DesiredLongAxis));
+	const float CosAngle = FMath::Clamp(FVector::DotProduct(CurrentLongAxis, DesiredLongAxis), -1.0f, 1.0f);
+	return FQuat(FVector::ForwardVector, FMath::Atan2(SinAngle, CosAngle));
+}
+
+void ACard::UpdateLocalViewerOrientation(float DeltaTime)
+{
+	const float Duration = FMath::Max(0.05f, ActiveSlotAttachDuration);
+	CurrentLocalViewerOrientationAlpha = FMath::FInterpConstantTo(
+		CurrentLocalViewerOrientationAlpha,
+		TargetLocalViewerOrientationAlpha,
+		DeltaTime,
+		1.0f / Duration);
 }
 
 FRotator ACard::ScaleRotator(const FRotator& Rotator, float Scale) const

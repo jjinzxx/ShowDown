@@ -271,6 +271,54 @@ void AShowDownPlayerController::ClientEnterMultiplayerGameplay_Implementation()
 	ClientShowStatusMessage(TEXT("로딩 중... 멀티플레이 좌석과 카메라를 확인하는 중입니다."));
 }
 
+void AShowDownPlayerController::ClientSetInitialCardDealInputLocked_Implementation(bool bLocked)
+{
+	bInitialCardDealInputLocked = bLocked;
+	if (bLocked)
+	{
+		bHandleShowDownGameplayInput = false;
+		bShowCenterCrosshair = false;
+		CancelPressedBetActionButton();
+		SetFocusedInteractable(nullptr);
+		SetHoveredCard(nullptr);
+		if (!bInitialCardDealIgnoreInputApplied)
+		{
+			SetIgnoreMoveInput(true);
+			SetIgnoreLookInput(true);
+			bInitialCardDealIgnoreInputApplied = true;
+		}
+		UpdateCenterCrosshairVisibility();
+
+		const bool bMultiplayerCameraReady = GetNetMode() != NM_Standalone
+			&& !bPendingMultiplayerSeatCamera
+			&& bUseCharacterPlayerCamera
+			&& IsValid(LocalPlayerCameraCharacterTarget)
+			&& GetViewTarget() == GetPawn();
+		if (bMultiplayerCameraReady)
+		{
+			ServerNotifyInitialCardDealCameraReady();
+		}
+		return;
+	}
+
+	if (bInitialCardDealIgnoreInputApplied)
+	{
+		SetIgnoreMoveInput(false);
+		SetIgnoreLookInput(false);
+		bInitialCardDealIgnoreInputApplied = false;
+	}
+	if (GetNetMode() == NM_Standalone || !bPendingMultiplayerSeatCamera)
+	{
+		bHandleShowDownGameplayInput = true;
+		bShowCenterCrosshair = true;
+		if (GetNetMode() != NM_Standalone)
+		{
+			RestoreMultiplayerGameplayInput();
+		}
+	}
+	UpdateCenterCrosshairVisibility();
+}
+
 void AShowDownPlayerController::ClientUseMultiplayerSeatCamera_Implementation(
 	int32 SeatIndex,
 	float SeatCameraLookSensitivity,
@@ -424,9 +472,16 @@ bool AShowDownPlayerController::TryApplyPendingMultiplayerCharacterCamera()
 
 	EnsureChatWidget();
 	bPendingMultiplayerSeatCamera = false;
-	bHandleShowDownGameplayInput = true;
-	bShowCenterCrosshair = true;
-	RestoreMultiplayerGameplayInput();
+	bHandleShowDownGameplayInput = !bInitialCardDealInputLocked;
+	bShowCenterCrosshair = !bInitialCardDealInputLocked;
+	if (bInitialCardDealInputLocked)
+	{
+		ServerNotifyInitialCardDealCameraReady();
+	}
+	else
+	{
+		RestoreMultiplayerGameplayInput();
+	}
 	CreateCenterCrosshairWidget();
 	UpdateCenterCrosshairVisibility();
 	ClientShowStatusMessage(TEXT("Multiplayer character head camera ready."));
@@ -2697,6 +2752,14 @@ void AShowDownPlayerController::ServerRequestMultiplayerRestart_Implementation()
 	if (AShowDownGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AShowDownGameModeBase>() : nullptr)
 	{
 		GameMode->RequestMultiplayerRestartFromController(this);
+	}
+}
+
+void AShowDownPlayerController::ServerNotifyInitialCardDealCameraReady_Implementation()
+{
+	if (AShowDownGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AShowDownGameModeBase>() : nullptr)
+	{
+		GameMode->NotifyInitialCardDealCameraReady(this);
 	}
 }
 

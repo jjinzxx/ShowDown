@@ -326,6 +326,9 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerRequestMultiplayerRestart();
 
+	UFUNCTION(Server, Reliable)
+	void ServerNotifyInitialCardDealCameraReady();
+
 	UFUNCTION(Server, Unreliable)
 	void ServerUpdateCharacterHeadLookRotation(FRotator LookRotation);
 
@@ -338,6 +341,9 @@ public:
 	// Restores gameplay input after travelling from the UI-only multiplayer lobby.
 	UFUNCTION(Client, Reliable)
 	void ClientEnterMultiplayerGameplay();
+
+	UFUNCTION(Client, Reliable)
+	void ClientSetInitialCardDealInputLocked(bool bLocked);
 
 	// Applies the local multiplayer player's character head camera by zero-based seat index.
 	UFUNCTION(Client, Reliable)
@@ -359,6 +365,8 @@ public:
 	void ClientLeaveMultiplayerRoomToHub();
 
 private:
+	bool bInitialCardDealInputLocked = false;
+	bool bInitialCardDealIgnoreInputApplied = false;
 	void InitializeFromPossessedPawn();
 	void InitializeInteractableOutlinePostProcess();
 	void TraceCardUnderCursor();

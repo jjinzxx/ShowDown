@@ -199,6 +199,7 @@ public:
 
 	void RefreshMultiplayerLobbyPlayers();
 	void SetMultiplayerVoiceTalking(AController* RequestingController, bool bIsTalking);
+	void NotifyInitialCardDealCameraReady(AController* ReadyController);
 
 	void RequestMultiplayerRestartFromController(AController* RequestingController);
 
@@ -353,6 +354,21 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (DisplayName = "Rotation Offset"))
 	FRotator CardRevealRotationOffset = FRotator(-90.0f, 0.0f, 0.0f);
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (DisplayName = "Use Initial Card Deal Presentation"))
+	bool bUseInitialCardDealPresentation = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", DisplayName = "Flat Card Distance From Hand Anchor"))
+	float InitialDealFlatCardDistance = 115.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", DisplayName = "Flat Card Spacing"))
+	float InitialDealFlatCardSpacing = 34.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "20.0", DisplayName = "Flat Card Fan Angle"))
+	float InitialDealFlatCardFanAngle = 6.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.1", ClampMax = "2.0", DisplayName = "Card Move Duration"))
+	float InitialDealCardMoveDuration = 0.48f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro")
 	bool bPlaySinglePlayerIntro = true;
 
@@ -403,6 +419,7 @@ private:
 	FTimerHandle MultiplayerRevealContinuationTimerHandle;
 	TArray<FTimerHandle> CardRevealPresentationTimerHandles;
 	TArray<FTimerHandle> MultiplayerRoundTimerHandles;
+	TArray<FTimerHandle> InitialCardDealPresentationTimerHandles;
 	int32 BettingRaisesLeft = 6;
 	bool bHasLastRaiser = false;
 	EShowDownSide LastRaiser = EShowDownSide::Player;
@@ -534,6 +551,23 @@ private:
 	FTransform SinglePlayerIntroCollectorTargetTransform;
 	float SinglePlayerIntroFallbackStartTime = 0.0f;
 	bool bSinglePlayerIntroFallbackActive = false;
+	bool bSinglePlayerMatchStarted = false;
+	bool bInitialCardDealPresentationInProgress = false;
+	bool bInitialCardDealPresentationPlayed = false;
+	bool bInitialCardDealIsMultiplayer = false;
+	int32 InitialCardDealDeckCopies = 2;
+	TFunction<void()> InitialCardDealPresentationContinuation;
+	mutable bool bInitialCardDeckBoundsCacheValid = false;
+	mutable FVector CachedInitialCardDeckTop = FVector::ZeroVector;
+	mutable float CachedInitialCardTableSurfaceZ = 0.0f;
+	mutable bool bInitialCardSpatialCacheValid = false;
+	mutable FVector CachedInitialCardTableCenter = FVector::ZeroVector;
+	mutable TWeakObjectPtr<USceneComponent> CachedInitialCardReferenceHandSlot;
+	TSet<EShowDownPlayerSlot> InitialCardDealCameraReadySlots;
+	bool bInitialCardDealShowcaseStarted = false;
+
+	UPROPERTY()
+	TArray<TObjectPtr<ACard>> InitialCardDealDeckCards;
 
 	mutable bool bCardPlacementAnchorCacheInitialized = false;
 	mutable TMap<ESDCardPlacementRole, TWeakObjectPtr<ASDCardPlacementAnchor>> CachedCardPlacementAnchors;
@@ -621,6 +655,37 @@ private:
 	bool PlaySinglePlayerIntroFallback(AShowDownCharacter* PlayerCharacter, AShowDownCharacter* CollectorCharacter);
 	void UpdateSinglePlayerIntroFallback();
 	void FinishSinglePlayerIntro();
+	void StartInitialCardDealPresentation(int32 DeckCopies, bool bMultiplayer, TFunction<void()>&& Continuation);
+	void BeginInitialCardDeckShowcase();
+	bool TryImmediateInitialCardDealFallback();
+	void StopInitialCardDealOnFailure(const TCHAR* Reason);
+	void SetInitialCardDealInputLocked(bool bLocked) const;
+	void RefreshInitialCardDealSpatialCache() const;
+	void StartInitialCardDealFromStack();
+	bool PrepareSinglePlayerOpeningHands(
+		TArray<ACard*>& OutCardsInDealOrder,
+		TArray<FTransform>& OutFlatTransforms,
+		TArray<FTransform>& OutFinalTransforms,
+		int32& OutParticipantCount);
+	bool PrepareMultiplayerOpeningHands(
+		TArray<ACard*>& OutCardsInDealOrder,
+		TArray<FTransform>& OutFlatTransforms,
+		TArray<FTransform>& OutFinalTransforms,
+		int32& OutParticipantCount);
+	void AnimatePreparedOpeningHands(
+		const TArray<ACard*>& CardsInDealOrder,
+		const TArray<FTransform>& FlatTransforms,
+		const TArray<FTransform>& FinalTransforms,
+		int32 ParticipantCount);
+	void FinishInitialCardDealPresentation();
+	void ClearInitialCardDealPresentation(bool bDestroyDeckCards = true);
+	void ScheduleInitialCardDealAction(float DelaySeconds, TFunction<void()>&& Action);
+	FTransform BuildInitialCardGridTransform(int32 CardIndex, int32 DeckCopies, bool bFaceDown) const;
+	FTransform BuildInitialCardStackTransform(int32 StackIndex) const;
+	FTransform BuildInitialFlatCardTransform(USceneComponent* HandSlot, int32 CardIndex, int32 CardCount) const;
+	FQuat BuildInitialFlatCardRotation(const FVector& TowardTableCenter, bool bFaceDown) const;
+	FVector ResolveInitialCardDeckTop() const;
+	float ResolveInitialCardTableSurfaceZ() const;
 	TArray<AShowDownCharacter*> GetShowDownCharacters() const;
 	void ConfigureSinglePlayerCharacters();
 	void ConfigureMultiplayerCharacters(const TArray<ASDPlayerState*>& Players);

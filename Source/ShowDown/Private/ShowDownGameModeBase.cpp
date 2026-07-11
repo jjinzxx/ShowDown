@@ -16,6 +16,7 @@
 #include "SDMultiplayerSeatAnchor.h"
 #include "ShowDownTypes.h"
 #include "Components/SceneComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "LevelSequenceActor.h"
 #include "LevelSequencePlayer.h"
@@ -31,6 +32,8 @@
 #include "ShowDownHubFlowManager.h"
 #include "ShowDownPlayerController.h"
 #include "Engine/Engine.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/StaticMeshActor.h"
 #include "EngineUtils.h"
 #include "Engine/GameInstance.h"
 #include "GameFramework/PlayerState.h"
@@ -442,6 +445,13 @@ void AShowDownGameModeBase::BeginPlay()
 
 void AShowDownGameModeBase::StartSinglePlayer()
 {
+	if (bSinglePlayerMatchStarted)
+	{
+		return;
+	}
+	bSinglePlayerMatchStarted = true;
+	ClearInitialCardDealPresentation();
+	bInitialCardDealPresentationPlayed = false;
 	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 	{
 		ShowDownGameState->SetMatchMode(EShowDownMatchMode::SinglePlayer);
@@ -606,6 +616,9 @@ void AShowDownGameModeBase::ResetForHubReturn()
 	GetWorldTimerManager().ClearAllTimersForObject(this);
 	ClearMultiplayerRoundTimers();
 	ClearCardRevealPresentationTimers();
+	ClearInitialCardDealPresentation();
+	bInitialCardDealPresentationPlayed = false;
+	bSinglePlayerMatchStarted = false;
 	ClearBetBulletPresentation();
 	if (ActiveSelfShotGunActor)
 	{
@@ -660,7 +673,9 @@ void AShowDownGameModeBase::PlayerSelectedCardFromController(AController* Submit
 		return;
 	}
 
-	if (bCollectorActionPresentationInProgress || bCollectorBetDecisionInProgress)
+	if (bInitialCardDealPresentationInProgress
+		|| bCollectorActionPresentationInProgress
+		|| bCollectorBetDecisionInProgress)
 	{
 		return;
 	}
@@ -809,6 +824,909 @@ void AShowDownGameModeBase::DealInitialHand()
 	UE_LOG(LogTemp, Log, TEXT("Single player deck: ranks 1-7 x2, total 14 cards."));
 	UE_LOG(LogTemp, Log, TEXT("Player hand count: %d"), PlayerState.HandCards.Num());
 	UE_LOG(LogTemp, Log, TEXT("Collector hand count: %d"), CollectorState.HandCards.Num());
+}
+
+void AShowDownGameModeBase::StartInitialCardDealPresentation(
+	int32 DeckCopies,
+	bool bMultiplayer,
+	TFunction<void()>&& Continuation)
+{
+	ClearInitialCardDealPresentation();
+	InitialCardDealPresentationContinuation = MoveTemp(Continuation);
+	InitialCardDealDeckCopies = FMath::Clamp(DeckCopies, 2, 4);
+	bInitialCardDealIsMultiplayer = bMultiplayer;
+
+	if (!bUseInitialCardDealPresentation || !GetWorld())
+	{
+		if (TryImmediateInitialCardDealFallback())
+		{
+			FinishInitialCardDealPresentation();
+		}
+		else
+		{
+			StopInitialCardDealOnFailure(TEXT("immediate fallback failed"));
+		}
+		return;
+	}
+
+	if (!CardClass)
+	{
+		CardClass = ACard::StaticClass();
+	}
+	if (!CardClass || !CardSystem)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Initial card deal presentation could not start because the card class or card system is missing."));
+		if (TryImmediateInitialCardDealFallback())
+		{
+			FinishInitialCardDealPresentation();
+		}
+		else
+		{
+			StopInitialCardDealOnFailure(TEXT("card class or card system missing"));
+		}
+		return;
+	}
+
+	bInitialCardDealPresentationInProgress = true;
+	bInitialCardDealShowcaseStarted = false;
+	InitialCardDealCameraReadySlots.Reset();
+	bInitialCardSpatialCacheValid = false;
+	bInitialCardDeckBoundsCacheValid = false;
+	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+	{
+		ShowDownGameState->SetPhase(EShowDownPhase::None);
+	}
+	SetInitialCardDealInputLocked(true);
+
+	if (bInitialCardDealIsMultiplayer)
+	{
+		// A reliable camera-ready acknowledgement normally starts the showcase.
+		// The timeout keeps a disconnected or extremely slow client from blocking
+		// the match forever; late clients seek into replicated card motion.
+		ScheduleInitialCardDealAction(5.0f, [this]()
+		{
+			BeginInitialCardDeckShowcase();
+		});
+		return;
+	}
+
+	BeginInitialCardDeckShowcase();
+}
+
+void AShowDownGameModeBase::NotifyInitialCardDealCameraReady(AController* ReadyController)
+{
+	if (!HasAuthority()
+		|| !bInitialCardDealPresentationInProgress
+		|| !bInitialCardDealIsMultiplayer
+		|| bInitialCardDealShowcaseStarted)
+	{
+		return;
+	}
+
+	ASDPlayerState* ReadyPlayer = GetPlayerStateForController(ReadyController);
+	if (!ReadyPlayer || ReadyPlayer->Lives <= 0 || !MultiplayerPlayers.Contains(ReadyPlayer))
+	{
+		return;
+	}
+	InitialCardDealCameraReadySlots.Add(ReadyPlayer->ShowDownSlot);
+
+	int32 RequiredReadyCount = 0;
+	for (const ASDPlayerState* Player : MultiplayerPlayers)
+	{
+		if (Player && Player->Lives > 0)
+		{
+			++RequiredReadyCount;
+		}
+	}
+	if (RequiredReadyCount >= 2 && InitialCardDealCameraReadySlots.Num() >= RequiredReadyCount)
+	{
+		BeginInitialCardDeckShowcase();
+	}
+}
+
+bool AShowDownGameModeBase::TryImmediateInitialCardDealFallback()
+{
+	if (!CardSystem)
+	{
+		return false;
+	}
+
+	if (bInitialCardDealIsMultiplayer)
+	{
+		DealMultiplayerHands();
+		int32 CompleteAliveHands = 0;
+		int32 AlivePlayers = 0;
+		for (const ASDPlayerState* Player : MultiplayerPlayers)
+		{
+			if (Player && Player->Lives > 0)
+			{
+				++AlivePlayers;
+				if (Player->HandCards.Num() == HandCount)
+				{
+					++CompleteAliveHands;
+				}
+			}
+		}
+		return AlivePlayers >= 2 && CompleteAliveHands == AlivePlayers;
+	}
+
+	DealInitialHand();
+	return PlayerState.HandCards.Num() == HandCount
+		&& CollectorState.HandCards.Num() == HandCount;
+}
+
+void AShowDownGameModeBase::StopInitialCardDealOnFailure(const TCHAR* Reason)
+{
+	UE_LOG(LogTemp, Error, TEXT("Initial card deal stopped safely: %s"), Reason ? Reason : TEXT("unknown failure"));
+	for (FTimerHandle& TimerHandle : InitialCardDealPresentationTimerHandles)
+	{
+		GetWorldTimerManager().ClearTimer(TimerHandle);
+	}
+	InitialCardDealPresentationTimerHandles.Reset();
+	InitialCardDealPresentationContinuation = TFunction<void()>();
+	bInitialCardDealPresentationInProgress = true;
+	bInitialCardDealShowcaseStarted = false;
+	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+	{
+		ShowDownGameState->SetPhase(EShowDownPhase::None);
+	}
+	SetInitialCardDealInputLocked(true);
+}
+
+void AShowDownGameModeBase::SetInitialCardDealInputLocked(bool bLocked) const
+{
+	if (!GetWorld())
+	{
+		return;
+	}
+	for (FConstPlayerControllerIterator Iterator = GetWorld()->GetPlayerControllerIterator(); Iterator; ++Iterator)
+	{
+		if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(Iterator->Get()))
+		{
+			PlayerController->ClientSetInitialCardDealInputLocked(bLocked);
+		}
+	}
+}
+
+void AShowDownGameModeBase::RefreshInitialCardDealSpatialCache() const
+{
+	CachedInitialCardTableCenter = ResolveSingleTableCenter(GetWorld());
+	CachedInitialCardReferenceHandSlot = GetHandSlotForSide(EShowDownSide::Player);
+	if (bInitialCardDealIsMultiplayer)
+	{
+		for (ASDPlayerState* Player : MultiplayerPlayers)
+		{
+			if (Player && Player->ShowDownSlot == EShowDownPlayerSlot::Player1)
+			{
+				CachedInitialCardReferenceHandSlot = GetHandSlotForPlayerState(Player);
+				break;
+			}
+		}
+	}
+	bInitialCardSpatialCacheValid = true;
+	ResolveInitialCardDeckTop();
+}
+
+void AShowDownGameModeBase::BeginInitialCardDeckShowcase()
+{
+	if (!bInitialCardDealPresentationInProgress || bInitialCardDealShowcaseStarted || !GetWorld())
+	{
+		return;
+	}
+
+	bInitialCardDealShowcaseStarted = true;
+	RefreshInitialCardDealSpatialCache();
+
+	const int32 CardCount = InitialCardDealDeckCopies * 7;
+	const float GridVisualScale = InitialCardDealDeckCopies >= 4
+		? 0.68f
+		: (InitialCardDealDeckCopies == 3 ? 0.76f : 0.84f);
+	const float LeadInSeconds = bInitialCardDealIsMultiplayer ? 0.18f : 0.32f;
+	const float RevealStaggerSeconds = 0.045f;
+	const float RevealMoveDuration = FMath::Max(0.1f, InitialDealCardMoveDuration);
+	const float RevealHoldSeconds = 0.85f;
+	const float FlipDuration = 0.28f;
+	const float FlipStaggerSeconds = 0.025f;
+	const float GatherDuration = 0.42f;
+	const float GatherStaggerSeconds = 0.025f;
+
+	for (int32 CardIndex = 0; CardIndex < CardCount; ++CardIndex)
+	{
+		const FTransform StackTransform = BuildInitialCardStackTransform(CardIndex);
+		ACard* Card = GetWorld()->SpawnActor<ACard>(CardClass, StackTransform);
+		if (!Card)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Failed to spawn opening deck card %d/%d."), CardIndex + 1, CardCount);
+			TFunction<void()> SavedContinuation = MoveTemp(InitialCardDealPresentationContinuation);
+			ClearInitialCardDealPresentation();
+			InitialCardDealPresentationContinuation = MoveTemp(SavedContinuation);
+			if (TryImmediateInitialCardDealFallback())
+			{
+				FinishInitialCardDealPresentation();
+			}
+			else
+			{
+				StopInitialCardDealOnFailure(TEXT("opening card spawn and immediate fallback failed"));
+			}
+			return;
+		}
+
+		Card->SetCard((CardIndex % 7) + 1);
+		// The number is configured once. From this point on, only physical card
+		// rotation decides whether the front or back can be seen.
+		Card->SetFaceUp(true);
+		Card->SetSelectable(false);
+		Card->SetHandOwnerSlot(EShowDownPlayerSlot::None);
+		Card->MoveToPresentationTransform(StackTransform, GridVisualScale, 0.12f, 0.0f, false);
+		InitialCardDealDeckCards.Add(Card);
+
+		const FTransform GridTransform = BuildInitialCardGridTransform(CardIndex, InitialCardDealDeckCopies, false);
+		const TWeakObjectPtr<ACard> WeakCard(Card);
+		ScheduleInitialCardDealAction(LeadInSeconds + CardIndex * RevealStaggerSeconds,
+			[WeakCard, GridTransform, GridVisualScale, RevealMoveDuration]()
+			{
+				if (ACard* LiveCard = WeakCard.Get())
+				{
+					LiveCard->MoveToPresentationTransform(
+						GridTransform,
+						GridVisualScale,
+						RevealMoveDuration,
+						24.0f,
+						false,
+						true);
+				}
+			});
+	}
+
+	const float RevealFinishedAt = LeadInSeconds
+		+ FMath::Max(0, CardCount - 1) * RevealStaggerSeconds
+		+ RevealMoveDuration;
+	const float FlipStartedAt = RevealFinishedAt + RevealHoldSeconds;
+	for (int32 CardIndex = 0; CardIndex < InitialCardDealDeckCards.Num(); ++CardIndex)
+	{
+		const TWeakObjectPtr<ACard> WeakCard(InitialCardDealDeckCards[CardIndex]);
+		const FTransform FaceDownGridTransform = BuildInitialCardGridTransform(CardIndex, InitialCardDealDeckCopies, true);
+		ScheduleInitialCardDealAction(FlipStartedAt + CardIndex * FlipStaggerSeconds,
+			[WeakCard, FaceDownGridTransform, GridVisualScale, FlipDuration]()
+			{
+				if (ACard* LiveCard = WeakCard.Get())
+				{
+					LiveCard->MoveToPresentationTransform(
+						FaceDownGridTransform,
+						GridVisualScale,
+						FlipDuration,
+						0.0f,
+						false,
+						true);
+				}
+			});
+	}
+
+	const float FlipFinishedAt = FlipStartedAt
+		+ FMath::Max(0, CardCount - 1) * FlipStaggerSeconds
+		+ FlipDuration;
+	const float GatherStartedAt = FlipFinishedAt + 0.12f;
+	for (int32 CardIndex = 0; CardIndex < InitialCardDealDeckCards.Num(); ++CardIndex)
+	{
+		const TWeakObjectPtr<ACard> WeakCard(InitialCardDealDeckCards[CardIndex]);
+		const FTransform StackTransform = BuildInitialCardStackTransform(CardIndex);
+		ScheduleInitialCardDealAction(GatherStartedAt + CardIndex * GatherStaggerSeconds,
+			[WeakCard, StackTransform, GridVisualScale, GatherDuration]()
+			{
+				if (ACard* LiveCard = WeakCard.Get())
+				{
+					LiveCard->MoveToPresentationTransform(
+						StackTransform,
+						GridVisualScale,
+						GatherDuration,
+						30.0f,
+						false);
+				}
+			});
+	}
+
+	const float GatherFinishedAt = GatherStartedAt
+		+ FMath::Max(0, CardCount - 1) * GatherStaggerSeconds
+		+ GatherDuration;
+	ScheduleInitialCardDealAction(GatherFinishedAt + 0.12f, [this]()
+	{
+		StartInitialCardDealFromStack();
+	});
+}
+
+void AShowDownGameModeBase::StartInitialCardDealFromStack()
+{
+	if (!bInitialCardDealPresentationInProgress)
+	{
+		return;
+	}
+
+	TArray<ACard*> CardsInDealOrder;
+	TArray<FTransform> FlatTransforms;
+	TArray<FTransform> FinalTransforms;
+	int32 ParticipantCount = 0;
+	const bool bPrepared = bInitialCardDealIsMultiplayer
+		? PrepareMultiplayerOpeningHands(CardsInDealOrder, FlatTransforms, FinalTransforms, ParticipantCount)
+		: PrepareSinglePlayerOpeningHands(CardsInDealOrder, FlatTransforms, FinalTransforms, ParticipantCount);
+
+	if (!bPrepared)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Initial card presentation hand preparation failed. Falling back to the immediate deal."));
+		TFunction<void()> SavedContinuation = MoveTemp(InitialCardDealPresentationContinuation);
+		ClearInitialCardDealPresentation();
+		InitialCardDealPresentationContinuation = MoveTemp(SavedContinuation);
+		if (TryImmediateInitialCardDealFallback())
+		{
+			FinishInitialCardDealPresentation();
+		}
+		else
+		{
+			StopInitialCardDealOnFailure(TEXT("hand preparation and immediate fallback failed"));
+		}
+		return;
+	}
+
+	AnimatePreparedOpeningHands(CardsInDealOrder, FlatTransforms, FinalTransforms, ParticipantCount);
+}
+
+bool AShowDownGameModeBase::PrepareSinglePlayerOpeningHands(
+	TArray<ACard*>& OutCardsInDealOrder,
+	TArray<FTransform>& OutFlatTransforms,
+	TArray<FTransform>& OutFinalTransforms,
+	int32& OutParticipantCount)
+{
+	USceneComponent* PlayerHandSlot = GetHandSlotForSide(EShowDownSide::Player);
+	USceneComponent* CollectorHandSlot = GetHandSlotForSide(EShowDownSide::Collector);
+	if (!CardSystem || !PlayerHandSlot || !CollectorHandSlot || InitialCardDealDeckCards.Num() < HandCount * 2)
+	{
+		return false;
+	}
+
+	const TArray<USceneComponent*> HandSlots = { PlayerHandSlot, CollectorHandSlot };
+	const TArray<FSDCardHandLayoutSettings> HandLayouts = {
+		ResolveHandLayoutSettings(EShowDownSide::Player),
+		ResolveHandLayoutSettings(EShowDownSide::Collector)
+	};
+	TArray<TArray<int32>> RanksByParticipant;
+	RanksByParticipant.SetNum(2);
+	CardSystem->ResetDeck(2);
+	CardSystem->ShuffleDeck();
+	for (int32 CardIndex = 0; CardIndex < HandCount; ++CardIndex)
+	{
+		for (int32 ParticipantIndex = 0; ParticipantIndex < 2; ++ParticipantIndex)
+		{
+			TArray<int32> DealtRank;
+			if (!CardSystem->DealCards(1, DealtRank) || DealtRank.Num() != 1)
+			{
+				return false;
+			}
+			RanksByParticipant[ParticipantIndex].Add(DealtRank[0]);
+		}
+	}
+
+	PlayerState.HandCards.Reset();
+	CollectorState.HandCards.Reset();
+	OutParticipantCount = 2;
+	for (int32 CardIndex = 0; CardIndex < HandCount; ++CardIndex)
+	{
+		for (int32 ParticipantIndex = 0; ParticipantIndex < 2; ++ParticipantIndex)
+		{
+			const int32 Rank = RanksByParticipant[ParticipantIndex][CardIndex];
+			const int32 DeckCardIndex = InitialCardDealDeckCards.IndexOfByPredicate([Rank](const TObjectPtr<ACard>& Card)
+			{
+				return IsValid(Card) && Card->Rank == Rank;
+			});
+			if (DeckCardIndex == INDEX_NONE)
+			{
+				return false;
+			}
+
+			ACard* Card = InitialCardDealDeckCards[DeckCardIndex];
+			InitialCardDealDeckCards.RemoveAt(DeckCardIndex);
+			Card->SetSelectable(false);
+			Card->SetHandOwnerSlot(EShowDownPlayerSlot::None);
+			if (ParticipantIndex == 0)
+			{
+				PlayerState.HandCards.Add(Card);
+			}
+			else
+			{
+				CollectorState.HandCards.Add(Card);
+			}
+
+			OutCardsInDealOrder.Add(Card);
+			OutFlatTransforms.Add(BuildInitialFlatCardTransform(HandSlots[ParticipantIndex], CardIndex, HandCount));
+			OutFinalTransforms.Add(CardSystem->BuildHandCardTransform(
+				HandSlots[ParticipantIndex],
+				HandLayouts[ParticipantIndex],
+				CardIndex,
+				HandCount));
+		}
+	}
+
+	ApplyCardMotionForSide(EShowDownSide::Player, PlayerState.HandCards);
+	ApplyCardMotionForSide(EShowDownSide::Collector, CollectorState.HandCards);
+	UE_LOG(LogTemp, Log, TEXT("Single player opening deck: 14 cards shown, 10 cards dealt round-robin."));
+	return OutCardsInDealOrder.Num() == HandCount * OutParticipantCount;
+}
+
+bool AShowDownGameModeBase::PrepareMultiplayerOpeningHands(
+	TArray<ACard*>& OutCardsInDealOrder,
+	TArray<FTransform>& OutFlatTransforms,
+	TArray<FTransform>& OutFinalTransforms,
+	int32& OutParticipantCount)
+{
+	if (!CardSystem)
+	{
+		return false;
+	}
+
+	TArray<ASDPlayerState*> Participants;
+	TArray<USceneComponent*> HandSlots;
+	TArray<FSDCardHandLayoutSettings> HandLayouts;
+	for (ASDPlayerState* Player : MultiplayerPlayers)
+	{
+		if (!Player || Player->Lives <= 0)
+		{
+			continue;
+		}
+
+		USceneComponent* HandSlot = GetHandSlotForPlayerState(Player);
+		if (!HandSlot)
+		{
+			return false;
+		}
+		Participants.Add(Player);
+		HandSlots.Add(HandSlot);
+		HandLayouts.Add(ResolveHandLayoutSettingsForPlayerState(Player));
+	}
+
+	OutParticipantCount = Participants.Num();
+	if (OutParticipantCount < 2 || OutParticipantCount > 4
+		|| InitialCardDealDeckCards.Num() < HandCount * OutParticipantCount)
+	{
+		return false;
+	}
+
+	TArray<TArray<int32>> RanksByParticipant;
+	RanksByParticipant.SetNum(OutParticipantCount);
+	CardSystem->ResetDeck(OutParticipantCount);
+	CardSystem->ShuffleDeck();
+	for (int32 CardIndex = 0; CardIndex < HandCount; ++CardIndex)
+	{
+		for (int32 ParticipantIndex = 0; ParticipantIndex < OutParticipantCount; ++ParticipantIndex)
+		{
+			TArray<int32> DealtRank;
+			if (!CardSystem->DealCards(1, DealtRank) || DealtRank.Num() != 1)
+			{
+				return false;
+			}
+			RanksByParticipant[ParticipantIndex].Add(DealtRank[0]);
+		}
+	}
+
+	for (ASDPlayerState* Player : Participants)
+	{
+		Player->ClearHand();
+		Player->CurrentBet = 0;
+	}
+
+	for (int32 CardIndex = 0; CardIndex < HandCount; ++CardIndex)
+	{
+		for (int32 ParticipantIndex = 0; ParticipantIndex < OutParticipantCount; ++ParticipantIndex)
+		{
+			ASDPlayerState* Player = Participants[ParticipantIndex];
+			const int32 Rank = RanksByParticipant[ParticipantIndex][CardIndex];
+			const int32 DeckCardIndex = InitialCardDealDeckCards.IndexOfByPredicate([Rank](const TObjectPtr<ACard>& Card)
+			{
+				return IsValid(Card) && Card->Rank == Rank;
+			});
+			if (DeckCardIndex == INDEX_NONE)
+			{
+				return false;
+			}
+
+			ACard* Card = InitialCardDealDeckCards[DeckCardIndex];
+			InitialCardDealDeckCards.RemoveAt(DeckCardIndex);
+			Card->SetSelectable(false);
+			Card->SetHandOwnerSlot(Player->ShowDownSlot);
+			Player->AddHandCard(Card);
+			OutCardsInDealOrder.Add(Card);
+			OutFlatTransforms.Add(BuildInitialFlatCardTransform(HandSlots[ParticipantIndex], CardIndex, HandCount));
+			OutFinalTransforms.Add(CardSystem->BuildHandCardTransform(
+				HandSlots[ParticipantIndex],
+				HandLayouts[ParticipantIndex],
+				CardIndex,
+				HandCount));
+		}
+	}
+
+	for (int32 ParticipantIndex = 0; ParticipantIndex < Participants.Num(); ++ParticipantIndex)
+	{
+		ASDPlayerState* Player = Participants[ParticipantIndex];
+		ApplyCardMotionForPlayerState(Player, Player->HandCards);
+		Player->ForceNetUpdate();
+	}
+	UE_LOG(LogTemp, Log, TEXT("Multiplayer opening deck: %d cards shown, %d cards dealt round-robin."),
+		OutParticipantCount * 7,
+		OutParticipantCount * HandCount);
+	return OutCardsInDealOrder.Num() == HandCount * OutParticipantCount;
+}
+
+void AShowDownGameModeBase::AnimatePreparedOpeningHands(
+	const TArray<ACard*>& CardsInDealOrder,
+	const TArray<FTransform>& FlatTransforms,
+	const TArray<FTransform>& FinalTransforms,
+	int32 ParticipantCount)
+{
+	if (ParticipantCount <= 0
+		|| CardsInDealOrder.Num() != FlatTransforms.Num()
+		|| CardsInDealOrder.Num() != FinalTransforms.Num())
+	{
+		StopInitialCardDealOnFailure(TEXT("prepared hand animation data was inconsistent"));
+		return;
+	}
+
+	const float StackVisualScale = InitialCardDealDeckCopies >= 4
+		? 0.68f
+		: (InitialCardDealDeckCopies == 3 ? 0.76f : 0.84f);
+	for (int32 DeckIndex = 0; DeckIndex < InitialCardDealDeckCards.Num(); ++DeckIndex)
+	{
+		if (ACard* DeckCard = InitialCardDealDeckCards[DeckIndex])
+		{
+			DeckCard->MoveToPresentationTransform(
+				BuildInitialCardStackTransform(DeckIndex),
+				StackVisualScale,
+				0.12f,
+				0.0f,
+				false);
+		}
+	}
+	for (int32 DealIndex = 0; DealIndex < CardsInDealOrder.Num(); ++DealIndex)
+	{
+		if (ACard* DealCard = CardsInDealOrder[DealIndex])
+		{
+			// The first card dealt is physically the top card. This short hidden
+			// restack prevents a shuffled rank from appearing to pass through the pile.
+			const int32 StackIndex = InitialCardDealDeckCards.Num() + CardsInDealOrder.Num() - 1 - DealIndex;
+			DealCard->MoveToPresentationTransform(
+				BuildInitialCardStackTransform(StackIndex),
+				StackVisualScale,
+				0.12f,
+				0.0f,
+				false);
+		}
+	}
+
+	const float DealLeadInSeconds = 0.18f;
+	const float DealStaggerSeconds = 0.105f;
+	const float DealMoveDuration = FMath::Max(0.1f, InitialDealCardMoveDuration);
+	for (int32 DealIndex = 0; DealIndex < CardsInDealOrder.Num(); ++DealIndex)
+	{
+		const TWeakObjectPtr<ACard> WeakCard(CardsInDealOrder[DealIndex]);
+		const FTransform FlatTransform = FlatTransforms[DealIndex];
+		ScheduleInitialCardDealAction(DealLeadInSeconds + DealIndex * DealStaggerSeconds,
+			[WeakCard, FlatTransform, DealMoveDuration]()
+			{
+				if (ACard* LiveCard = WeakCard.Get())
+				{
+					LiveCard->MoveToPresentationTransform(
+						FlatTransform,
+						1.0f,
+						DealMoveDuration,
+						34.0f,
+						true);
+				}
+			});
+	}
+
+	const float FlatDealFinishedAt = DealLeadInSeconds
+		+ FMath::Max(0, CardsInDealOrder.Num() - 1) * DealStaggerSeconds
+		+ DealMoveDuration;
+	const float LiftStartedAt = FlatDealFinishedAt + 0.38f;
+	const float LiftStepSeconds = 0.22f;
+	const float LiftMoveDuration = DealMoveDuration * 1.15f;
+	const int32 CardsPerParticipant = CardsInDealOrder.Num() / ParticipantCount;
+	for (int32 CardIndex = 0; CardIndex < CardsPerParticipant; ++CardIndex)
+	{
+		const float StartDelay = LiftStartedAt + CardIndex * LiftStepSeconds;
+		for (int32 ParticipantIndex = 0; ParticipantIndex < ParticipantCount; ++ParticipantIndex)
+		{
+			const int32 DealIndex = CardIndex * ParticipantCount + ParticipantIndex;
+			if (!CardsInDealOrder.IsValidIndex(DealIndex))
+			{
+				continue;
+			}
+
+			const TWeakObjectPtr<ACard> WeakCard(CardsInDealOrder[DealIndex]);
+			const FTransform FinalTransform = FinalTransforms[DealIndex];
+			ScheduleInitialCardDealAction(StartDelay,
+				[WeakCard, FinalTransform, LiftMoveDuration]()
+				{
+					if (ACard* LiveCard = WeakCard.Get())
+					{
+						LiveCard->MoveToPresentationTransform(
+							FinalTransform,
+							1.0f,
+							LiftMoveDuration,
+							42.0f,
+							true);
+					}
+				});
+		}
+	}
+
+	const float LiftFinishedAt = LiftStartedAt
+		+ FMath::Max(0, CardsPerParticipant - 1) * LiftStepSeconds
+		+ LiftMoveDuration;
+	TArray<TWeakObjectPtr<ACard>> WeakCardsInDealOrder;
+	WeakCardsInDealOrder.Reserve(CardsInDealOrder.Num());
+	for (ACard* Card : CardsInDealOrder)
+	{
+		WeakCardsInDealOrder.Add(Card);
+	}
+	ScheduleInitialCardDealAction(LiftFinishedAt + 0.26f,
+		[this, WeakCardsInDealOrder, FinalTransforms]()
+		{
+			for (int32 CardIndex = 0; CardIndex < WeakCardsInDealOrder.Num(); ++CardIndex)
+			{
+				if (ACard* Card = WeakCardsInDealOrder[CardIndex].Get())
+				{
+					Card->MoveToHandTransform(FinalTransforms[CardIndex]);
+				}
+			}
+			FinishInitialCardDealPresentation();
+		});
+}
+
+void AShowDownGameModeBase::FinishInitialCardDealPresentation()
+{
+	TFunction<void()> Continuation = MoveTemp(InitialCardDealPresentationContinuation);
+	for (ACard* Card : InitialCardDealDeckCards)
+	{
+		if (IsValid(Card))
+		{
+			Card->Destroy();
+		}
+	}
+	InitialCardDealDeckCards.Reset();
+	for (FTimerHandle& TimerHandle : InitialCardDealPresentationTimerHandles)
+	{
+		GetWorldTimerManager().ClearTimer(TimerHandle);
+	}
+	InitialCardDealPresentationTimerHandles.Reset();
+	bInitialCardDealPresentationInProgress = false;
+	bInitialCardDealPresentationPlayed = true;
+	bInitialCardDealShowcaseStarted = false;
+	InitialCardDealCameraReadySlots.Reset();
+	SetInitialCardDealInputLocked(false);
+	UE_LOG(LogTemp, Log, TEXT("Initial card deal presentation completed."));
+
+	if (Continuation)
+	{
+		Continuation();
+	}
+}
+
+void AShowDownGameModeBase::ClearInitialCardDealPresentation(bool bDestroyDeckCards)
+{
+	const bool bWasInProgress = bInitialCardDealPresentationInProgress;
+	for (FTimerHandle& TimerHandle : InitialCardDealPresentationTimerHandles)
+	{
+		GetWorldTimerManager().ClearTimer(TimerHandle);
+	}
+	InitialCardDealPresentationTimerHandles.Reset();
+	if (bDestroyDeckCards)
+	{
+		for (ACard* Card : InitialCardDealDeckCards)
+		{
+			if (IsValid(Card))
+			{
+				Card->Destroy();
+			}
+		}
+	}
+	InitialCardDealDeckCards.Reset();
+	InitialCardDealPresentationContinuation = TFunction<void()>();
+	bInitialCardDealPresentationInProgress = false;
+	bInitialCardDealShowcaseStarted = false;
+	InitialCardDealCameraReadySlots.Reset();
+	bInitialCardSpatialCacheValid = false;
+	CachedInitialCardReferenceHandSlot.Reset();
+	if (bWasInProgress)
+	{
+		SetInitialCardDealInputLocked(false);
+	}
+}
+
+void AShowDownGameModeBase::ScheduleInitialCardDealAction(float DelaySeconds, TFunction<void()>&& Action)
+{
+	if (!Action)
+	{
+		return;
+	}
+	if (DelaySeconds <= KINDA_SMALL_NUMBER)
+	{
+		Action();
+		return;
+	}
+
+	FTimerHandle TimerHandle;
+	FTimerDelegate TimerDelegate;
+	TimerDelegate.BindWeakLambda(this, [Action = MoveTemp(Action)]() mutable
+	{
+		if (Action)
+		{
+			Action();
+		}
+	});
+	GetWorldTimerManager().SetTimer(TimerHandle, TimerDelegate, DelaySeconds, false);
+	InitialCardDealPresentationTimerHandles.Add(TimerHandle);
+}
+
+FTransform AShowDownGameModeBase::BuildInitialCardGridTransform(int32 CardIndex, int32 DeckCopies, bool bFaceDown) const
+{
+	const int32 SafeCopies = FMath::Clamp(DeckCopies, 2, 4);
+	const int32 ColumnIndex = FMath::Clamp(CardIndex % 7, 0, 6);
+	const int32 RowIndex = FMath::Clamp(CardIndex / 7, 0, SafeCopies - 1);
+	const FVector TableCenter = bInitialCardSpatialCacheValid
+		? CachedInitialCardTableCenter
+		: ResolveSingleTableCenter(GetWorld());
+	USceneComponent* ReferenceHandSlot = bInitialCardSpatialCacheValid
+		? CachedInitialCardReferenceHandSlot.Get()
+		: GetHandSlotForSide(EShowDownSide::Player);
+
+	FVector TowardTableCenter = ReferenceHandSlot
+		? TableCenter - ReferenceHandSlot->GetComponentLocation()
+		: FVector::ForwardVector;
+	TowardTableCenter.Z = 0.0f;
+	TowardTableCenter = TowardTableCenter.GetSafeNormal();
+	if (TowardTableCenter.IsNearlyZero())
+	{
+		TowardTableCenter = FVector::ForwardVector;
+	}
+	const FVector GridRight = FVector::CrossProduct(FVector::UpVector, TowardTableCenter).GetSafeNormal();
+	const FVector TowardPlayer = -TowardTableCenter;
+	const float ColumnFromCenter = static_cast<float>(ColumnIndex) - 3.0f;
+	const float RowFromCenter = static_cast<float>(RowIndex) - static_cast<float>(SafeCopies - 1) * 0.5f;
+	FVector Location = TableCenter
+		+ TowardPlayer * 120.0f
+		+ GridRight * (ColumnFromCenter * 52.0f)
+		+ TowardPlayer * (RowFromCenter * 68.0f);
+	Location.Z = ResolveInitialCardTableSurfaceZ() + 2.2f + CardIndex * 0.015f;
+	return FTransform(BuildInitialFlatCardRotation(TowardTableCenter, bFaceDown), Location);
+}
+
+FTransform AShowDownGameModeBase::BuildInitialCardStackTransform(int32 StackIndex) const
+{
+	const FVector TableCenter = bInitialCardSpatialCacheValid
+		? CachedInitialCardTableCenter
+		: ResolveSingleTableCenter(GetWorld());
+	USceneComponent* ReferenceHandSlot = bInitialCardSpatialCacheValid
+		? CachedInitialCardReferenceHandSlot.Get()
+		: GetHandSlotForSide(EShowDownSide::Player);
+
+	FVector TowardTableCenter = ReferenceHandSlot
+		? TableCenter - ReferenceHandSlot->GetComponentLocation()
+		: FVector::ForwardVector;
+	TowardTableCenter.Z = 0.0f;
+	TowardTableCenter = TowardTableCenter.GetSafeNormal();
+	if (TowardTableCenter.IsNearlyZero())
+	{
+		TowardTableCenter = FVector::ForwardVector;
+	}
+	FVector Location = ResolveInitialCardDeckTop();
+	Location.Z += 0.8f + FMath::Max(0, StackIndex) * 0.16f;
+	return FTransform(BuildInitialFlatCardRotation(TowardTableCenter, true), Location);
+}
+
+FTransform AShowDownGameModeBase::BuildInitialFlatCardTransform(
+	USceneComponent* HandSlot,
+	int32 CardIndex,
+	int32 CardCount) const
+{
+	if (!HandSlot || CardCount <= 0)
+	{
+		return FTransform::Identity;
+	}
+
+	const FVector TableCenter = bInitialCardSpatialCacheValid
+		? CachedInitialCardTableCenter
+		: ResolveSingleTableCenter(GetWorld());
+	FVector TowardTableCenter = TableCenter - HandSlot->GetComponentLocation();
+	TowardTableCenter.Z = 0.0f;
+	const float HandDistanceFromCenter = TowardTableCenter.Size();
+	TowardTableCenter = TowardTableCenter.GetSafeNormal();
+	if (TowardTableCenter.IsNearlyZero())
+	{
+		TowardTableCenter = HandSlot->GetForwardVector().GetSafeNormal2D();
+	}
+	if (TowardTableCenter.IsNearlyZero())
+	{
+		TowardTableCenter = FVector::ForwardVector;
+	}
+
+	const float CardFromCenter = static_cast<float>(CardIndex) - static_cast<float>(CardCount - 1) * 0.5f;
+	const float HalfCount = FMath::Max(1.0f, static_cast<float>(CardCount - 1) * 0.5f);
+	const float FanAngle = (CardFromCenter / HalfCount) * InitialDealFlatCardFanAngle;
+	const FVector CardLongAxis = FQuat(FVector::UpVector, FMath::DegreesToRadians(FanAngle))
+		.RotateVector(TowardTableCenter)
+		.GetSafeNormal();
+	const FVector CardRight = FVector::CrossProduct(FVector::UpVector, TowardTableCenter).GetSafeNormal();
+	// Keep every flat fan inside its own outer table sector. Side-seat pawn hand
+	// components can sit only ~100 units from centre, so using the full authored
+	// distance would make the P3/P4 fans cross through each other at the deck.
+	const float SafeFlatDistance = FMath::Min(
+		InitialDealFlatCardDistance,
+		FMath::Max(0.0f, HandDistanceFromCenter * 0.25f));
+	FVector Location = HandSlot->GetComponentLocation()
+		+ TowardTableCenter * SafeFlatDistance
+		+ CardRight * (CardFromCenter * InitialDealFlatCardSpacing)
+		+ TowardTableCenter * (FMath::Abs(CardFromCenter) * 2.0f);
+	Location.Z = ResolveInitialCardTableSurfaceZ() + 2.2f + CardIndex * 0.12f;
+	return FTransform(BuildInitialFlatCardRotation(CardLongAxis, true), Location);
+}
+
+FQuat AShowDownGameModeBase::BuildInitialFlatCardRotation(const FVector& TowardTableCenter, bool bFaceDown) const
+{
+	FVector CardLongAxis = TowardTableCenter.GetSafeNormal2D();
+	if (CardLongAxis.IsNearlyZero())
+	{
+		CardLongAxis = FVector::ForwardVector;
+	}
+	// BP_Card's authored front normal is actor -X (after the mesh component's
+	// relative rotation), so face-up places -X toward world up.
+	const FQuat FaceUpRotation = FRotationMatrix::MakeFromXZ(-FVector::UpVector, CardLongAxis).ToQuat();
+	return bFaceDown
+		? (FaceUpRotation * FQuat(FVector::UpVector, PI)).GetNormalized()
+		: FaceUpRotation;
+}
+
+FVector AShowDownGameModeBase::ResolveInitialCardDeckTop() const
+{
+	if (bInitialCardDeckBoundsCacheValid)
+	{
+		return CachedInitialCardDeckTop;
+	}
+
+	if (UWorld* World = GetWorld())
+	{
+		for (TActorIterator<AStaticMeshActor> It(World); It; ++It)
+		{
+			const UStaticMeshComponent* MeshComponent = It->GetStaticMeshComponent();
+			const UStaticMesh* StaticMesh = MeshComponent ? MeshComponent->GetStaticMesh() : nullptr;
+			if (StaticMesh && StaticMesh->GetPathName() == TEXT("/Game/Fab/Table/CardDec.CardDec"))
+			{
+				const FBoxSphereBounds Bounds = MeshComponent->Bounds;
+				CachedInitialCardDeckTop = FVector(Bounds.Origin.X, Bounds.Origin.Y, Bounds.Origin.Z + Bounds.BoxExtent.Z);
+				CachedInitialCardTableSurfaceZ = Bounds.Origin.Z - Bounds.BoxExtent.Z;
+				bInitialCardDeckBoundsCacheValid = true;
+				return CachedInitialCardDeckTop;
+			}
+		}
+	}
+	const FVector FallbackCenter = bInitialCardSpatialCacheValid
+		? CachedInitialCardTableCenter
+		: ResolveSingleTableCenter(GetWorld());
+	CachedInitialCardDeckTop = FallbackCenter;
+	CachedInitialCardTableSurfaceZ = FallbackCenter.Z;
+	bInitialCardDeckBoundsCacheValid = true;
+	return CachedInitialCardDeckTop;
+}
+
+float AShowDownGameModeBase::ResolveInitialCardTableSurfaceZ() const
+{
+	if (!bInitialCardDeckBoundsCacheValid)
+	{
+		ResolveInitialCardDeckTop();
+	}
+	if (bInitialCardDeckBoundsCacheValid)
+	{
+		return CachedInitialCardTableSurfaceZ;
+	}
+	return bInitialCardSpatialCacheValid
+		? CachedInitialCardTableCenter.Z
+		: ResolveSingleTableCenter(GetWorld()).Z;
 }
 
 void AShowDownGameModeBase::FindCollector()
@@ -4247,6 +5165,8 @@ void AShowDownGameModeBase::StartMultiplayerMatch(const TArray<ASDPlayerState*>&
 {
 	ClearMultiplayerRoundTimers();
 	ClearCardRevealPresentationTimers();
+	ClearInitialCardDealPresentation();
+	bInitialCardDealPresentationPlayed = false;
 	ClearMultiplayerForeheadCards();
 	ClearMultiplayerHands();
 	ClearLooseMultiplayerCards();
@@ -4286,7 +5206,7 @@ void AShowDownGameModeBase::StartMultiplayerMatch(const TArray<ASDPlayerState*>&
 		ShowDownGameState->SetMatchMode(EShowDownMatchMode::Multiplayer);
 		ShowDownGameState->CurrentStage = 1;
 		ShowDownGameState->CurrentRound = 1;
-		ShowDownGameState->SetPhase(EShowDownPhase::SelectCard);
+		ShowDownGameState->SetPhase(EShowDownPhase::None);
 	}
 
 	// The lobby leaves its controller in UI-only mode. This client RPC runs on
@@ -4304,10 +5224,13 @@ void AShowDownGameModeBase::StartMultiplayerMatch(const TArray<ASDPlayerState*>&
 	}
 
 	EnsureMultiplayerPawns();
-	DealMultiplayerHands();
-
-	if (MultiplayerPlayers.Num() >= 2)
+	auto StartFirstDuel = [this]()
 	{
+		if (MultiplayerPlayers.Num() < 2)
+		{
+			return;
+		}
+
 		ASDPlayerState* InitialFirstPlayer = MultiplayerPlayers[0];
 		for (ASDPlayerState* Player : MultiplayerPlayers)
 		{
@@ -4319,6 +5242,16 @@ void AShowDownGameModeBase::StartMultiplayerMatch(const TArray<ASDPlayerState*>&
 		}
 
 		StartMultiplayerDuel(InitialFirstPlayer, FindNextAliveMultiplayerPlayer(InitialFirstPlayer));
+	};
+
+	if (bUseInitialCardDealPresentation && !bInitialCardDealPresentationPlayed)
+	{
+		StartInitialCardDealPresentation(MultiplayerPlayers.Num(), true, MoveTemp(StartFirstDuel));
+	}
+	else
+	{
+		DealMultiplayerHands();
+		StartFirstDuel();
 	}
 }
 
@@ -4749,6 +5682,15 @@ void AShowDownGameModeBase::HandleMultiplayerPlayerDisconnected(ASDPlayerState* 
 		return;
 	}
 
+	const bool bRestartInitialDealAfterDisconnect = bInitialCardDealPresentationInProgress;
+	if (bRestartInitialDealAfterDisconnect)
+	{
+		// Cancel every pending weak/raw movement callback before any owned card is
+		// destroyed. The surviving players receive a fresh deck sized to the new
+		// participant count below.
+		ClearInitialCardDealPresentation();
+	}
+
 	const EShowDownPlayerSlot LeavingSlot = LeavingPlayer->ShowDownSlot;
 	for (ACard* Card : LeavingPlayer->HandCards)
 	{
@@ -4835,6 +5777,34 @@ void AShowDownGameModeBase::HandleMultiplayerPlayerDisconnected(ASDPlayerState* 
 		return;
 	}
 
+	if (bRestartInitialDealAfterDisconnect)
+	{
+		ClearMultiplayerHands();
+		ClearLooseMultiplayerCards();
+		bInitialCardDealPresentationPlayed = false;
+		TFunction<void()> StartRestartedFirstDuel = [this]()
+		{
+			ASDPlayerState* FirstPlayer = nullptr;
+			for (ASDPlayerState* Player : MultiplayerPlayers)
+			{
+				if (Player && Player->Lives > 0 && (!FirstPlayer || Player->bHostPlayer))
+				{
+					FirstPlayer = Player;
+					if (Player->bHostPlayer)
+					{
+						break;
+					}
+				}
+			}
+			if (FirstPlayer)
+			{
+				StartMultiplayerDuel(FirstPlayer, FindNextAliveMultiplayerPlayer(FirstPlayer));
+			}
+		};
+		StartInitialCardDealPresentation(MultiplayerPlayers.Num(), true, MoveTemp(StartRestartedFirstDuel));
+		return;
+	}
+
 	if (bMultiplayerRoundResolving)
 	{
 		return;
@@ -4911,7 +5881,14 @@ void AShowDownGameModeBase::StartMultiplayerCardSelection()
 
 void AShowDownGameModeBase::HandleMultiplayerSelectedCard(ASDPlayerState* SubmittingPlayer, ACard* SelectedCard)
 {
-	if (!SubmittingPlayer || !SelectedCard || !CardSystem)
+	const AShowDownGameStateBase* CurrentGameState = GetShowDownGameState();
+	if (bInitialCardDealPresentationInProgress
+		|| !CurrentGameState
+		|| CurrentGameState->CurrentPhase != EShowDownPhase::SelectCard
+		|| !SubmittingPlayer
+		|| !SelectedCard
+		|| !SelectedCard->IsCardSelectable()
+		|| !CardSystem)
 	{
 		return;
 	}
@@ -6279,9 +7256,19 @@ void AShowDownGameModeBase::StartStage(int32 StageIndex)
 		ShowDownGameState->OnStageChanged.Broadcast(CurrentStageIndex + 1);
 	}
 
-	DealInitialHand();
 	ShowEventDebugMessage(FString::Printf(TEXT("스테이지 %d 시작"), CurrentStageIndex + 1));
-	BeginCardSelectionRound();
+	if (bUseInitialCardDealPresentation && !bInitialCardDealPresentationPlayed)
+	{
+		StartInitialCardDealPresentation(2, false, [this]()
+		{
+			BeginCardSelectionRound();
+		});
+	}
+	else
+	{
+		DealInitialHand();
+		BeginCardSelectionRound();
+	}
 
 	UE_LOG(LogTemp, Log, TEXT("Stage %d started. Lives: %d, MinBet: %d, Collector Bluff: %.2f, Aggression: %.2f"),
 		CurrentStageIndex + 1,
