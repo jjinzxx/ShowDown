@@ -12,6 +12,7 @@ class UBoxComponent;
 class USceneComponent;
 class UStaticMesh;
 class UStaticMeshComponent;
+class UMaterialInterface;
 class UTextRenderComponent;
 
 UENUM(BlueprintType)
@@ -43,6 +44,12 @@ struct FSDBetActionPanelState
 
 	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions")
 	int32 TableBet = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions")
+	int32 LoadedBulletCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions")
+	int32 SelectedRaiseTarget = 1;
 
 	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions")
 	int32 MinRaiseTarget = 1;
@@ -80,29 +87,27 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions")
 	TSubclassOf<ASDBetActionButtonActor> ButtonActorClass;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions", meta = (ClampMin = "0.1", ClampMax = "2.0"))
 	float PanelVisualScale = 0.35f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions", meta = (ClampMin = "1.0"))
 	float ButtonHeight = 12.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions", meta = (ClampMin = "1.0"))
 	float PrimaryButtonWidth = 46.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions", meta = (ClampMin = "1.0"))
 	float RaiseButtonWidth = 58.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions", meta = (ClampMin = "1.0"))
 	float StepButtonWidth = 18.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions", meta = (ClampMin = "1.0"))
 	float FoldButtonWidth = 46.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions")
 	float TopRowHeight = 7.5f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions")
 	float BottomRowHeight = -7.0f;
+
+	float BulletSpacing = 10.0f;
+
+	float BulletPreviewScale = 0.08f;
+
+	FVector BulletRowOffset = FVector(0.0f, 0.0f, 18.0f);
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Bet Actions")
 	void SetPanelState(const FSDBetActionPanelState& NewState);
@@ -124,7 +129,9 @@ private:
 	static constexpr int32 ButtonCount = 5;
 
 	void EnsureButtons();
+	void EnsureBulletPreview();
 	void RefreshVisuals();
+	void RefreshBulletPreview(bool bVisible);
 	void RefreshSelectedRaiseTarget();
 	void AdjustSelectedRaiseTarget(int32 Delta);
 	int32 GetDefaultRaiseTarget() const;
@@ -141,6 +148,21 @@ private:
 
 	UPROPERTY()
 	TArray<TObjectPtr<ASDBetActionButtonActor>> ButtonActors;
+
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> BulletPreviewMeshes;
+
+	UPROPERTY()
+	TArray<TObjectPtr<UMaterialInstanceDynamic>> BulletPreviewMaterials;
+
+	UPROPERTY()
+	TObjectPtr<UStaticMesh> BulletPreviewMeshAsset;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInterface> BulletPreviewNormalMaterial;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInterface> BulletPreviewTintMaterial;
 
 	int32 SelectedRaiseTarget = 1;
 	int32 LastSeenRevision = INDEX_NONE;

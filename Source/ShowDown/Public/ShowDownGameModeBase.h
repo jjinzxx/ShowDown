@@ -153,6 +153,8 @@ public:
 
 	void PlayerSelectedCardFromController(AController* SubmittingController, ACard* SelectedCard);
 
+	void SetMultiplayerRaisePreviewTarget(ASDPlayerState* SubmittingPlayer, int32 TargetBet);
+
 	// 베팅 단계 시작
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Betting")
 	void StartBettingPhase();
@@ -273,35 +275,51 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (ClampMin = "0.1", ClampMax = "2.0", DisplayName = "Action Panel Visual Scale"))
 	float BetActionPanelVisualScale = 0.35f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (ClampMin = "1.0", DisplayName = "Button Height"))
+	float BetActionButtonHeight = 12.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (ClampMin = "1.0", DisplayName = "Check Call Button Width"))
+	float BetActionPrimaryButtonWidth = 46.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (ClampMin = "1.0", DisplayName = "Raise Button Width"))
+	float BetActionRaiseButtonWidth = 58.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (ClampMin = "1.0", DisplayName = "Minus Plus Button Width"))
+	float BetActionStepButtonWidth = 18.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (ClampMin = "1.0", DisplayName = "Fold Button Width"))
+	float BetActionFoldButtonWidth = 46.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (DisplayName = "Raise Row Height"))
+	float BetActionRaiseRowHeight = 7.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (DisplayName = "Fold Check Call Row Height"))
+	float BetActionPrimaryRowHeight = -7.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (ClampMin = "0.1", DisplayName = "Bullet Spacing"))
+	float BetActionBulletSpacing = 10.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (ClampMin = "0.001", DisplayName = "Bullet Mesh Scale"))
+	float BetActionBulletScale = 0.08f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Bet Actions", meta = (DisplayName = "Bullet Row Offset"))
+	FVector BetActionBulletRowOffset = FVector(0.0f, 0.0f, 18.0f);
+
 	bool bUseCardRevealPresentation = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0"))
 	float CardRevealLeadInSeconds = 0.12f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0"))
 	float CardRevealStepSeconds = 0.24f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0"))
 	float CardRevealHoldSeconds = 0.8f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0"))
-	float CardRevealForwardDistance = 42.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal")
-	float CardRevealTableYaw = 0.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (DisplayName = "Height"))
 	float CardRevealHeightOffset = 10.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0", DisplayName = "Card Reveal Depth Spacing"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0", DisplayName = "Spacing"))
 	float CardRevealSideSpacing = 10.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.1"))
 	float CardRevealVisualScale = 1.12f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal")
-	FRotator CardRevealRotationOffset = FRotator::ZeroRotator;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro")
 	bool bPlaySinglePlayerIntro = true;
@@ -424,6 +442,9 @@ private:
 	TSet<TObjectPtr<ASDPlayerState>> MultiplayerPlayersActed;
 
 	UPROPERTY()
+	TSet<TObjectPtr<ASDPlayerState>> MultiplayerRoundSpectators;
+
+	UPROPERTY()
 	TSet<TObjectPtr<ASDPlayerState>> MultiplayerRestartVotes;
 
 	FTimerHandle MultiplayerStartTimerHandle;
@@ -444,6 +465,12 @@ private:
 	bool bPendingSelfShotLiveRound = false;
 	EShowDownSide PendingSelfShotTargetSide = EShowDownSide::Player;
 	int32 BetActionPanelRevision = 0;
+	int32 BetActionPanelSelectedRaiseTarget = 1;
+	EShowDownPlayerSlot BetActionPanelPreviewTurnSlot = EShowDownPlayerSlot::None;
+	int32 MultiplayerLiveRoundCount = 0;
+	int32 MultiplayerRemainingChamberCount = 6;
+	int32 MultiplayerSharedChamberIndex = 0;
+	TArray<bool> MultiplayerSharedChambers;
 	bool bHasBetBulletAction = false;
 	bool bBetBulletActionIsMultiplayer = false;
 	EShowDownSide BetBulletActionSide = EShowDownSide::Player;
@@ -598,7 +625,10 @@ private:
 	void ContinueMultiplayerRoundAfterReveal(TArray<ASDPlayerState*> RevealedPlayers, TArray<ASDPlayerState*> Winners);
 	void FinishMultiplayerRoundByFold(ASDPlayerState* FoldedPlayer);
 	void ContinueMultiplayerRoundAfterFoldReveal(ASDPlayerState* FoldedPlayer, int32 LoadCount);
-	float ApplyMultiplayerRoulette(ASDPlayerState* TargetPlayer, int32 BulletCount, float StartDelay = 0.0f);
+	void InitializeMultiplayerSharedChambers();
+	bool ResolveNextMultiplayerSharedChamber();
+	void RefreshCentralGunStatus();
+	float ApplyMultiplayerRoulette(ASDPlayerState* TargetPlayer, int32 BulletCount, float StartDelay = 0.0f, bool bUseSharedChambers = false);
 	void EndMultiplayerRound();
 	void ShowMultiplayerFinalRanking(ASDPlayerState* Winner);
 	void SetMultiplayerSelectableHand(ASDPlayerState* Player);

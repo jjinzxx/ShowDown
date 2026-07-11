@@ -4,6 +4,7 @@
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -52,6 +53,29 @@ ASDBetActionPanelActor::ASDBetActionPanelActor()
 
 	Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 	SetRootComponent(Root);
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> BulletMeshFinder(TEXT("/Game/Fab/Revolver/bulletBetting.bulletBetting"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> BulletMaterialFinder(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+	BulletPreviewMeshAsset = BulletMeshFinder.Succeeded() ? BulletMeshFinder.Object : nullptr;
+	BulletPreviewNormalMaterial = BulletPreviewMeshAsset ? BulletPreviewMeshAsset->GetMaterial(0) : nullptr;
+	BulletPreviewTintMaterial = BulletMaterialFinder.Succeeded() ? BulletMaterialFinder.Object : nullptr;
+	for (int32 BulletIndex = 0; BulletIndex < 6; ++BulletIndex)
+	{
+		UStaticMeshComponent* BulletMesh = CreateDefaultSubobject<UStaticMeshComponent>(
+			*FString::Printf(TEXT("RaiseBulletPreview%d"), BulletIndex + 1));
+		BulletMesh->SetupAttachment(Root);
+		BulletMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		BulletMesh->SetCastShadow(false);
+		if (BulletPreviewMeshAsset)
+		{
+			BulletMesh->SetStaticMesh(BulletPreviewMeshAsset);
+		}
+		if (BulletPreviewNormalMaterial)
+		{
+			BulletMesh->SetMaterial(0, BulletPreviewNormalMaterial);
+		}
+		BulletPreviewMeshes.Add(BulletMesh);
+	}
 }
 
 void ASDBetActionPanelActor::BeginPlay()
@@ -72,9 +96,7 @@ void ASDBetActionPanelActor::Tick(float DeltaSeconds)
 	}
 
 	const EShowDownPlayerSlot CurrentLocalPlayerSlot = ResolveLocalPlayerSlot();
-	const bool bShouldBeVisible =
-		PanelState.TurnSlot != EShowDownPlayerSlot::None
-		&& CurrentLocalPlayerSlot == PanelState.TurnSlot;
+	const bool bShouldBeVisible = PanelState.TurnSlot != EShowDownPlayerSlot::None;
 
 	if (CurrentLocalPlayerSlot != LastResolvedLocalPlayerSlot || bShouldBeVisible == IsHidden())
 	{
@@ -165,18 +187,34 @@ void ASDBetActionPanelActor::EnsureButtons()
 	}
 }
 
+void ASDBetActionPanelActor::EnsureBulletPreview()
+{
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	BulletPreviewMaterials.SetNum(BulletPreviewMeshes.Num());
+	for (int32 BulletIndex = 0; BulletIndex < BulletPreviewMeshes.Num(); ++BulletIndex)
+	{
+		if (BulletPreviewMeshes[BulletIndex] && !BulletPreviewMaterials[BulletIndex] && BulletPreviewTintMaterial)
+		{
+			BulletPreviewMaterials[BulletIndex] = UMaterialInstanceDynamic::Create(BulletPreviewTintMaterial, this);
+		}
+	}
+}
+
 void ASDBetActionPanelActor::RefreshVisuals()
 {
 	EnsureButtons();
+	EnsureBulletPreview();
 	RefreshSelectedRaiseTarget();
 
 	LastResolvedLocalPlayerSlot = ResolveLocalPlayerSlot();
-	const bool bPanelVisible =
-		PanelState.bVisible
-		&& PanelState.TurnSlot != EShowDownPlayerSlot::None
-		&& LastResolvedLocalPlayerSlot == PanelState.TurnSlot;
+	const bool bPanelVisible = PanelState.bVisible && PanelState.TurnSlot != EShowDownPlayerSlot::None;
 	SetActorHiddenInGame(!bPanelVisible);
 	SetActorTickEnabled(PanelState.bVisible);
+	RefreshBulletPreview(bPanelVisible);
 
 	for (ESDBetActionPanelButtonKind ButtonKind : ButtonKinds)
 	{
@@ -197,6 +235,56 @@ void ASDBetActionPanelActor::RefreshVisuals()
 	}
 }
 
+void ASDBetActionPanelActor::RefreshBulletPreview(bool bVisible)
+{
+	const float LayoutScale = FMath::Max(0.1f, PanelVisualScale);
+	const int32 LoadedCount = FMath::Clamp(PanelState.LoadedBulletCount, 0, 6);
+	const int32 RaiseTarget = FMath::Clamp(SelectedRaiseTarget, LoadedCount, 6);
+	const FRotator PanelRotation = PanelState.WorldRotation;
+	const FVector RightDirection = FRotationMatrix(PanelRotation).GetUnitAxis(EAxis::Y);
+	const FVector BulletRowWorldOffset = PanelRotation.RotateVector(BulletRowOffset * LayoutScale);
+
+	for (int32 BulletIndex = 0; BulletIndex < BulletPreviewMeshes.Num(); ++BulletIndex)
+	{
+		UStaticMeshComponent* BulletMesh = BulletPreviewMeshes[BulletIndex];
+		if (!BulletMesh)
+		{
+			continue;
+		}
+
+		const bool bAlreadyLoaded = BulletIndex < LoadedCount;
+		const bool bPendingRaise = BulletIndex >= LoadedCount && BulletIndex < RaiseTarget;
+		const FLinearColor BulletColor = bAlreadyLoaded
+			? FLinearColor(0.78f, 0.54f, 0.18f, 1.0f)
+			: (bPendingRaise
+				? FLinearColor(1.0f, 0.025f, 0.015f, 1.0f)
+				: FLinearColor(0.22f, 0.72f, 1.0f, 0.24f));
+
+		BulletMesh->SetVisibility(bVisible, true);
+		// The panel faces the viewer from the opposite side of its local right
+		// axis, so reverse the visual slot index to fill left-to-right on screen.
+		const int32 VisualSlotIndex = BulletPreviewMeshes.Num() - 1 - BulletIndex;
+		BulletMesh->SetWorldLocationAndRotation(
+			PanelState.WorldLocation
+				+ BulletRowWorldOffset
+				+ RightDirection * ((static_cast<float>(VisualSlotIndex) - 2.5f) * BulletSpacing * LayoutScale),
+			PanelRotation + FRotator(-90.0f, 0.0f, 0.0f));
+		const float BulletScale = FMath::Max(0.001f, BulletPreviewScale) * (LayoutScale / 0.35f);
+		BulletMesh->SetWorldScale3D(FVector(BulletScale));
+		if (bAlreadyLoaded && BulletPreviewNormalMaterial)
+		{
+			BulletMesh->SetMaterial(0, BulletPreviewNormalMaterial);
+		}
+		else if (BulletPreviewMaterials.IsValidIndex(BulletIndex) && BulletPreviewMaterials[BulletIndex])
+		{
+			BulletMesh->SetMaterial(0, BulletPreviewMaterials[BulletIndex]);
+			BulletPreviewMaterials[BulletIndex]->SetVectorParameterValue(TEXT("Color"), BulletColor);
+			BulletPreviewMaterials[BulletIndex]->SetVectorParameterValue(TEXT("BaseColor"), BulletColor);
+			BulletPreviewMaterials[BulletIndex]->SetScalarParameterValue(TEXT("Opacity"), BulletColor.A);
+		}
+	}
+}
+
 void ASDBetActionPanelActor::RefreshSelectedRaiseTarget()
 {
 	const int32 ClampedTarget = ClampRaiseTarget(SelectedRaiseTarget);
@@ -208,7 +296,9 @@ void ASDBetActionPanelActor::RefreshSelectedRaiseTarget()
 
 	if (bStateChanged || ClampedTarget != SelectedRaiseTarget)
 	{
-		SelectedRaiseTarget = GetDefaultRaiseTarget();
+		SelectedRaiseTarget = PanelState.SelectedRaiseTarget > 0
+			? ClampRaiseTarget(PanelState.SelectedRaiseTarget)
+			: GetDefaultRaiseTarget();
 	}
 
 	LastSeenRevision = PanelState.Revision;
@@ -221,6 +311,13 @@ void ASDBetActionPanelActor::AdjustSelectedRaiseTarget(int32 Delta)
 {
 	SelectedRaiseTarget = ClampRaiseTarget(SelectedRaiseTarget + Delta);
 	RefreshVisuals();
+	if (PanelState.bMultiplayer)
+	{
+		if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(UGameplayStatics::GetPlayerController(this, 0)))
+		{
+			PlayerController->RequestRaisePreviewTarget(SelectedRaiseTarget);
+		}
+	}
 }
 
 int32 ASDBetActionPanelActor::GetDefaultRaiseTarget() const
@@ -253,14 +350,12 @@ EShowDownPlayerSlot ASDBetActionPanelActor::ResolveLocalPlayerSlot() const
 
 bool ASDBetActionPanelActor::IsPanelVisibleForLocalPlayer() const
 {
-	return PanelState.bVisible
-		&& PanelState.TurnSlot != EShowDownPlayerSlot::None
-		&& ResolveLocalPlayerSlot() == PanelState.TurnSlot;
+	return PanelState.bVisible && PanelState.TurnSlot != EShowDownPlayerSlot::None;
 }
 
 bool ASDBetActionPanelActor::CanPressButton(ESDBetActionPanelButtonKind ButtonKind) const
 {
-	if (!IsPanelVisibleForLocalPlayer())
+	if (!IsPanelVisibleForLocalPlayer() || ResolveLocalPlayerSlot() != PanelState.TurnSlot)
 	{
 		return false;
 	}
@@ -335,23 +430,23 @@ FTransform ASDBetActionPanelActor::BuildButtonTransform(ESDBetActionPanelButtonK
 	const FVector2D FoldSize = GetButtonSize(ESDBetActionPanelButtonKind::Fold);
 	const FVector2D StepSize = GetButtonSize(ESDBetActionPanelButtonKind::RaiseDown);
 	const FVector2D RaiseSize = GetButtonSize(ESDBetActionPanelButtonKind::RaiseSubmit);
-	const float BottomGap = 6.0f * LayoutScale;
-	const float BottomTotalWidth = StepSize.X + BottomGap + RaiseSize.X + BottomGap + StepSize.X;
-	const float TopGap = FMath::Max(6.0f * LayoutScale, BottomTotalWidth - FoldSize.X - PrimarySize.X);
-	const float RaiseStepOffset = (RaiseSize.X * 0.5f) + BottomGap + (StepSize.X * 0.5f);
+	const float RowGap = 6.0f * LayoutScale;
+	const float RaiseTotalWidth = StepSize.X + RowGap + RaiseSize.X + RowGap + StepSize.X;
+	const float ActionGap = FMath::Max(6.0f * LayoutScale, RaiseTotalWidth - FoldSize.X - PrimarySize.X);
+	const float RaiseStepOffset = (RaiseSize.X * 0.5f) + RowGap + (StepSize.X * 0.5f);
 
 	float RightOffset = 0.0f;
-	float HeightOffset = BottomRowHeight;
+	float HeightOffset = TopRowHeight;
 
 	switch (ButtonKind)
 	{
 	case ESDBetActionPanelButtonKind::Primary:
-		RightOffset = -((FoldSize.X + TopGap) * 0.5f);
-		HeightOffset = TopRowHeight;
+		RightOffset = (FoldSize.X + ActionGap) * 0.5f;
+		HeightOffset = BottomRowHeight;
 		break;
 	case ESDBetActionPanelButtonKind::Fold:
-		RightOffset = (PrimarySize.X + TopGap) * 0.5f;
-		HeightOffset = TopRowHeight;
+		RightOffset = -((PrimarySize.X + ActionGap) * 0.5f);
+		HeightOffset = BottomRowHeight;
 		break;
 	case ESDBetActionPanelButtonKind::RaiseDown:
 		RightOffset = RaiseStepOffset;

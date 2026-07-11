@@ -15,6 +15,7 @@ class UPointLightComponent;
 class USceneComponent;
 class USoundBase;
 class UStaticMeshComponent;
+class UWidgetComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FSDSelfShotGunEvent);
 
@@ -98,6 +99,24 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Timing")
 	float GetPresentationFinishDelay(bool bLiveRound) const;
 
+	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Status")
+	void SetTableStatus(int32 LiveRounds, int32 RemainingChambers, EShowDownPhase Phase, EShowDownPlayerSlot TurnSlot);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Ammo Status Display")
+	FVector AmmoStatusWorldOffset = FVector(0.0f, 0.0f, 12.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Ammo Status Display", meta = (ClampMin = "32.0"))
+	FVector2D AmmoStatusDrawSize = FVector2D(260.0f, 100.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Ammo Status Display", meta = (ClampMin = "8", ClampMax = "160"))
+	int32 AmmoStatusFontSize = 48;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Ammo Status Display")
+	FLinearColor AmmoStatusTextColor = FLinearColor(1.0f, 0.82f, 0.25f, 1.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Ammo Status Display")
+	FLinearColor AmmoStatusBackgroundColor = FLinearColor(0.0f, 0.0f, 0.0f, 0.68f);
+
 	bool TryResolveCharacterPresentationShot(
 		const AShowDownCharacter* TargetCharacter,
 		FVector& OutSourceLocation,
@@ -123,11 +142,37 @@ public:
 	FSDSelfShotGunEvent OnGunPresentationFinished;
 
 protected:
+	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
+	UFUNCTION()
+	void OnRep_TableStatus();
+
+	void ApplyAmmoStatusDisplaySettings();
+	void UpdateAmmoStatusAnchorLocation();
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<USceneComponent> SceneRoot;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<USceneComponent> AmmoStatusAnchor;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<UWidgetComponent> AmmoStatusWidgetComponent;
+
+	UPROPERTY(ReplicatedUsing = OnRep_TableStatus, BlueprintReadOnly, Category = "Self Shot Gun|Status")
+	int32 StatusLiveRounds = 0;
+
+	UPROPERTY(ReplicatedUsing = OnRep_TableStatus, BlueprintReadOnly, Category = "Self Shot Gun|Status")
+	int32 StatusRemainingChambers = 6;
+
+	UPROPERTY(ReplicatedUsing = OnRep_TableStatus, BlueprintReadOnly, Category = "Self Shot Gun|Status")
+	EShowDownPhase StatusPhase = EShowDownPhase::None;
+
+	UPROPERTY(ReplicatedUsing = OnRep_TableStatus, BlueprintReadOnly, Category = "Self Shot Gun|Status")
+	EShowDownPlayerSlot StatusTurnSlot = EShowDownPlayerSlot::None;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UStaticMeshComponent> GunMesh;

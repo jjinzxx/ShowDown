@@ -105,6 +105,9 @@ public:
 	void RequestPlayerRaiseTo(int32 BulletCount);
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Betting")
+	void RequestRaisePreviewTarget(int32 BulletCount);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Betting")
 	void RequestPlayerFold();
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Multiplayer")
@@ -307,6 +310,9 @@ public:
 
 	UFUNCTION(Server, Reliable)
 	void ServerPlayerRaiseTo(int32 BulletCount);
+
+	UFUNCTION(Server, Unreliable)
+	void ServerSetRaisePreviewTarget(int32 BulletCount);
 
 	UFUNCTION(Server, Reliable)
 	void ServerPlayerFold();

@@ -1718,7 +1718,8 @@ void AShowDownGameModeBase::ConfigureMultiplayerCharacters(const TArray<ASDPlaye
 			EShowDownCharacterRole::Player,
 			Player->ShowDownSlot,
 			GetNetworkPlayerDisplayName(Player));
-		AssignedCharacter->SetCharacterSceneActive(Player->Lives > 0);
+		AssignedCharacter->SetCharacterSceneActive(
+			Player->Lives > 0 && !MultiplayerRoundSpectators.Contains(Player));
 	}
 
 	for (AShowDownCharacter* Character : Characters)
@@ -1749,7 +1750,9 @@ void AShowDownGameModeBase::RefreshMultiplayerCharacterVisibility()
 	{
 		if (IsValid(Player) && Player->ShowDownSlot != EShowDownPlayerSlot::None)
 		{
-			AliveBySlot.Add(Player->ShowDownSlot, Player->Lives > 0);
+			AliveBySlot.Add(
+				Player->ShowDownSlot,
+				Player->Lives > 0 && !MultiplayerRoundSpectators.Contains(Player));
 		}
 	}
 
@@ -3154,13 +3157,37 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation()
 				: Player->GetPlayerName();
 			LaneState.BulletCount = FMath::Clamp(Player->CurrentBet, 0, 6);
 			LaneState.bFolded = MultiplayerFoldedPlayers.Contains(Player);
+			const EShowDownPhase CurrentPhase = GetShowDownGameState()
+				? GetShowDownGameState()->CurrentPhase
+				: EShowDownPhase::None;
 			LaneState.bCurrentTurn = bBettingPhase
 				&& !bMultiplayerRoundResolving
 				&& MultiplayerCurrentBetter == Player
 				&& !LaneState.bFolded
 				&& !bHasBetBulletRouletteTarget;
 
-			if (bHasBetBulletAction
+			if (CurrentPhase == EShowDownPhase::SelectCard)
+			{
+				LaneState.BulletCount = 0;
+				LaneState.ActionText = Player->ForeheadCard ? TEXT("READY") : TEXT("SELECTING");
+				LaneState.bCurrentTurn = false;
+			}
+			else if (CurrentPhase == EShowDownPhase::Reveal)
+			{
+				LaneState.ActionText = LaneState.bFolded ? TEXT("FOLD") : TEXT("REVEAL");
+				LaneState.bCurrentTurn = false;
+			}
+			else if (CurrentPhase == EShowDownPhase::Roulette)
+			{
+				const bool bFiringNow = GetShowDownGameState()
+					&& GetShowDownGameState()->NameTagTurnSlot == Player->ShowDownSlot;
+				LaneState.ActionText = bFiringNow ? TEXT("FIRING") : TEXT("WAIT");
+				LaneState.bCurrentTurn = bFiringNow;
+				LaneState.BulletCount = MultiplayerLiveRoundCount;
+			}
+
+			if (CurrentPhase == EShowDownPhase::Betting
+				&& bHasBetBulletAction
 				&& bBetBulletActionIsMultiplayer
 				&& BetBulletActionSlot == Player->ShowDownSlot)
 			{
@@ -3257,6 +3284,7 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation()
 		}
 	}
 	RefreshBetActionPanel();
+	RefreshCentralGunStatus();
 }
 
 void AShowDownGameModeBase::ClearBetActionPanel()
@@ -3280,6 +3308,25 @@ void AShowDownGameModeBase::ClearBetActionPanel()
 	PanelActor->SetPanelState(EmptyState);
 }
 
+void AShowDownGameModeBase::SetMultiplayerRaisePreviewTarget(ASDPlayerState* SubmittingPlayer, int32 TargetBet)
+{
+	if (!HasAuthority()
+		|| !bMultiplayerMatchStarted
+		|| !bBettingPhase
+		|| bMultiplayerRoundResolving
+		|| !SubmittingPlayer
+		|| SubmittingPlayer != MultiplayerCurrentBetter
+		|| MultiplayerFoldedPlayers.Contains(SubmittingPlayer))
+	{
+		return;
+	}
+
+	const int32 TableBet = BettingSystem ? BettingSystem->GetCurrentBet() : SubmittingPlayer->CurrentBet;
+	BetActionPanelSelectedRaiseTarget = FMath::Clamp(TargetBet, FMath::Clamp(TableBet + 1, 1, 6), 6);
+	BetActionPanelPreviewTurnSlot = SubmittingPlayer->ShowDownSlot;
+	RefreshBetActionPanel();
+}
+
 void AShowDownGameModeBase::RefreshBetActionPanel()
 {
 	if (!HasAuthority())
@@ -3299,6 +3346,16 @@ void AShowDownGameModeBase::RefreshBetActionPanel()
 		return;
 	}
 	PanelActor->PanelVisualScale = FMath::Max(0.1f, BetActionPanelVisualScale);
+	PanelActor->ButtonHeight = FMath::Max(1.0f, BetActionButtonHeight);
+	PanelActor->PrimaryButtonWidth = FMath::Max(1.0f, BetActionPrimaryButtonWidth);
+	PanelActor->RaiseButtonWidth = FMath::Max(1.0f, BetActionRaiseButtonWidth);
+	PanelActor->StepButtonWidth = FMath::Max(1.0f, BetActionStepButtonWidth);
+	PanelActor->FoldButtonWidth = FMath::Max(1.0f, BetActionFoldButtonWidth);
+	PanelActor->TopRowHeight = BetActionRaiseRowHeight;
+	PanelActor->BottomRowHeight = BetActionPrimaryRowHeight;
+	PanelActor->BulletSpacing = FMath::Max(0.1f, BetActionBulletSpacing);
+	PanelActor->BulletPreviewScale = FMath::Max(0.001f, BetActionBulletScale);
+	PanelActor->BulletRowOffset = BetActionBulletRowOffset;
 
 	FSDBetActionPanelState NewState;
 	NewState.Revision = ++BetActionPanelRevision;
@@ -3324,7 +3381,18 @@ void AShowDownGameModeBase::RefreshBetActionPanel()
 			? FMath::Clamp(MultiplayerCurrentBetter->CurrentBet, 0, 6)
 			: 0;
 		NewState.TableBet = FMath::Clamp(TableBet, 0, 6);
+		NewState.LoadedBulletCount = FMath::Clamp(MultiplayerLiveRoundCount, 0, 6);
 		NewState.MinRaiseTarget = FMath::Clamp(NewState.TableBet + 1, 1, NewState.MaxRaiseTarget);
+		if (NewState.TurnSlot != BetActionPanelPreviewTurnSlot)
+		{
+			BetActionPanelPreviewTurnSlot = NewState.TurnSlot;
+			BetActionPanelSelectedRaiseTarget = NewState.MinRaiseTarget;
+		}
+		BetActionPanelSelectedRaiseTarget = FMath::Clamp(
+			BetActionPanelSelectedRaiseTarget,
+			NewState.MinRaiseTarget,
+			NewState.MaxRaiseTarget);
+		NewState.SelectedRaiseTarget = BetActionPanelSelectedRaiseTarget;
 		NewState.bCanRaise = bCurrentPlayerCanAct && BettingRaisesLeft > 0 && NewState.TableBet < NewState.MaxRaiseTarget;
 		NewState.bCanFold = bCurrentPlayerCanAct;
 
@@ -3354,7 +3422,9 @@ void AShowDownGameModeBase::RefreshBetActionPanel()
 		NewState.TurnSlot = bPlayerCanAct ? EShowDownPlayerSlot::Player1 : EShowDownPlayerSlot::None;
 		NewState.CurrentPlayerBet = FMath::Clamp(PlayerState.CurrentBet, 0, 6);
 		NewState.TableBet = FMath::Clamp(TableBet, 0, 6);
+		NewState.LoadedBulletCount = NewState.TableBet;
 		NewState.MinRaiseTarget = FMath::Clamp(NewState.TableBet + 1, 1, NewState.MaxRaiseTarget);
+		NewState.SelectedRaiseTarget = NewState.MinRaiseTarget;
 		NewState.bCanRaise = bPlayerCanAct && BettingRaisesLeft > 0 && NewState.TableBet < NewState.MaxRaiseTarget;
 		NewState.bCanFold = bPlayerCanAct;
 
@@ -3544,6 +3614,16 @@ float AShowDownGameModeBase::PlaySinglePlayerCardRevealPresentation()
 float AShowDownGameModeBase::PlayMultiplayerCardRevealPresentation(const TArray<ASDPlayerState*>& RevealedPlayers)
 {
 	TArray<ASDPlayerState*> OrderedPlayers = RevealedPlayers;
+	// Folding removes a player from the showdown result, but it must not hide
+	// their card from the round's reveal presentation.
+	for (ASDPlayerState* FoldedPlayer : MultiplayerFoldedPlayers)
+	{
+		if (FoldedPlayer && FoldedPlayer->ForeheadCard)
+		{
+			OrderedPlayers.AddUnique(FoldedPlayer);
+		}
+	}
+	RefreshCentralGunStatus();
 	OrderedPlayers.Sort(SortByMultiplayerTurnOrder);
 
 	TArray<ACard*> RevealCards;
@@ -3646,14 +3726,13 @@ FTransform AShowDownGameModeBase::BuildCardRevealPresentationTransform(
 	}
 
 	const FVector TableCenter = ResolveSingleTableCenter(GetWorld());
-	const FRotator TableRotation(0.0f, CardRevealTableYaw, 0.0f);
-	const FVector ForwardDirection = FRotationMatrix(TableRotation).GetUnitAxis(EAxis::X);
-	const float CenteredIndex = static_cast<float>(CardIndex) - (static_cast<float>(CardCount) - 1.0f) * 0.5f;
+	const float CenteredIndex =
+		static_cast<float>(CardIndex) - (static_cast<float>(CardCount) - 1.0f) * 0.5f;
 	const FVector RevealLocation =
 		TableCenter
-		+ ForwardDirection * (CardRevealForwardDistance + CardRevealSideSpacing * CenteredIndex)
+		+ FVector::RightVector * CardRevealSideSpacing * CenteredIndex
 		+ FVector::UpVector * CardRevealHeightOffset;
-	const FQuat RevealRotation = (TableRotation.Quaternion() * CardRevealRotationOffset.Quaternion()).GetNormalized();
+	const FQuat RevealRotation = FQuat::Identity;
 
 	return FTransform(RevealRotation, RevealLocation, Card->GetActorScale3D());
 }
@@ -4559,6 +4638,7 @@ void AShowDownGameModeBase::StartMultiplayerDuel(ASDPlayerState* FirstPlayer, AS
 	MultiplayerLastCheckedPlayer = nullptr;
 	MultiplayerFoldedPlayers.Reset();
 	MultiplayerPlayersActed.Reset();
+	MultiplayerRoundSpectators.Reset();
 	bMultiplayerRoundResolving = false;
 
 	if (!AreAllAliveMultiplayerPlayersReadyToReveal())
@@ -4778,6 +4858,9 @@ void AShowDownGameModeBase::StartMultiplayerCardSelection()
 			EShowDownSide::Player,
 			EShowDownPlayerSlot::None);
 	}
+	MultiplayerLiveRoundCount = 0;
+	MultiplayerRemainingChamberCount = 6;
+	RefreshBetBulletPresentation();
 
 	NotifyMultiplayerStatus(TEXT("모든 플레이어가 동시에 카드를 선택합니다. 전원이 고르면 베팅을 시작합니다."));
 }
@@ -4816,6 +4899,7 @@ void AShowDownGameModeBase::HandleMultiplayerSelectedCard(ASDPlayerState* Submit
 	}
 	SubmittingPlayer->ForceNetUpdate();
 	BroadcastMultiplayerCardSelectedAction(SubmittingPlayer);
+	RefreshBetBulletPresentation();
 
 	Receiver->ForeheadCard = SelectedCard;
 	Receiver->ForceNetUpdate();
@@ -4848,6 +4932,10 @@ void AShowDownGameModeBase::StartMultiplayerBetting()
 {
 	bBettingPhase = true;
 	const int32 MinimumBet = StageRules.Num() > 0 ? StageRules[0].MinimumBet : 1;
+	MultiplayerLiveRoundCount = FMath::Clamp(MinimumBet, 1, 6);
+	MultiplayerRemainingChamberCount = 6;
+	MultiplayerSharedChamberIndex = 0;
+	MultiplayerSharedChambers.Reset();
 	if (BettingSystem)
 	{
 		BettingSystem->ResetBetting(MinimumBet);
@@ -4883,6 +4971,7 @@ void AShowDownGameModeBase::StartMultiplayerBetting()
 	}
 	ClearBetBulletTransientState();
 	RefreshBetBulletPresentation();
+	RefreshCentralGunStatus();
 
 	NotifyMultiplayerStatus(FString::Printf(
 		TEXT("베팅 시작. %s부터 행동합니다. Q=체크/콜, E=레이즈, R=폴드"),
@@ -4894,7 +4983,12 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 	EShowDownBetAction Action,
 	int32 TargetBet)
 {
-	if (!SubmittingPlayer || SubmittingPlayer != MultiplayerCurrentBetter || bMultiplayerRoundResolving)
+	if (!SubmittingPlayer
+		|| !bBettingPhase
+		|| SubmittingPlayer != MultiplayerCurrentBetter
+		|| bMultiplayerRoundResolving
+		|| SubmittingPlayer->Lives <= 0
+		|| MultiplayerFoldedPlayers.Contains(SubmittingPlayer))
 	{
 		return;
 	}
@@ -4987,6 +5081,9 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 		}
 
 		SubmittingPlayer->CurrentBet = NewBet;
+		MultiplayerLiveRoundCount = NewBet;
+		MultiplayerRemainingChamberCount = 6;
+		MultiplayerSharedChambers.Reset();
 		BettingRaisesLeft = FMath::Max(0, BettingRaisesLeft - 1);
 		MultiplayerPlayersActed.Reset();
 		MultiplayerPlayersActed.Add(SubmittingPlayer);
@@ -5000,6 +5097,7 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 				ShowDownGameState->SetNameTagPlayerLoadedBulletCount(SubmittingPlayer->ShowDownSlot, SubmittingPlayer->CurrentBet);
 			}
 			RecordMultiplayerBetBulletAction(SubmittingPlayer, EShowDownBetAction::Raise);
+			RefreshCentralGunStatus();
 			MultiplayerCurrentBetter = FindNextActivePlayer(SubmittingPlayer);
 			if (CountActiveMultiplayerPlayers() <= 1 || !MultiplayerCurrentBetter)
 			{
@@ -5033,19 +5131,28 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 			BroadcastMultiplayerBetActionCommitted(SubmittingPlayer, EShowDownBetAction::Fold, SubmittingPlayer->CurrentBet);
 			RecordMultiplayerBetBulletAction(SubmittingPlayer, EShowDownBetAction::Fold);
 
-			const int32 FoldedRank = SubmittingPlayer->ForeheadCard ? SubmittingPlayer->ForeheadCard->Rank : 0;
-		const FShowDownStageRule* StageRule = GetCurrentStageRule();
-		const bool bSevenFoldLoadsSix = StageRule ? StageRule->bSevenFoldLoadsSix : true;
-		const int32 LoadCount = RoundResolver
-			? RoundResolver->GetFoldLoadCount(FoldedRank, SubmittingPlayer->CurrentBet, bSevenFoldLoadsSix)
-			: SubmittingPlayer->CurrentBet;
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 		{
 				ShowDownGameState->SetNameTagPlayerLoadedBulletCount(SubmittingPlayer->ShowDownSlot, SubmittingPlayer->CurrentBet);
-				ShowDownGameState->SetNameTagRoundStatus(SubmittingPlayer->CurrentBet, EShowDownSide::Player, EShowDownPlayerSlot::None);
+				ShowDownGameState->SetNameTagRoundStatus(MultiplayerLiveRoundCount, EShowDownSide::Player, EShowDownPlayerSlot::None);
 			}
 			RefreshBetBulletPresentation();
-			const float RouletteDelay = ApplyMultiplayerRoulette(SubmittingPlayer, LoadCount);
+			if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+			{
+				ShowDownGameState->SetPhase(EShowDownPhase::Reveal);
+			}
+			RefreshCentralGunStatus();
+			TArray<ACard*> FoldRevealCards;
+			if (SubmittingPlayer->ForeheadCard)
+			{
+				FoldRevealCards.Add(SubmittingPlayer->ForeheadCard);
+			}
+			const float FoldRevealDelay = PlayCardRevealPresentation(FoldRevealCards);
+			const float RouletteDelay = ApplyMultiplayerRoulette(
+				SubmittingPlayer,
+				MultiplayerLiveRoundCount,
+				FoldRevealDelay,
+				false);
 		const auto ContinueAfterRoulette = [this, SubmittingPlayer, CurrentBet, FindNextActivePlayer]()
 		{
 			MultiplayerNextFirstPlayer = SubmittingPlayer;
@@ -5059,6 +5166,7 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 
 			if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 			{
+					ShowDownGameState->SetPhase(EShowDownPhase::Betting);
 					ShowDownGameState->SetNameTagRoundStatus(
 						CurrentBet,
 						EShowDownSide::Player,
@@ -5135,7 +5243,7 @@ void AShowDownGameModeBase::FinishMultiplayerRoundByReveal()
 		ShowDownGameState->SetPhase(EShowDownPhase::Reveal);
 		ShowDownGameState->OnCardsRevealed.Broadcast(HighestRank, LowestRank == TNumericLimits<int32>::Max() ? 0 : LowestRank);
 	}
-
+	RefreshBetBulletPresentation();
 	const float RevealPresentationSeconds = PlayMultiplayerCardRevealPresentation(RevealedPlayers);
 	if (RevealPresentationSeconds > KINDA_SMALL_NUMBER)
 	{
@@ -5196,14 +5304,21 @@ void AShowDownGameModeBase::ContinueMultiplayerRoundAfterReveal(
 		}
 		else if (bAllRevealedPlayersTied)
 		{
-			RouletteTargets = RevealedPlayers;
-			NotifyMultiplayerStatus(TEXT("공개 결과: 전원 동점. 모두 룰렛을 돌립니다."));
+			// A full tie is safe for everyone.
+			NotifyMultiplayerStatus(TEXT("공개 결과: 전원 동점. 격발 없이 라운드를 종료합니다."));
 		}
 		else
 		{
 			NotifyMultiplayerStatus(FString::Printf(TEXT("공개 결과: %s 승리."), *WinnerNames));
-			for (ASDPlayerState* Player : RevealedPlayers)
+			TArray<ASDPlayerState*> OrderedPlayers = RevealedPlayers;
+			OrderedPlayers.Sort(SortByMultiplayerTurnOrder);
+			TArray<ASDPlayerState*> OrderedWinners = Winners;
+			OrderedWinners.Sort(SortByMultiplayerTurnOrder);
+			ASDPlayerState* RepresentativeWinner = OrderedWinners.Num() > 0 ? OrderedWinners[0] : nullptr;
+			const int32 WinnerIndex = OrderedPlayers.IndexOfByKey(RepresentativeWinner);
+			for (int32 Offset = 1; Offset <= OrderedPlayers.Num(); ++Offset)
 			{
+				ASDPlayerState* Player = OrderedPlayers[(FMath::Max(0, WinnerIndex) + Offset) % OrderedPlayers.Num()];
 				if (Player && !Winners.Contains(Player))
 				{
 					RouletteTargets.Add(Player);
@@ -5215,6 +5330,10 @@ void AShowDownGameModeBase::ContinueMultiplayerRoundAfterReveal(
 		int32 NextFirstRank = TNumericLimits<int32>::Min();
 		float MaxRouletteDelay = 0.0f;
 		float RouletteSequenceStartDelay = 0.0f;
+		if (RouletteTargets.Num() > 0)
+		{
+			InitializeMultiplayerSharedChambers();
+		}
 		for (ASDPlayerState* Player : RouletteTargets)
 		{
 			if (!Player || !Player->ForeheadCard)
@@ -5231,8 +5350,9 @@ void AShowDownGameModeBase::ContinueMultiplayerRoundAfterReveal(
 
 			const float ShotFinishDelay = ApplyMultiplayerRoulette(
 				Player,
-				Player->CurrentBet,
-				RouletteSequenceStartDelay);
+				MultiplayerLiveRoundCount,
+				RouletteSequenceStartDelay,
+				true);
 			MaxRouletteDelay = FMath::Max(MaxRouletteDelay, ShotFinishDelay);
 			if (ShotFinishDelay > RouletteSequenceStartDelay)
 			{
@@ -5350,21 +5470,97 @@ void AShowDownGameModeBase::ContinueMultiplayerRoundAfterFoldReveal(ASDPlayerSta
 	EndMultiplayerRound();
 }
 
-float AShowDownGameModeBase::ApplyMultiplayerRoulette(ASDPlayerState* TargetPlayer, int32 BulletCount, float StartDelay)
+void AShowDownGameModeBase::InitializeMultiplayerSharedChambers()
+{
+	MultiplayerRemainingChamberCount = 6;
+	MultiplayerSharedChamberIndex = 0;
+	MultiplayerSharedChambers.Init(false, 6);
+
+	TArray<int32> ChamberIndices = { 0, 1, 2, 3, 4, 5 };
+	for (int32 Index = ChamberIndices.Num() - 1; Index > 0; --Index)
+	{
+		ChamberIndices.Swap(Index, FMath::RandRange(0, Index));
+	}
+	for (int32 LiveIndex = 0; LiveIndex < FMath::Clamp(MultiplayerLiveRoundCount, 0, 6); ++LiveIndex)
+	{
+		MultiplayerSharedChambers[ChamberIndices[LiveIndex]] = true;
+	}
+	RefreshCentralGunStatus();
+}
+
+bool AShowDownGameModeBase::ResolveNextMultiplayerSharedChamber()
+{
+	if (MultiplayerSharedChambers.Num() != 6 || MultiplayerSharedChamberIndex >= 6)
+	{
+		InitializeMultiplayerSharedChambers();
+	}
+
+	const bool bHit = MultiplayerSharedChambers.IsValidIndex(MultiplayerSharedChamberIndex)
+		&& MultiplayerSharedChambers[MultiplayerSharedChamberIndex];
+	++MultiplayerSharedChamberIndex;
+	MultiplayerRemainingChamberCount = FMath::Max(0, 6 - MultiplayerSharedChamberIndex);
+	if (bHit)
+	{
+		MultiplayerLiveRoundCount = FMath::Max(0, MultiplayerLiveRoundCount - 1);
+	}
+	return bHit;
+}
+
+void AShowDownGameModeBase::RefreshCentralGunStatus()
+{
+	if (ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
+	{
+		const AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState();
+		const int32 DisplayLiveRounds = bMultiplayerMatchStarted
+			? MultiplayerLiveRoundCount
+			: FMath::Clamp(FMath::Max(PlayerState.CurrentBet, CollectorState.CurrentBet), 0, 6);
+		const int32 DisplayRemainingChambers = bMultiplayerMatchStarted
+			? MultiplayerRemainingChamberCount
+			: 6;
+		GunActor->SetTableStatus(
+			DisplayLiveRounds,
+			DisplayRemainingChambers,
+			ShowDownGameState ? ShowDownGameState->CurrentPhase : EShowDownPhase::None,
+			ShowDownGameState ? ShowDownGameState->NameTagTurnSlot : EShowDownPlayerSlot::None);
+	}
+}
+
+float AShowDownGameModeBase::ApplyMultiplayerRoulette(
+	ASDPlayerState* TargetPlayer,
+	int32 BulletCount,
+	float StartDelay,
+	bool bUseSharedChambers)
 {
 	if (!TargetPlayer || !RouletteSystem)
 	{
 		return 0.0f;
 	}
 
-	const int32 ClampedBulletCount = FMath::Clamp(BulletCount, 1, 6);
+	const int32 ClampedBulletCount = FMath::Clamp(BulletCount, 0, 6);
 	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 	{
 		ShowDownGameState->SetNameTagRoundStatus(ClampedBulletCount, EShowDownSide::Player, EShowDownPlayerSlot::None);
 	}
 	MarkMultiplayerBetBulletRouletteTarget(TargetPlayer, ClampedBulletCount);
 	RefreshBetBulletPresentation();
-	const bool bHit = RouletteSystem->RollRoulette(ClampedBulletCount);
+	const int32 LiveRoundsBeforeShot = MultiplayerLiveRoundCount;
+	const int32 ChambersBeforeShot = bUseSharedChambers ? MultiplayerRemainingChamberCount : 6;
+	const bool bHit = bUseSharedChambers
+		? ResolveNextMultiplayerSharedChamber()
+		: (ClampedBulletCount > 0 && RouletteSystem->RollRoulette(ClampedBulletCount));
+	if (!bUseSharedChambers)
+	{
+		if (bHit)
+		{
+			MultiplayerLiveRoundCount = FMath::Max(0, MultiplayerLiveRoundCount - 1);
+		}
+		// A fold shot is always followed by a fresh spin.
+		MultiplayerRemainingChamberCount = 6;
+		MultiplayerSharedChamberIndex = 0;
+		MultiplayerSharedChambers.Reset();
+	}
+	const int32 LiveRoundsAfterShot = MultiplayerLiveRoundCount;
+	const int32 ChambersAfterShot = MultiplayerRemainingChamberCount;
 	const EShowDownPlayerSlot TargetSlot = TargetPlayer->ShowDownSlot;
 	const FString TargetName = TargetPlayer->GetPlayerName();
 	const float SafeStartDelay = FMath::Max(0.0f, StartDelay);
@@ -5372,7 +5568,7 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(ASDPlayerState* TargetPlay
 	const float FinishDelay = FMath::Max(ResultDelay, ResolveMultiplayerRoulettePresentationDelay(bHit));
 	const TWeakObjectPtr<ASDPlayerState> WeakTargetPlayer(TargetPlayer);
 
-	auto BroadcastResult = [this, WeakTargetPlayer, TargetSlot, TargetName, ClampedBulletCount, bHit]()
+	auto BroadcastResult = [this, WeakTargetPlayer, TargetSlot, TargetName, ClampedBulletCount, bHit, LiveRoundsAfterShot, ChambersAfterShot]()
 	{
 		ASDPlayerState* ResolvedTargetPlayer = WeakTargetPlayer.Get();
 		if (!ResolvedTargetPlayer)
@@ -5385,6 +5581,7 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(ASDPlayerState* TargetPlay
 		if (bHit)
 		{
 			ResolvedTargetPlayer->Lives = FMath::Max(0, ResolvedTargetPlayer->Lives - 1);
+			MultiplayerRoundSpectators.Add(ResolvedTargetPlayer);
 			if (PreviousLives > 0 && ResolvedTargetPlayer->Lives <= 0)
 			{
 				bEliminated = true;
@@ -5432,9 +5629,17 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(ASDPlayerState* TargetPlay
 				bHit,
 				RemainingLives);
 		}
+		if (ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
+		{
+			GunActor->SetTableStatus(
+				LiveRoundsAfterShot,
+				ChambersAfterShot,
+				EShowDownPhase::Roulette,
+				TargetSlot);
+		}
 	};
 
-	auto StartPresentation = [this, WeakTargetPlayer, TargetSlot, TargetName, ClampedBulletCount, bHit, ResultDelay, BroadcastResult]()
+	auto StartPresentation = [this, WeakTargetPlayer, TargetSlot, TargetName, ClampedBulletCount, bHit, ResultDelay, BroadcastResult, LiveRoundsBeforeShot, ChambersBeforeShot]()
 	{
 		if (!WeakTargetPlayer.IsValid())
 		{
@@ -5443,8 +5648,22 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(ASDPlayerState* TargetPlay
 
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 		{
+			ShowDownGameState->SetPhase(EShowDownPhase::Roulette);
+			ShowDownGameState->SetNameTagRoundStatus(
+				LiveRoundsBeforeShot,
+				EShowDownSide::Player,
+				TargetSlot);
+			RefreshBetBulletPresentation();
 			ShowDownGameState->BroadcastMultiplayerRouletteStarted(TargetSlot, TargetName, ClampedBulletCount);
 			ShowDownGameState->BroadcastMultiplayerRoulettePresentation(TargetSlot, TargetName, ClampedBulletCount, bHit);
+		}
+		if (ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
+		{
+			GunActor->SetTableStatus(
+				LiveRoundsBeforeShot,
+				ChambersBeforeShot,
+				EShowDownPhase::Roulette,
+				TargetSlot);
 		}
 
 		if (ResultDelay <= KINDA_SMALL_NUMBER)
@@ -5476,9 +5695,11 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(ASDPlayerState* TargetPlay
 
 void AShowDownGameModeBase::EndMultiplayerRound()
 {
+	ClearCardRevealPresentationTimers();
 	SetMultiplayerSelectableHand(nullptr);
 	ClearBetBulletPresentation();
 	ClearMultiplayerForeheadCards();
+	MultiplayerRoundSpectators.Reset();
 	RefreshMultiplayerCharacterVisibility();
 
 	int32 AliveCount = 0;
@@ -5726,14 +5947,9 @@ USceneComponent* AShowDownGameModeBase::GetHandSlotForPlayerState(ASDPlayerState
 	}
 
 	const int32 PlayerIndex = MultiplayerPlayers.IndexOfByKey(Player);
-	if (const ASDCardPlacementAnchor* HandAnchor = GetHandAnchorForPlayerSlot(Player->ShowDownSlot))
-	{
-		if (USceneComponent* HandSlot = HandAnchor->GetSlotComponent())
-		{
-			return HandSlot;
-		}
-	}
-
+	// Multiplayer pawns are placed and rotated for their assigned seat. Their
+	// own hand component therefore remains correct for player 3/4 as well as
+	// player 1/2. Static map anchors are only a fallback for legacy layouts.
 	for (FConstPlayerControllerIterator Iterator = GetWorld()->GetPlayerControllerIterator(); Iterator; ++Iterator)
 	{
 		const APlayerController* PlayerController = Iterator->Get();
@@ -5745,6 +5961,14 @@ USceneComponent* AShowDownGameModeBase::GetHandSlotForPlayerState(ASDPlayerState
 		if (const APlayerPawn* PlayerPawn = Cast<APlayerPawn>(PlayerController->GetPawn()))
 		{
 			return PlayerPawn->PlayerHandCard ? PlayerPawn->PlayerHandCard : PlayerPawn->GetRootComponent();
+		}
+	}
+
+	if (const ASDCardPlacementAnchor* HandAnchor = GetHandAnchorForPlayerSlot(Player->ShowDownSlot))
+	{
+		if (USceneComponent* HandSlot = HandAnchor->GetSlotComponent())
+		{
+			return HandSlot;
 		}
 	}
 

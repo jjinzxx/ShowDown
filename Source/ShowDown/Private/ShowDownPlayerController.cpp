@@ -1493,6 +1493,21 @@ void AShowDownPlayerController::RequestPlayerRaiseTo(int32 BulletCount)
 	SubmitPlayerBetAction(EShowDownBetAction::Raise, BulletCount);
 }
 
+void AShowDownPlayerController::RequestRaisePreviewTarget(int32 BulletCount)
+{
+	const int32 ClampedTarget = FMath::Clamp(BulletCount, 1, 6);
+	if (HasAuthority())
+	{
+		if (AShowDownGameModeBase* GameMode = ResolveGameMode())
+		{
+			GameMode->SetMultiplayerRaisePreviewTarget(GetPlayerState<ASDPlayerState>(), ClampedTarget);
+		}
+		return;
+	}
+
+	ServerSetRaisePreviewTarget(ClampedTarget);
+}
+
 void AShowDownPlayerController::RequestPlayerFold()
 {
 	SubmitPlayerBetAction(EShowDownBetAction::Fold, 0);
@@ -2585,6 +2600,16 @@ void AShowDownPlayerController::ServerPlayerRaise_Implementation()
 void AShowDownPlayerController::ServerPlayerRaiseTo_Implementation(int32 BulletCount)
 {
 	SubmitPlayerBetAction(EShowDownBetAction::Raise, BulletCount);
+}
+
+void AShowDownPlayerController::ServerSetRaisePreviewTarget_Implementation(int32 BulletCount)
+{
+	if (AShowDownGameModeBase* GameMode = ResolveGameMode())
+	{
+		GameMode->SetMultiplayerRaisePreviewTarget(
+			GetPlayerState<ASDPlayerState>(),
+			FMath::Clamp(BulletCount, 1, 6));
+	}
 }
 
 void AShowDownPlayerController::ServerPlayerFold_Implementation()

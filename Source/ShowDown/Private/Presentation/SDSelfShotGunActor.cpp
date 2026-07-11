@@ -8,12 +8,15 @@
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/WidgetComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
 #include "Kismet/GameplayStatics.h"
+#include "Net/UnrealNetwork.h"
 #include "ShowDownCharacter.h"
 #include "ShowDownCameraAspect.h"
+#include "ShowDownAmmoStatusWidget.h"
 #include "ShowDownGameStateBase.h"
 #include "ShowDownPlayerController.h"
 #include "SDPlayerState.h"
@@ -65,9 +68,23 @@ namespace
 ASDSelfShotGunActor::ASDSelfShotGunActor()
 {
 	PrimaryActorTick.bCanEverTick = true;
+	bReplicates = true;
+	bAlwaysRelevant = true;
 
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
+
+	AmmoStatusAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("AmmoStatusAnchor"));
+	AmmoStatusAnchor->SetupAttachment(SceneRoot);
+
+	AmmoStatusWidgetComponent = CreateDefaultSubobject<UWidgetComponent>(TEXT("AmmoStatusWidget"));
+	AmmoStatusWidgetComponent->SetupAttachment(AmmoStatusAnchor);
+	AmmoStatusWidgetComponent->SetWidgetClass(UShowDownAmmoStatusWidget::StaticClass());
+	AmmoStatusWidgetComponent->SetWidgetSpace(EWidgetSpace::Screen);
+	AmmoStatusWidgetComponent->SetDrawAtDesiredSize(false);
+	AmmoStatusWidgetComponent->SetPivot(FVector2D(0.5f, 0.5f));
+	AmmoStatusWidgetComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	AmmoStatusWidgetComponent->SetGenerateOverlapEvents(false);
 
 	GunMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("GunMesh"));
 	GunMesh->SetupAttachment(SceneRoot);
@@ -191,6 +208,12 @@ ASDSelfShotGunActor::ASDSelfShotGunActor()
 	RecoveryHitEffectSettings.BloomThreshold = 0.3f;
 }
 
+void ASDSelfShotGunActor::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+	ApplyAmmoStatusDisplaySettings();
+}
+
 #if WITH_EDITOR
 bool ASDSelfShotGunActor::ShouldTickIfViewportsOnly() const
 {
@@ -201,6 +224,8 @@ bool ASDSelfShotGunActor::ShouldTickIfViewportsOnly() const
 void ASDSelfShotGunActor::BeginPlay()
 {
 	Super::BeginPlay();
+	ApplyAmmoStatusDisplaySettings();
+	OnRep_TableStatus();
 
 	RestActorTransform = GetActorTransform();
 	bHasCapturedRestActorTransform = true;
@@ -239,6 +264,7 @@ void ASDSelfShotGunActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	UpdateAmmoStatusAnchorLocation();
 
 	if (MuzzleFlashElapsedTime > 0.0f)
 	{
@@ -513,6 +539,102 @@ float ASDSelfShotGunActor::GetPresentationFinishDelay(bool bLiveRound) const
 	}
 
 	return FinishDelay;
+}
+
+void ASDSelfShotGunActor::SetTableStatus(
+	int32 LiveRounds,
+	int32 RemainingChambers,
+	EShowDownPhase Phase,
+	EShowDownPlayerSlot TurnSlot)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	StatusLiveRounds = FMath::Clamp(LiveRounds, 0, 6);
+	StatusRemainingChambers = FMath::Clamp(RemainingChambers, 0, 6);
+	StatusPhase = Phase;
+	StatusTurnSlot = TurnSlot;
+	OnRep_TableStatus();
+	ForceNetUpdate();
+}
+
+void ASDSelfShotGunActor::OnRep_TableStatus()
+{
+	ApplyAmmoStatusDisplaySettings();
+}
+
+void ASDSelfShotGunActor::ApplyAmmoStatusDisplaySettings()
+{
+	if (AmmoStatusAnchor)
+	{
+		AmmoStatusAnchor->SetUsingAbsoluteLocation(true);
+		AmmoStatusAnchor->SetUsingAbsoluteRotation(true);
+		AmmoStatusAnchor->SetUsingAbsoluteScale(true);
+		AmmoStatusAnchor->SetWorldRotation(FRotator::ZeroRotator);
+		AmmoStatusAnchor->SetWorldScale3D(FVector::OneVector);
+		UpdateAmmoStatusAnchorLocation();
+	}
+	if (AmmoStatusWidgetComponent)
+	{
+		AmmoStatusWidgetComponent->SetDrawSize(FVector2D(
+			FMath::Max(32.0f, AmmoStatusDrawSize.X),
+			FMath::Max(32.0f, AmmoStatusDrawSize.Y)));
+		AmmoStatusWidgetComponent->InitWidget();
+		if (UShowDownAmmoStatusWidget* AmmoWidget =
+			Cast<UShowDownAmmoStatusWidget>(AmmoStatusWidgetComponent->GetUserWidgetObject()))
+		{
+			AmmoWidget->SetAmmoStatus(
+				FText::FromString(FString::Printf(TEXT("%d/%d"), StatusLiveRounds, StatusRemainingChambers)),
+				AmmoStatusFontSize,
+				AmmoStatusTextColor,
+				AmmoStatusBackgroundColor);
+		}
+	}
+}
+
+void ASDSelfShotGunActor::UpdateAmmoStatusAnchorLocation()
+{
+	if (!AmmoStatusAnchor)
+	{
+		return;
+	}
+
+	// Derive the label anchor from the complete visible revolver geometry rather
+	// than the actor pivot (which sits near the handle). The world-space AABB is
+	// updated as the gun moves and rotates, so the label remains centered above
+	// the actual weapon silhouette during the whole firing presentation.
+	FBox RevolverBounds(ForceInit);
+	TInlineComponentArray<UStaticMeshComponent*> MeshComponents(this);
+	for (const UStaticMeshComponent* MeshComponent : MeshComponents)
+	{
+		if (MeshComponent
+			&& MeshComponent->IsRegistered()
+			&& MeshComponent->GetStaticMesh())
+		{
+			RevolverBounds += MeshComponent->Bounds.GetBox();
+		}
+	}
+
+	if (!RevolverBounds.IsValid)
+	{
+		AmmoStatusAnchor->SetWorldLocation(GetActorLocation() + AmmoStatusWorldOffset);
+		return;
+	}
+
+	const FVector BoundsCenter = RevolverBounds.GetCenter();
+	const FVector GunTopCenter(BoundsCenter.X, BoundsCenter.Y, RevolverBounds.Max.Z);
+	AmmoStatusAnchor->SetWorldLocation(GunTopCenter + AmmoStatusWorldOffset);
+}
+
+void ASDSelfShotGunActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(ASDSelfShotGunActor, StatusLiveRounds);
+	DOREPLIFETIME(ASDSelfShotGunActor, StatusRemainingChambers);
+	DOREPLIFETIME(ASDSelfShotGunActor, StatusPhase);
+	DOREPLIFETIME(ASDSelfShotGunActor, StatusTurnSlot);
 }
 
 bool ASDSelfShotGunActor::TryResolveCharacterPresentationShot(
