@@ -140,6 +140,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Character Identity")
 	void SetCharacterDisplayName(const FString& NewDisplayName);
 
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Name Tag")
+	void SetCharacterLives(int32 NewLives);
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Name Tag")
+	int32 GetCharacterLives() const { return CharacterLives; }
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Voice")
 	void SetVoiceTalking(bool bNewVoiceTalking);
 
@@ -196,6 +202,9 @@ protected:
 	void OnRep_Identity();
 
 	UFUNCTION()
+	void OnRep_CharacterLives();
+
+	UFUNCTION()
 	void OnRep_ViewRotation();
 
 	UFUNCTION()
@@ -218,6 +227,9 @@ protected:
 
 	UFUNCTION()
 	void HandleRouletteResult(EShowDownSide Target, bool bHit);
+
+	UFUNCTION()
+	void HandleLifeChanged(EShowDownSide Target, int32 Life);
 
 	UFUNCTION()
 	void HandleMultiplayerRouletteStarted(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount);
@@ -341,6 +353,9 @@ protected:
 
 	UPROPERTY(ReplicatedUsing = OnRep_Identity, EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Identity")
 	FString CharacterDisplayName;
+
+	UPROPERTY(ReplicatedUsing = OnRep_CharacterLives, BlueprintReadOnly, Category = "ShowDown|Name Tag")
+	int32 CharacterLives = 3;
 
 	UPROPERTY(ReplicatedUsing = OnRep_Identity, BlueprintReadOnly, Category = "ShowDown|Voice")
 	bool bVoiceTalking = false;

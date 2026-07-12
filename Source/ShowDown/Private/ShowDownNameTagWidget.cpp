@@ -40,6 +40,30 @@ void UShowDownNameTagWidget::SetDisplayName(const FText& NewDisplayName)
 	}
 }
 
+void UShowDownNameTagWidget::SetLives(int32 NewLives)
+{
+	CachedLives = FMath::Max(0, NewLives);
+	if (!LivesText)
+	{
+		return;
+	}
+
+	FString Hearts;
+	for (int32 LifeIndex = 0; LifeIndex < CachedLives; ++LifeIndex)
+	{
+		if (LifeIndex > 0)
+		{
+			Hearts.AppendChar(TEXT(' '));
+		}
+		Hearts.AppendChar(static_cast<TCHAR>(0x2665));
+	}
+
+	LivesText->SetText(FText::FromString(Hearts));
+	LivesText->SetVisibility(CachedLives > 0
+		? ESlateVisibility::HitTestInvisible
+		: ESlateVisibility::Collapsed);
+}
+
 void UShowDownNameTagWidget::SetStatusText(const FText& NewStatusText)
 {
 	CachedStatusText = NewStatusText;
@@ -136,6 +160,7 @@ void UShowDownNameTagWidget::NativeConstruct()
 
 	BuildDefaultWidget();
 	SetDisplayName(CachedDisplayName);
+	SetLives(CachedLives);
 	SetStatusText(CachedStatusText);
 	SetTurnActive(bCachedTurnActive);
 	SetSpeakingIndicatorVisible(bCachedSpeakingIndicatorVisible);
@@ -179,6 +204,14 @@ void UShowDownNameTagWidget::BuildDefaultWidget()
 	NameText->SetShadowOffset(FVector2D(0.0f, 1.0f));
 	NameText->SetShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.55f));
 
+	LivesText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("LivesText"));
+	LivesText->SetColorAndOpacity(FSlateColor(FLinearColor(0.95f, 0.08f, 0.12f, 1.0f)));
+	LivesText->SetJustification(ETextJustify::Center);
+	LivesText->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), 18));
+	LivesText->SetShadowOffset(FVector2D(0.0f, 1.0f));
+	LivesText->SetShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.8f));
+	LivesText->SetVisibility(ESlateVisibility::HitTestInvisible);
+
 	SpeakingIndicatorText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("SpeakingIndicatorText"));
 	SpeakingIndicatorText->SetText(FText::FromString(TEXT("말 하는 중...")));
 	SpeakingIndicatorText->SetColorAndOpacity(FSlateColor(FLinearColor(0.70f, 0.92f, 1.0f, 1.0f)));
@@ -215,6 +248,12 @@ void UShowDownNameTagWidget::BuildDefaultWidget()
 		ChatStackSlot->SetHorizontalAlignment(HAlign_Center);
 	}
 
+	if (UVerticalBoxSlot* LivesSlot = Root->AddChildToVerticalBox(LivesText))
+	{
+		LivesSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 2.0f));
+		LivesSlot->SetHorizontalAlignment(HAlign_Center);
+	}
+
 	if (UVerticalBoxSlot* NameSlot = Root->AddChildToVerticalBox(NameBackground))
 	{
 		NameSlot->SetHorizontalAlignment(HAlign_Center);
@@ -227,6 +266,7 @@ void UShowDownNameTagWidget::BuildDefaultWidget()
 	}
 
 	WidgetTree->RootWidget = Root;
+	SetLives(CachedLives);
 	RefreshNameBackgroundColor();
 }
 

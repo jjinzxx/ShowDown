@@ -144,6 +144,7 @@ void AShowDownCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	DOREPLIFETIME(AShowDownCharacter, CharacterRole);
 	DOREPLIFETIME(AShowDownCharacter, PlayerSlot);
 	DOREPLIFETIME(AShowDownCharacter, CharacterDisplayName);
+	DOREPLIFETIME(AShowDownCharacter, CharacterLives);
 	DOREPLIFETIME(AShowDownCharacter, bVoiceTalking);
 	DOREPLIFETIME(AShowDownCharacter, ReplicatedPlayerViewRotation);
 	DOREPLIFETIME(AShowDownCharacter, bCharacterSceneActive);
@@ -328,6 +329,23 @@ void AShowDownCharacter::SetCharacterDisplayName(const FString& NewDisplayName)
 	SetCharacterIdentity(CharacterRole, PlayerSlot, NewDisplayName);
 }
 
+void AShowDownCharacter::SetCharacterLives(int32 NewLives)
+{
+	const int32 ClampedLives = FMath::Max(0, NewLives);
+	if (CharacterLives == ClampedLives)
+	{
+		RefreshNameTag();
+		return;
+	}
+
+	CharacterLives = ClampedLives;
+	RefreshNameTag();
+	if (HasAuthority())
+	{
+		ForceNetUpdate();
+	}
+}
+
 void AShowDownCharacter::SetVoiceTalking(bool bNewVoiceTalking)
 {
 	if (!HasAuthority() || bVoiceTalking == bNewVoiceTalking)
@@ -481,6 +499,11 @@ void AShowDownCharacter::OnRep_Identity()
 	OnCharacterIdentityChanged();
 }
 
+void AShowDownCharacter::OnRep_CharacterLives()
+{
+	RefreshNameTag();
+}
+
 void AShowDownCharacter::OnRep_ViewRotation()
 {
 	ApplyPlayerViewRotation(ReplicatedPlayerViewRotation);
@@ -535,6 +558,14 @@ void AShowDownCharacter::HandleRouletteResult(EShowDownSide Target, bool bHit)
 	PlayHitAnimation();
 }
 
+void AShowDownCharacter::HandleLifeChanged(EShowDownSide Target, int32 Life)
+{
+	if (ShouldReactToSingleRouletteTarget(Target))
+	{
+		SetCharacterLives(Life);
+	}
+}
+
 void AShowDownCharacter::HandleMultiplayerRouletteStarted(
 	EShowDownPlayerSlot TargetSlot,
 	const FString& TargetName,
@@ -555,6 +586,11 @@ void AShowDownCharacter::HandleMultiplayerRouletteResult(
 	bool bHit,
 	int32 RemainingLives)
 {
+	if (PlayerSlot != EShowDownPlayerSlot::None && PlayerSlot == TargetSlot)
+	{
+		SetCharacterLives(RemainingLives);
+	}
+
 	if (!HasAuthority() || !bHit || !ShouldReactToMultiplayerRouletteTarget(TargetSlot))
 	{
 		return;
@@ -652,6 +688,7 @@ void AShowDownCharacter::BindToRouletteEvents()
 	ShowDownGameState->OnBetActionCommitted.AddUniqueDynamic(this, &AShowDownCharacter::HandleBetActionCommitted);
 	ShowDownGameState->OnRouletteStarted.AddUniqueDynamic(this, &AShowDownCharacter::HandleRouletteStarted);
 	ShowDownGameState->OnRouletteResult.AddUniqueDynamic(this, &AShowDownCharacter::HandleRouletteResult);
+	ShowDownGameState->OnLifeChanged.AddUniqueDynamic(this, &AShowDownCharacter::HandleLifeChanged);
 	ShowDownGameState->OnMultiplayerCardSelected.AddUniqueDynamic(this, &AShowDownCharacter::HandleMultiplayerCardSelected);
 	ShowDownGameState->OnMultiplayerBetActionCommitted.AddUniqueDynamic(this, &AShowDownCharacter::HandleMultiplayerBetActionCommitted);
 	ShowDownGameState->OnMultiplayerRouletteStarted.AddUniqueDynamic(this, &AShowDownCharacter::HandleMultiplayerRouletteStarted);
@@ -673,6 +710,7 @@ void AShowDownCharacter::UnbindFromRouletteEvents()
 	ShowDownGameState->OnBetActionCommitted.RemoveDynamic(this, &AShowDownCharacter::HandleBetActionCommitted);
 	ShowDownGameState->OnRouletteStarted.RemoveDynamic(this, &AShowDownCharacter::HandleRouletteStarted);
 	ShowDownGameState->OnRouletteResult.RemoveDynamic(this, &AShowDownCharacter::HandleRouletteResult);
+	ShowDownGameState->OnLifeChanged.RemoveDynamic(this, &AShowDownCharacter::HandleLifeChanged);
 	ShowDownGameState->OnMultiplayerCardSelected.RemoveDynamic(this, &AShowDownCharacter::HandleMultiplayerCardSelected);
 	ShowDownGameState->OnMultiplayerBetActionCommitted.RemoveDynamic(this, &AShowDownCharacter::HandleMultiplayerBetActionCommitted);
 	ShowDownGameState->OnMultiplayerRouletteStarted.RemoveDynamic(this, &AShowDownCharacter::HandleMultiplayerRouletteStarted);
@@ -1211,6 +1249,7 @@ void AShowDownCharacter::RefreshNameTag()
 	if (UShowDownNameTagWidget* NameTagWidget = Cast<UShowDownNameTagWidget>(NameTagWidgetComponent->GetUserWidgetObject()))
 	{
 		NameTagWidget->SetDisplayName(FText::FromString(DisplayName));
+		NameTagWidget->SetLives(CharacterLives);
 		NameTagWidget->SetStatusText(FText::GetEmpty());
 		NameTagWidget->SetTurnActive(IsNameTagTurnActive());
 		NameTagWidget->SetSpeakingIndicatorVisible(bVoiceTalking);

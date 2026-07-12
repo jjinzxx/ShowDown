@@ -2563,6 +2563,7 @@ void AShowDownGameModeBase::ConfigureSinglePlayerCharacters()
 			EShowDownCharacterRole::Player,
 			EShowDownPlayerSlot::Player1,
 			TEXT("Player"));
+		PlayerCharacter->SetCharacterLives(PlayerState.Lives);
 		PlayerCharacter->SetCharacterSceneActive(true);
 	}
 
@@ -2572,6 +2573,7 @@ void AShowDownGameModeBase::ConfigureSinglePlayerCharacters()
 			EShowDownCharacterRole::Opponent,
 			EShowDownPlayerSlot::None,
 			TEXT("김윤아"));
+		OpponentCharacter->SetCharacterLives(CollectorState.Lives);
 		OpponentCharacter->SetCharacterSceneActive(true);
 	}
 
@@ -2667,6 +2669,7 @@ void AShowDownGameModeBase::ConfigureMultiplayerCharacters(const TArray<ASDPlaye
 			EShowDownCharacterRole::Player,
 			Player->ShowDownSlot,
 			GetNetworkPlayerDisplayName(Player));
+		AssignedCharacter->SetCharacterLives(Player->Lives);
 		AssignedCharacter->SetCharacterSceneActive(
 			Player->Lives > 0 && !MultiplayerRoundSpectators.Contains(Player));
 	}
@@ -7248,6 +7251,14 @@ void AShowDownGameModeBase::StartStage(int32 StageIndex)
 
 	PlayerState.Lives = StageRule.StartingLives;
 	CollectorState.Lives = StageRule.StartingLives;
+	if (AShowDownCharacter* PlayerCharacter = FindSingleRouletteCharacter(EShowDownSide::Player))
+	{
+		PlayerCharacter->SetCharacterLives(PlayerState.Lives);
+	}
+	if (AShowDownCharacter* CollectorCharacter = FindSingleRouletteCharacter(EShowDownSide::Collector))
+	{
+		CollectorCharacter->SetCharacterLives(CollectorState.Lives);
+	}
 	PlayerState.CurrentBet = StageRule.MinimumBet;
 	CollectorState.CurrentBet = StageRule.MinimumBet;
 	BettingRaisesLeft = 6;
