@@ -3,8 +3,10 @@
 #include "CoreMinimal.h"
 #include "GameFramework/GameStateBase.h"
 #include "ShowDownTypes.h"
+#include "TimerManager.h"
 #include "ShowDownGameStateBase.generated.h"
 
+class AStaticMeshActor;
 class FLifetimeProperty;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FShowDownPhaseChangedSignature, EShowDownPhase, NewPhase);
@@ -40,6 +42,24 @@ struct FShowDownNameTagPlayerBetState
 
 	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Name Tag")
 	int32 LoadedBulletCount = 0;
+};
+
+USTRUCT()
+struct FSDInitialDealDeckVisualState
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	uint8 RemainingSteps = 0;
+
+	UPROPERTY()
+	uint8 TotalSteps = 0;
+
+	UPROPERTY()
+	FName SourceActorTag = NAME_None;
+
+	UPROPERTY()
+	uint16 Revision = 0;
 };
 
 UCLASS()
@@ -172,6 +192,9 @@ public:
 	UPROPERTY(ReplicatedUsing = OnRep_NameTagRoundStatus, BlueprintReadOnly, Category = "ShowDown|Name Tag")
 	EShowDownPlayerSlot NameTagTurnSlot = EShowDownPlayerSlot::None;
 
+	UPROPERTY(ReplicatedUsing = OnRep_InitialDealDeckVisualState)
+	FSDInitialDealDeckVisualState InitialDealDeckVisualState;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Debug")
 	bool bShowPresentationDebugMessages = false;
 
@@ -199,6 +222,8 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Name Tag")
 	void SetNameTagPlayerLoadedBulletCount(EShowDownPlayerSlot Slot, int32 LoadedBulletCount);
+
+	void SetInitialDealDeckVisualState(FName SourceActorTag, int32 RemainingSteps, int32 TotalSteps);
 
 	//연출 시작 알림
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Presentation", meta = (DisplayName = "eventStart"))
@@ -273,5 +298,20 @@ private:
 
 	UFUNCTION()
 	void OnRep_NameTagRoundStatus();
+
+	UFUNCTION()
+	void OnRep_InitialDealDeckVisualState();
+
+	AStaticMeshActor* ResolveInitialDealDeckVisualActor(FName SourceActorTag);
+	void ApplyInitialDealDeckVisualState();
+
+	TWeakObjectPtr<AStaticMeshActor> InitialDealDeckVisualActor;
+	FName CachedInitialDealDeckSourceActorTag = NAME_None;
+	FVector InitialDealDeckAuthoredLocation = FVector::ZeroVector;
+	FVector InitialDealDeckAuthoredScale = FVector::OneVector;
+	float InitialDealDeckAuthoredBottomZ = 0.0f;
+	bool bInitialDealDeckAuthoredTransformCaptured = false;
+	FTimerHandle InitialDealDeckVisualRetryTimerHandle;
+	uint8 InitialDealDeckVisualRetryAttempts = 0;
 	
 };

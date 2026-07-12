@@ -357,14 +357,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (DisplayName = "Use Initial Card Deal Presentation"))
 	bool bUseInitialCardDealPresentation = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", DisplayName = "Flat Card Distance From Hand Anchor"))
-	float InitialDealFlatCardDistance = 115.0f;
+	// GameMode defaults cannot safely hold a direct reference to an actor in a
+	// level. Tag the placed deck actor with this value to select it explicitly;
+	// the authored deck mesh is detected automatically when no tag is present.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (DisplayName = "Deck Source Actor Tag"))
+	FName InitialDealDeckSourceActorTag = TEXT("InitialDealDeckSource");
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", DisplayName = "Flat Card Spacing"))
-	float InitialDealFlatCardSpacing = 34.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "20.0", DisplayName = "Flat Card Fan Angle"))
-	float InitialDealFlatCardFanAngle = 6.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "4.0", DisplayName = "Flat Card Overlap Step"))
+	float InitialDealFlatCardSpacing = 4.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.1", ClampMax = "2.0", DisplayName = "Card Move Duration"))
 	float InitialDealCardMoveDuration = 0.70f;
@@ -376,7 +376,7 @@ public:
 	float InitialDealShowcaseHoldDuration = 1.50f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "10.0", DisplayName = "Showcase Grid Spacing (Column, Row)"))
-	FVector2D InitialDealShowcaseGridSpacing = FVector2D(44.0f, 62.0f);
+	FVector2D InitialDealShowcaseGridSpacing = FVector2D(10.0f, 10.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro")
 	bool bPlaySinglePlayerIntro = true;
@@ -568,9 +568,14 @@ private:
 	TFunction<void()> InitialCardDealPresentationContinuation;
 	mutable bool bInitialCardDeckBoundsCacheValid = false;
 	mutable FVector CachedInitialCardDeckTop = FVector::ZeroVector;
+	mutable float CachedInitialCardDeckBottomZ = 0.0f;
+	mutable bool bInitialCardTableSurfaceCacheValid = false;
 	mutable float CachedInitialCardTableSurfaceZ = 0.0f;
+	mutable float CachedInitialCardShowcasePadRadius = 0.0f;
+	mutable TArray<FVector> CachedInitialCardFlatSlotCenters;
 	mutable bool bInitialCardSpatialCacheValid = false;
 	mutable FVector CachedInitialCardTableCenter = FVector::ZeroVector;
+	mutable FVector CachedInitialCardShowcaseCenter = FVector::ZeroVector;
 	mutable float CachedInitialCardShowcasePlaneZ = 0.0f;
 	mutable TWeakObjectPtr<USceneComponent> CachedInitialCardReferenceHandSlot;
 	TSet<EShowDownPlayerSlot> InitialCardDealCameraReadySlots;
@@ -670,6 +675,7 @@ private:
 	bool TryImmediateInitialCardDealFallback();
 	void StopInitialCardDealOnFailure(const TCHAR* Reason);
 	void SetInitialCardDealInputLocked(bool bLocked) const;
+	void SetInitialDealDeckVisual(int32 RemainingCards, int32 TotalCards) const;
 	void RefreshInitialCardDealSpatialCache() const;
 	void StartInitialCardDealFromStack();
 	bool PrepareSinglePlayerOpeningHands(
@@ -691,7 +697,7 @@ private:
 	void ClearInitialCardDealPresentation(bool bDestroyDeckCards = true);
 	void ScheduleInitialCardDealAction(float DelaySeconds, TFunction<void()>&& Action);
 	FTransform BuildInitialCardGridTransform(int32 CardIndex, int32 DeckCopies, bool bFaceDown) const;
-	FTransform BuildInitialCardStackTransform(int32 StackIndex) const;
+	FTransform BuildInitialCardStackTransform(float DeckHeightAlpha) const;
 	FTransform BuildInitialFlatCardTransform(USceneComponent* HandSlot, int32 CardIndex, int32 CardCount) const;
 	FQuat BuildInitialFlatCardRotation(const FVector& TowardTableCenter, bool bFaceDown) const;
 	FVector ResolveInitialCardDeckTop() const;

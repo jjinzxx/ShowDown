@@ -1,6 +1,10 @@
 #include "ShowDownGameStateBase.h"
 
+#include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/StaticMeshActor.h"
+#include "EngineUtils.h"
 #include "Net/UnrealNetwork.h"
 
 namespace
@@ -201,6 +205,127 @@ void AShowDownGameStateBase::SetNameTagPlayerLoadedBulletCount(
 	NewPlayerBet.LoadedBulletCount = ClampedLoadedBulletCount;
 	NameTagPlayerBets.Add(NewPlayerBet);
 	OnNameTagRoundStatusChanged.Broadcast();
+}
+
+void AShowDownGameStateBase::SetInitialDealDeckVisualState(
+	FName SourceActorTag,
+	int32 RemainingSteps,
+	int32 TotalSteps)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	const int32 ClampedTotalSteps = FMath::Clamp(TotalSteps, 0, static_cast<int32>(MAX_uint8));
+	InitialDealDeckVisualState.TotalSteps = static_cast<uint8>(ClampedTotalSteps);
+	InitialDealDeckVisualState.RemainingSteps = static_cast<uint8>(FMath::Clamp(
+		RemainingSteps,
+		0,
+		ClampedTotalSteps));
+	InitialDealDeckVisualState.SourceActorTag = SourceActorTag;
+	++InitialDealDeckVisualState.Revision;
+	OnRep_InitialDealDeckVisualState();
+	ForceNetUpdate();
+}
+
+AStaticMeshActor* AShowDownGameStateBase::ResolveInitialDealDeckVisualActor(FName SourceActorTag)
+{
+	if (InitialDealDeckVisualActor.IsValid() && CachedInitialDealDeckSourceActorTag == SourceActorTag)
+	{
+		return InitialDealDeckVisualActor.Get();
+	}
+
+	InitialDealDeckVisualActor.Reset();
+	CachedInitialDealDeckSourceActorTag = SourceActorTag;
+	bInitialDealDeckAuthoredTransformCaptured = false;
+	AStaticMeshActor* AuthoredMeshFallback = nullptr;
+	if (UWorld* World = GetWorld())
+	{
+		for (TActorIterator<AStaticMeshActor> It(World); It; ++It)
+		{
+			AStaticMeshActor* MeshActor = *It;
+			const UStaticMeshComponent* MeshComponent = MeshActor ? MeshActor->GetStaticMeshComponent() : nullptr;
+			const UStaticMesh* StaticMesh = MeshComponent ? MeshComponent->GetStaticMesh() : nullptr;
+			if (!MeshActor || !StaticMesh)
+			{
+				continue;
+			}
+
+			if (!SourceActorTag.IsNone() && MeshActor->ActorHasTag(SourceActorTag))
+			{
+				InitialDealDeckVisualActor = MeshActor;
+				return MeshActor;
+			}
+			if (!AuthoredMeshFallback
+				&& StaticMesh->GetPathName() == TEXT("/Game/Fab/Card/SM_carddummyMesh.SM_carddummyMesh"))
+			{
+				AuthoredMeshFallback = MeshActor;
+			}
+		}
+	}
+
+	InitialDealDeckVisualActor = AuthoredMeshFallback;
+	return AuthoredMeshFallback;
+}
+
+void AShowDownGameStateBase::ApplyInitialDealDeckVisualState()
+{
+	AStaticMeshActor* DeckActor = ResolveInitialDealDeckVisualActor(InitialDealDeckVisualState.SourceActorTag);
+	UStaticMeshComponent* DeckMesh = DeckActor ? DeckActor->GetStaticMeshComponent() : nullptr;
+	if (!DeckActor || !DeckMesh)
+	{
+		if (GetWorld()
+			&& InitialDealDeckVisualRetryAttempts < 20
+			&& !GetWorldTimerManager().IsTimerActive(InitialDealDeckVisualRetryTimerHandle))
+		{
+			++InitialDealDeckVisualRetryAttempts;
+			GetWorldTimerManager().SetTimer(
+				InitialDealDeckVisualRetryTimerHandle,
+				this,
+				&AShowDownGameStateBase::ApplyInitialDealDeckVisualState,
+				0.25f,
+				false);
+		}
+		return;
+	}
+	GetWorldTimerManager().ClearTimer(InitialDealDeckVisualRetryTimerHandle);
+	InitialDealDeckVisualRetryAttempts = 0;
+
+	if (!bInitialDealDeckAuthoredTransformCaptured)
+	{
+		InitialDealDeckAuthoredLocation = DeckActor->GetActorLocation();
+		InitialDealDeckAuthoredScale = DeckActor->GetActorScale3D();
+		DeckMesh->UpdateBounds();
+		InitialDealDeckAuthoredBottomZ = DeckMesh->Bounds.Origin.Z - DeckMesh->Bounds.BoxExtent.Z;
+		bInitialDealDeckAuthoredTransformCaptured = true;
+	}
+
+	DeckMesh->SetMobility(EComponentMobility::Movable);
+	DeckActor->SetActorLocation(InitialDealDeckAuthoredLocation, false, nullptr, ETeleportType::TeleportPhysics);
+	DeckActor->SetActorScale3D(InitialDealDeckAuthoredScale);
+	if (InitialDealDeckVisualState.TotalSteps == 0)
+	{
+		DeckActor->SetActorHiddenInGame(false);
+		return;
+	}
+	if (InitialDealDeckVisualState.RemainingSteps == 0)
+	{
+		DeckActor->SetActorHiddenInGame(true);
+		return;
+	}
+
+	const float HeightAlpha = static_cast<float>(InitialDealDeckVisualState.RemainingSteps)
+		/ static_cast<float>(InitialDealDeckVisualState.TotalSteps);
+	FVector ScaledDeck = InitialDealDeckAuthoredScale;
+	ScaledDeck.Z *= HeightAlpha;
+	DeckActor->SetActorScale3D(ScaledDeck);
+	DeckMesh->UpdateBounds();
+	const float ScaledBottomZ = DeckMesh->Bounds.Origin.Z - DeckMesh->Bounds.BoxExtent.Z;
+	FVector BottomAnchoredLocation = DeckActor->GetActorLocation();
+	BottomAnchoredLocation.Z += InitialDealDeckAuthoredBottomZ - ScaledBottomZ;
+	DeckActor->SetActorLocation(BottomAnchoredLocation, false, nullptr, ETeleportType::TeleportPhysics);
+	DeckActor->SetActorHiddenInGame(false);
 }
 
 void AShowDownGameStateBase::EventStart(EShowDownPhase Phase)
@@ -406,6 +531,7 @@ void AShowDownGameStateBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 	DOREPLIFETIME(AShowDownGameStateBase, NameTagPlayerBets);
 	DOREPLIFETIME(AShowDownGameStateBase, NameTagTurnSide);
 	DOREPLIFETIME(AShowDownGameStateBase, NameTagTurnSlot);
+	DOREPLIFETIME(AShowDownGameStateBase, InitialDealDeckVisualState);
 }
 
 void AShowDownGameStateBase::OnRep_CurrentPhase()
@@ -429,4 +555,9 @@ void AShowDownGameStateBase::OnRep_PlayerSlots()
 void AShowDownGameStateBase::OnRep_NameTagRoundStatus()
 {
 	OnNameTagRoundStatusChanged.Broadcast();
+}
+
+void AShowDownGameStateBase::OnRep_InitialDealDeckVisualState()
+{
+	ApplyInitialDealDeckVisualState();
 }
