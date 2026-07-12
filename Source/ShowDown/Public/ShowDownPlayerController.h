@@ -366,7 +366,7 @@ public:
 
 private:
 	bool bInitialCardDealInputLocked = false;
-	bool bInitialCardDealIgnoreInputApplied = false;
+	bool bInitialCardDealIgnoreMoveInputApplied = false;
 	void InitializeFromPossessedPawn();
 	void InitializeInteractableOutlinePostProcess();
 	void TraceCardUnderCursor();

@@ -367,7 +367,16 @@ public:
 	float InitialDealFlatCardFanAngle = 6.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.1", ClampMax = "2.0", DisplayName = "Card Move Duration"))
-	float InitialDealCardMoveDuration = 0.48f;
+	float InitialDealCardMoveDuration = 0.70f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "3.0", DisplayName = "Beat Delay"))
+	float InitialDealBeatDelay = 0.80f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "5.0", DisplayName = "Showcase Hold Duration"))
+	float InitialDealShowcaseHoldDuration = 1.50f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "10.0", DisplayName = "Showcase Grid Spacing (Column, Row)"))
+	FVector2D InitialDealShowcaseGridSpacing = FVector2D(44.0f, 62.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro")
 	bool bPlaySinglePlayerIntro = true;
@@ -562,6 +571,7 @@ private:
 	mutable float CachedInitialCardTableSurfaceZ = 0.0f;
 	mutable bool bInitialCardSpatialCacheValid = false;
 	mutable FVector CachedInitialCardTableCenter = FVector::ZeroVector;
+	mutable float CachedInitialCardShowcasePlaneZ = 0.0f;
 	mutable TWeakObjectPtr<USceneComponent> CachedInitialCardReferenceHandSlot;
 	TSet<EShowDownPlayerSlot> InitialCardDealCameraReadySlots;
 	bool bInitialCardDealShowcaseStarted = false;

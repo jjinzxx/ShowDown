@@ -1004,7 +1004,17 @@ void AShowDownGameModeBase::RefreshInitialCardDealSpatialCache() const
 		}
 	}
 	bInitialCardSpatialCacheValid = true;
-	ResolveInitialCardDeckTop();
+	CachedInitialCardShowcasePlaneZ = ResolveInitialCardDeckTop().Z;
+	if (const ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
+	{
+		FVector GunBoundsOrigin = FVector::ZeroVector;
+		FVector GunBoundsExtent = FVector::ZeroVector;
+		GunActor->GetActorBounds(false, GunBoundsOrigin, GunBoundsExtent, true);
+		CachedInitialCardShowcasePlaneZ = FMath::Max(
+			CachedInitialCardShowcasePlaneZ,
+			GunBoundsOrigin.Z + GunBoundsExtent.Z);
+	}
+	CachedInitialCardShowcasePlaneZ += 3.0f;
 }
 
 void AShowDownGameModeBase::BeginInitialCardDeckShowcase()
@@ -1018,17 +1028,16 @@ void AShowDownGameModeBase::BeginInitialCardDeckShowcase()
 	RefreshInitialCardDealSpatialCache();
 
 	const int32 CardCount = InitialCardDealDeckCopies * 7;
-	const float GridVisualScale = InitialCardDealDeckCopies >= 4
-		? 0.68f
-		: (InitialCardDealDeckCopies == 3 ? 0.76f : 0.84f);
-	const float LeadInSeconds = bInitialCardDealIsMultiplayer ? 0.18f : 0.32f;
-	const float RevealStaggerSeconds = 0.045f;
-	const float RevealMoveDuration = FMath::Max(0.1f, InitialDealCardMoveDuration);
-	const float RevealHoldSeconds = 0.85f;
-	const float FlipDuration = 0.28f;
-	const float FlipStaggerSeconds = 0.025f;
-	const float GatherDuration = 0.42f;
-	const float GatherStaggerSeconds = 0.025f;
+	const float GridVisualScale = 0.68f;
+	const float BeatDelay = FMath::Max(0.0f, InitialDealBeatDelay);
+	const float LeadInSeconds = bInitialCardDealIsMultiplayer ? 0.55f : 0.65f;
+	const float RevealStaggerSeconds = 0.075f;
+	const float RevealMoveDuration = FMath::Max(0.65f, InitialDealCardMoveDuration);
+	const float RevealHoldSeconds = FMath::Max(BeatDelay, InitialDealShowcaseHoldDuration);
+	const float FlipDuration = FMath::Max(0.35f, RevealMoveDuration * 0.8f);
+	const float FlipStaggerSeconds = 0.04f;
+	const float GatherDuration = FMath::Max(0.45f, RevealMoveDuration);
+	const float GatherStaggerSeconds = 0.04f;
 
 	for (int32 CardIndex = 0; CardIndex < CardCount; ++CardIndex)
 	{
@@ -1105,7 +1114,7 @@ void AShowDownGameModeBase::BeginInitialCardDeckShowcase()
 	const float FlipFinishedAt = FlipStartedAt
 		+ FMath::Max(0, CardCount - 1) * FlipStaggerSeconds
 		+ FlipDuration;
-	const float GatherStartedAt = FlipFinishedAt + 0.12f;
+	const float GatherStartedAt = FlipFinishedAt + BeatDelay;
 	for (int32 CardIndex = 0; CardIndex < InitialCardDealDeckCards.Num(); ++CardIndex)
 	{
 		const TWeakObjectPtr<ACard> WeakCard(InitialCardDealDeckCards[CardIndex]);
@@ -1128,7 +1137,7 @@ void AShowDownGameModeBase::BeginInitialCardDeckShowcase()
 	const float GatherFinishedAt = GatherStartedAt
 		+ FMath::Max(0, CardCount - 1) * GatherStaggerSeconds
 		+ GatherDuration;
-	ScheduleInitialCardDealAction(GatherFinishedAt + 0.12f, [this]()
+	ScheduleInitialCardDealAction(GatherFinishedAt + BeatDelay, [this]()
 	{
 		StartInitialCardDealFromStack();
 	});
@@ -1367,9 +1376,7 @@ void AShowDownGameModeBase::AnimatePreparedOpeningHands(
 		return;
 	}
 
-	const float StackVisualScale = InitialCardDealDeckCopies >= 4
-		? 0.68f
-		: (InitialCardDealDeckCopies == 3 ? 0.76f : 0.84f);
+	const float StackVisualScale = 0.68f;
 	for (int32 DeckIndex = 0; DeckIndex < InitialCardDealDeckCards.Num(); ++DeckIndex)
 	{
 		if (ACard* DeckCard = InitialCardDealDeckCards[DeckIndex])
@@ -1398,9 +1405,10 @@ void AShowDownGameModeBase::AnimatePreparedOpeningHands(
 		}
 	}
 
-	const float DealLeadInSeconds = 0.18f;
-	const float DealStaggerSeconds = 0.105f;
-	const float DealMoveDuration = FMath::Max(0.1f, InitialDealCardMoveDuration);
+	const float BeatDelay = FMath::Max(0.0f, InitialDealBeatDelay);
+	const float DealLeadInSeconds = 0.30f;
+	const float DealStaggerSeconds = 0.16f;
+	const float DealMoveDuration = FMath::Max(0.65f, InitialDealCardMoveDuration);
 	for (int32 DealIndex = 0; DealIndex < CardsInDealOrder.Num(); ++DealIndex)
 	{
 		const TWeakObjectPtr<ACard> WeakCard(CardsInDealOrder[DealIndex]);
@@ -1423,9 +1431,9 @@ void AShowDownGameModeBase::AnimatePreparedOpeningHands(
 	const float FlatDealFinishedAt = DealLeadInSeconds
 		+ FMath::Max(0, CardsInDealOrder.Num() - 1) * DealStaggerSeconds
 		+ DealMoveDuration;
-	const float LiftStartedAt = FlatDealFinishedAt + 0.38f;
-	const float LiftStepSeconds = 0.22f;
-	const float LiftMoveDuration = DealMoveDuration * 1.15f;
+	const float LiftStartedAt = FlatDealFinishedAt + BeatDelay;
+	const float LiftStepSeconds = 0.32f;
+	const float LiftMoveDuration = DealMoveDuration * 1.2f;
 	const int32 CardsPerParticipant = CardsInDealOrder.Num() / ParticipantCount;
 	for (int32 CardIndex = 0; CardIndex < CardsPerParticipant; ++CardIndex)
 	{
@@ -1465,7 +1473,7 @@ void AShowDownGameModeBase::AnimatePreparedOpeningHands(
 	{
 		WeakCardsInDealOrder.Add(Card);
 	}
-	ScheduleInitialCardDealAction(LiftFinishedAt + 0.26f,
+	ScheduleInitialCardDealAction(LiftFinishedAt + BeatDelay,
 		[this, WeakCardsInDealOrder, FinalTransforms]()
 		{
 			for (int32 CardIndex = 0; CardIndex < WeakCardsInDealOrder.Num(); ++CardIndex)
@@ -1589,11 +1597,15 @@ FTransform AShowDownGameModeBase::BuildInitialCardGridTransform(int32 CardIndex,
 	const FVector TowardPlayer = -TowardTableCenter;
 	const float ColumnFromCenter = static_cast<float>(ColumnIndex) - 3.0f;
 	const float RowFromCenter = static_cast<float>(RowIndex) - static_cast<float>(SafeCopies - 1) * 0.5f;
+	const float ColumnSpacing = FMath::Max(10.0f, InitialDealShowcaseGridSpacing.X);
+	const float RowSpacing = FMath::Max(10.0f, InitialDealShowcaseGridSpacing.Y);
 	FVector Location = TableCenter
-		+ TowardPlayer * 120.0f
-		+ GridRight * (ColumnFromCenter * 52.0f)
-		+ TowardPlayer * (RowFromCenter * 68.0f);
-	Location.Z = ResolveInitialCardTableSurfaceZ() + 2.2f + CardIndex * 0.015f;
+		+ GridRight * (ColumnFromCenter * ColumnSpacing)
+		+ TowardPlayer * (RowFromCenter * RowSpacing);
+	Location.Z = (bInitialCardSpatialCacheValid
+		? CachedInitialCardShowcasePlaneZ
+		: ResolveInitialCardDeckTop().Z + 3.0f)
+		+ CardIndex * 0.015f;
 	return FTransform(BuildInitialFlatCardRotation(TowardTableCenter, bFaceDown), Location);
 }
 
@@ -1616,7 +1628,11 @@ FTransform AShowDownGameModeBase::BuildInitialCardStackTransform(int32 StackInde
 		TowardTableCenter = FVector::ForwardVector;
 	}
 	FVector Location = ResolveInitialCardDeckTop();
-	Location.Z += 0.8f + FMath::Max(0, StackIndex) * 0.16f;
+	Location.Z = (bInitialCardSpatialCacheValid
+		? CachedInitialCardShowcasePlaneZ
+		: Location.Z + 3.0f)
+		+ 0.8f
+		+ FMath::Max(0, StackIndex) * 0.16f;
 	return FTransform(BuildInitialFlatCardRotation(TowardTableCenter, true), Location);
 }
 

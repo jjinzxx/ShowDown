@@ -281,11 +281,10 @@ void AShowDownPlayerController::ClientSetInitialCardDealInputLocked_Implementati
 		CancelPressedBetActionButton();
 		SetFocusedInteractable(nullptr);
 		SetHoveredCard(nullptr);
-		if (!bInitialCardDealIgnoreInputApplied)
+		if (!bInitialCardDealIgnoreMoveInputApplied)
 		{
 			SetIgnoreMoveInput(true);
-			SetIgnoreLookInput(true);
-			bInitialCardDealIgnoreInputApplied = true;
+			bInitialCardDealIgnoreMoveInputApplied = true;
 		}
 		UpdateCenterCrosshairVisibility();
 
@@ -301,11 +300,10 @@ void AShowDownPlayerController::ClientSetInitialCardDealInputLocked_Implementati
 		return;
 	}
 
-	if (bInitialCardDealIgnoreInputApplied)
+	if (bInitialCardDealIgnoreMoveInputApplied)
 	{
 		SetIgnoreMoveInput(false);
-		SetIgnoreLookInput(false);
-		bInitialCardDealIgnoreInputApplied = false;
+		bInitialCardDealIgnoreMoveInputApplied = false;
 	}
 	if (GetNetMode() == NM_Standalone || !bPendingMultiplayerSeatCamera)
 	{
@@ -516,6 +514,23 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 	if (bHasFixedCameraLook)
 	{
 		UpdateFixedCameraMouseLook(DeltaTime);
+	}
+	else if (bInitialCardDealInputLocked
+		&& GetPawn()
+		&& bEnablePawnCameraMouseLook
+		&& (!bRequireRightMouseForPawnCameraLook || IsInputKeyDown(EKeys::RightMouseButton)))
+	{
+		float MouseDeltaX = 0.0f;
+		float MouseDeltaY = 0.0f;
+		GetInputMouseDelta(MouseDeltaX, MouseDeltaY);
+		if (!FMath::IsNearlyZero(MouseDeltaX) || !FMath::IsNearlyZero(MouseDeltaY))
+		{
+			ApplyPawnCameraInput(MouseDeltaX, MouseDeltaY);
+		}
+	}
+	if (bInitialCardDealInputLocked)
+	{
+		UpdateCharacterPlayerCamera(DeltaTime);
 	}
 
 	if (!bHandleShowDownGameplayInput)
