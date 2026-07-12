@@ -447,7 +447,9 @@ private:
 	FTimerHandle CollectorActionPresentationTimerHandle;
 	TFunction<void()> CardPlacementDelayContinuation;
 	TFunction<void()> CollectorActionPresentationContinuation;
+	TFunction<void()> SelfShotGunResultContinuation;
 	TFunction<void()> SelfShotGunPresentationContinuation;
+	TFunction<void()> MultiplayerGunResultContinuation;
 	TArray<TFunction<void()>> QueuedCollectorActionPresentationContinuations;
 	FString LatestPlayerDialogueInput;
 	FString RecentDialogueHistory;
@@ -507,6 +509,7 @@ private:
 	TSet<TObjectPtr<ASDPlayerState>> MultiplayerRestartVotes;
 
 	FTimerHandle MultiplayerStartTimerHandle;
+	FTimerHandle MultiplayerGunResultFallbackTimerHandle;
 	bool bMultiplayerMatchStarted = false;
 	bool bMultiplayerRoundResolving = false;
 	
@@ -516,6 +519,7 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<ASDSelfShotGunActor> ActiveSelfShotGunActor = nullptr;
+	TWeakObjectPtr<ASDSelfShotGunActor> MultiplayerResultGunActor;
 	UPROPERTY()
 	TObjectPtr<ASDBetActionPanelActor> BetActionPanelActor = nullptr;
 
@@ -660,9 +664,26 @@ private:
 	void BroadcastMultiplayerCardSelectedAction(ASDPlayerState* Player) const;
 	void BroadcastMultiplayerBetActionCommitted(ASDPlayerState* Player, EShowDownBetAction Action, int32 TargetBet) const;
 	void BroadcastSystemChatMessage(const FString& Message) const;
-	void PlaySelfShotGunPresentationThen(EShowDownSide TargetSide, bool bLiveRound, TFunction<void()>&& Continuation);
+	void PlaySelfShotGunPresentationThen(
+		EShowDownSide TargetSide,
+		bool bLiveRound,
+		TFunction<void()>&& ResultContinuation,
+		TFunction<void()>&& PresentationContinuation);
 	void FinishSelfShotGunPresentation();
+	void ResolvePendingSelfShotGunResult();
 	void BroadcastPendingSelfShotRouletteResult();
+	void ArmMultiplayerGunResult(
+		ASDSelfShotGunActor* GunActor,
+		float FallbackDelay,
+		TFunction<void()>&& ResultContinuation);
+	void ResolvePendingMultiplayerGunResult();
+	void ClearPendingMultiplayerGunResult();
+
+	UFUNCTION()
+	void HandleMultiplayerGunShotResolved();
+
+	UFUNCTION()
+	void HandleMultiplayerGunPresentationFinished();
 	ASDSelfShotGunActor* FindSelfShotGunActor() const;
 	AShowDownCharacter* FindSingleRouletteCharacter(EShowDownSide TargetSide) const;
 	void PlaySinglePlayerIntroThenStartStage();

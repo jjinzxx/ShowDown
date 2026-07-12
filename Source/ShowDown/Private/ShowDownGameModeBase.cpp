@@ -647,7 +647,9 @@ void AShowDownGameModeBase::ResetForHubReturn()
 	bPendingSelfShotRouletteResult = false;
 	CardPlacementDelayContinuation = TFunction<void()>();
 	CollectorActionPresentationContinuation = TFunction<void()>();
+	SelfShotGunResultContinuation = TFunction<void()>();
 	SelfShotGunPresentationContinuation = TFunction<void()>();
+	ClearPendingMultiplayerGunResult();
 	QueuedCollectorActionPresentationContinuations.Reset();
 	ActiveSelfShotGunActor = nullptr;
 
@@ -2155,26 +2157,32 @@ void AShowDownGameModeBase::BroadcastSystemChatMessage(const FString& Message) c
 void AShowDownGameModeBase::PlaySelfShotGunPresentationThen(
 	EShowDownSide TargetSide,
 	bool bLiveRound,
-	TFunction<void()>&& Continuation)
+	TFunction<void()>&& ResultContinuation,
+	TFunction<void()>&& PresentationContinuation)
 {
+	auto ResolveWithoutGun = [this, TargetSide, bLiveRound, &ResultContinuation, &PresentationContinuation]() mutable
+	{
+		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+		{
+			ShowDownGameState->OnRouletteResult.Broadcast(TargetSide, bLiveRound);
+		}
+		if (ResultContinuation)
+		{
+			ResultContinuation();
+		}
+		PlayCollectorActionPresentationThen(MoveTemp(PresentationContinuation));
+	};
+
 	if (GetNetMode() != NM_Standalone)
 	{
-		bPendingSelfShotRouletteResult = true;
-		bPendingSelfShotLiveRound = bLiveRound;
-		PendingSelfShotTargetSide = TargetSide;
-		BroadcastPendingSelfShotRouletteResult();
-		PlayCollectorActionPresentationThen(MoveTemp(Continuation));
+		ResolveWithoutGun();
 		return;
 	}
 
 	if (bSelfShotGunPresentationInProgress)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Self shot gun presentation is already running. Falling back to collector presentation."));
-		bPendingSelfShotRouletteResult = true;
-		bPendingSelfShotLiveRound = bLiveRound;
-		PendingSelfShotTargetSide = TargetSide;
-		BroadcastPendingSelfShotRouletteResult();
-		PlayCollectorActionPresentationThen(MoveTemp(Continuation));
+		ResolveWithoutGun();
 		return;
 	}
 
@@ -2182,11 +2190,7 @@ void AShowDownGameModeBase::PlaySelfShotGunPresentationThen(
 	if (!GunActor || !GunActor->CanInteract_Implementation(nullptr))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Self shot gun actor is missing or busy. Falling back to collector presentation."));
-		bPendingSelfShotRouletteResult = true;
-		bPendingSelfShotLiveRound = bLiveRound;
-		PendingSelfShotTargetSide = TargetSide;
-		BroadcastPendingSelfShotRouletteResult();
-		PlayCollectorActionPresentationThen(MoveTemp(Continuation));
+		ResolveWithoutGun();
 		return;
 	}
 
@@ -2196,7 +2200,8 @@ void AShowDownGameModeBase::PlaySelfShotGunPresentationThen(
 
 	bSelfShotGunPresentationInProgress = true;
 	ActiveSelfShotGunActor = GunActor;
-	SelfShotGunPresentationContinuation = MoveTemp(Continuation);
+	SelfShotGunResultContinuation = MoveTemp(ResultContinuation);
+	SelfShotGunPresentationContinuation = MoveTemp(PresentationContinuation);
 	bPendingSelfShotRouletteResult = true;
 	bPendingSelfShotLiveRound = bLiveRound;
 	PendingSelfShotTargetSide = TargetSide;
@@ -2320,7 +2325,7 @@ void AShowDownGameModeBase::HandleSelfShotGunPresentationFinished()
 
 void AShowDownGameModeBase::HandleSelfShotGunShotResolved()
 {
-	BroadcastPendingSelfShotRouletteResult();
+	ResolvePendingSelfShotGunResult();
 }
 
 void AShowDownGameModeBase::FinishSelfShotGunPresentation()
@@ -2338,7 +2343,7 @@ void AShowDownGameModeBase::FinishSelfShotGunPresentation()
 			&AShowDownGameModeBase::HandleSelfShotGunShotResolved);
 	}
 
-	BroadcastPendingSelfShotRouletteResult();
+	ResolvePendingSelfShotGunResult();
 	bSelfShotGunPresentationInProgress = false;
 	ActiveSelfShotGunActor = nullptr;
 
@@ -2347,6 +2352,17 @@ void AShowDownGameModeBase::FinishSelfShotGunPresentation()
 	if (Continuation)
 	{
 		Continuation();
+	}
+}
+
+void AShowDownGameModeBase::ResolvePendingSelfShotGunResult()
+{
+	BroadcastPendingSelfShotRouletteResult();
+	TFunction<void()> ResultContinuation = MoveTemp(SelfShotGunResultContinuation);
+	SelfShotGunResultContinuation = TFunction<void()>();
+	if (ResultContinuation)
+	{
+		ResultContinuation();
 	}
 }
 
@@ -4896,6 +4912,76 @@ void AShowDownGameModeBase::ClearMultiplayerRoundTimers()
 		GetWorldTimerManager().ClearTimer(TimerHandle);
 	}
 	MultiplayerRoundTimerHandles.Reset();
+	ClearPendingMultiplayerGunResult();
+}
+
+void AShowDownGameModeBase::ArmMultiplayerGunResult(
+	ASDSelfShotGunActor* GunActor,
+	float FallbackDelay,
+	TFunction<void()>&& ResultContinuation)
+{
+	if (!GunActor || !ResultContinuation)
+	{
+		return;
+	}
+
+	if (MultiplayerGunResultContinuation)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("A multiplayer gun result was still pending. Resolving it before arming the next shot."));
+		ResolvePendingMultiplayerGunResult();
+	}
+
+	MultiplayerResultGunActor = GunActor;
+	MultiplayerGunResultContinuation = MoveTemp(ResultContinuation);
+	GunActor->OnGunFired.AddUniqueDynamic(this, &AShowDownGameModeBase::HandleMultiplayerGunShotResolved);
+	GunActor->OnGunEmptyFired.AddUniqueDynamic(this, &AShowDownGameModeBase::HandleMultiplayerGunShotResolved);
+	GunActor->OnGunPresentationFinished.AddUniqueDynamic(
+		this,
+		&AShowDownGameModeBase::HandleMultiplayerGunPresentationFinished);
+
+	GetWorldTimerManager().SetTimer(
+		MultiplayerGunResultFallbackTimerHandle,
+		this,
+		&AShowDownGameModeBase::ResolvePendingMultiplayerGunResult,
+		FMath::Max(0.05f, FallbackDelay),
+		false);
+}
+
+void AShowDownGameModeBase::HandleMultiplayerGunShotResolved()
+{
+	ResolvePendingMultiplayerGunResult();
+}
+
+void AShowDownGameModeBase::HandleMultiplayerGunPresentationFinished()
+{
+	// The fire/empty delegates are the normal path. This protects state if a
+	// presentation is interrupted after it starts but before either delegate.
+	ResolvePendingMultiplayerGunResult();
+}
+
+void AShowDownGameModeBase::ResolvePendingMultiplayerGunResult()
+{
+	TFunction<void()> ResultContinuation = MoveTemp(MultiplayerGunResultContinuation);
+	ClearPendingMultiplayerGunResult();
+	if (ResultContinuation)
+	{
+		ResultContinuation();
+	}
+}
+
+void AShowDownGameModeBase::ClearPendingMultiplayerGunResult()
+{
+	GetWorldTimerManager().ClearTimer(MultiplayerGunResultFallbackTimerHandle);
+	if (ASDSelfShotGunActor* GunActor = MultiplayerResultGunActor.Get())
+	{
+		GunActor->OnGunFired.RemoveDynamic(this, &AShowDownGameModeBase::HandleMultiplayerGunShotResolved);
+		GunActor->OnGunEmptyFired.RemoveDynamic(this, &AShowDownGameModeBase::HandleMultiplayerGunShotResolved);
+		GunActor->OnGunPresentationFinished.RemoveDynamic(
+			this,
+			&AShowDownGameModeBase::HandleMultiplayerGunPresentationFinished);
+	}
+	MultiplayerResultGunActor.Reset();
+	MultiplayerGunResultContinuation = TFunction<void()>();
 }
 
 FTransform AShowDownGameModeBase::BuildCardRevealPresentationTransform(
@@ -4959,43 +5045,56 @@ void AShowDownGameModeBase::ApplyRouletteResult(EShowDownSide TargetSide, int32 
 
 	if (!bHit)
 	{
-		BroadcastSystemChatMessage(FString::Printf(
-			TEXT("%s님이 %d발 룰렛을 피했습니다."),
-			TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
-			ClampedBulletCount));
-		ShowEventDebugMessage(FString::Printf(TEXT("룰렛: %s %d발 / 안 맞음"),
-			*GetSideDisplayText(TargetSide),
-			ClampedBulletCount));
-		PlaySelfShotGunPresentationThen(TargetSide, false, MoveTemp(Continuation));
+		auto ResolveMiss = [this, TargetSide, ClampedBulletCount]()
+		{
+			BroadcastSystemChatMessage(FString::Printf(
+				TEXT("%s님이 %d발 룰렛을 피했습니다."),
+				TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
+				ClampedBulletCount));
+			ShowEventDebugMessage(FString::Printf(TEXT("룰렛: %s %d발 / 안 맞음"),
+				*GetSideDisplayText(TargetSide),
+				ClampedBulletCount));
+		};
+		PlaySelfShotGunPresentationThen(
+			TargetSide,
+			false,
+			MoveTemp(ResolveMiss),
+			MoveTemp(Continuation));
 		return;
 	}
 
-	FShowDownParticipantState& TargetState = TargetSide == EShowDownSide::Player ? PlayerState : CollectorState;
-	TargetState.Lives = FMath::Max(0, TargetState.Lives - 1);
-	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+	auto ResolveHit = [this, TargetSide, ClampedBulletCount]()
 	{
-		ShowDownGameState->OnLifeChanged.Broadcast(TargetSide, TargetState.Lives);
-	}
-	BroadcastSystemChatMessage(FString::Printf(
-		TEXT("%s님이 %d발 룰렛에 맞았습니다. 남은 목숨: %d"),
-		TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
-		ClampedBulletCount,
-		TargetState.Lives));
-	if (TargetState.Lives <= 0)
-	{
+		FShowDownParticipantState& TargetState = TargetSide == EShowDownSide::Player ? PlayerState : CollectorState;
+		TargetState.Lives = FMath::Max(0, TargetState.Lives - 1);
+		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+		{
+			ShowDownGameState->OnLifeChanged.Broadcast(TargetSide, TargetState.Lives);
+		}
 		BroadcastSystemChatMessage(FString::Printf(
-			TEXT("%s님이 사망했습니다."),
-			TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector")));
-	}
-	ShowEventDebugMessage(FString::Printf(TEXT("룰렛: %s %d발 / 총 맞음 / 목숨 %d"),
-		*GetSideDisplayText(TargetSide),
-		ClampedBulletCount,
-		TargetState.Lives));
-	PlaySelfShotGunPresentationThen(TargetSide, true, MoveTemp(Continuation));
-
-	UE_LOG(LogTemp, Log, TEXT("%s lives: %d"),
-		TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
-		TargetState.Lives);
+			TEXT("%s님이 %d발 룰렛에 맞았습니다. 남은 목숨: %d"),
+			TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
+			ClampedBulletCount,
+			TargetState.Lives));
+		if (TargetState.Lives <= 0)
+		{
+			BroadcastSystemChatMessage(FString::Printf(
+				TEXT("%s님이 사망했습니다."),
+				TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector")));
+		}
+		ShowEventDebugMessage(FString::Printf(TEXT("룰렛: %s %d발 / 총 맞음 / 목숨 %d"),
+			*GetSideDisplayText(TargetSide),
+			ClampedBulletCount,
+			TargetState.Lives));
+		UE_LOG(LogTemp, Log, TEXT("%s lives: %d"),
+			TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
+			TargetState.Lives);
+	};
+	PlaySelfShotGunPresentationThen(
+		TargetSide,
+		true,
+		MoveTemp(ResolveHit),
+		MoveTemp(Continuation));
 }
 
 void AShowDownGameModeBase::EndRound()
@@ -6825,8 +6924,6 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 	{
 		ShowDownGameState->SetNameTagRoundStatus(ClampedBulletCount, EShowDownSide::Player, EShowDownPlayerSlot::None);
 	}
-	MarkMultiplayerBetBulletRouletteTarget(TargetPlayer, ClampedBulletCount);
-	RefreshBetBulletPresentation();
 	const int32 LiveRoundsBeforeShot = MultiplayerLiveRoundCount;
 	const int32 ChambersBeforeShot = bUseSharedChambers ? MultiplayerRemainingChamberCount : 6;
 	const bool bHit = bUseSharedChambers
@@ -6873,9 +6970,20 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 			}
 		}
 
-		ResolvedTargetPlayer->ForceNetUpdate();
-		RefreshMultiplayerCharacterVisibility();
 		const int32 RemainingLives = ResolvedTargetPlayer->Lives;
+		// Publish the actual shot outcome before any explanatory chat. Character
+		// hit reactions and heart updates therefore begin from the result event,
+		// never from a message that arrives ahead of the gun.
+		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+		{
+			ShowDownGameState->BroadcastMultiplayerRouletteResult(
+				TargetSlot,
+				TargetName,
+				ClampedBulletCount,
+				bHit,
+				RemainingLives);
+		}
+		ResolvedTargetPlayer->ForceNetUpdate();
 		if (bHit)
 		{
 			BroadcastSystemChatMessage(FString::Printf(
@@ -6904,15 +7012,6 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 			bHit ? TEXT("hit") : TEXT("miss"),
 			RemainingLives));
 
-		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
-		{
-			ShowDownGameState->BroadcastMultiplayerRouletteResult(
-				TargetSlot,
-				TargetName,
-				ClampedBulletCount,
-				bHit,
-				RemainingLives);
-		}
 		if (ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
 		{
 			GunActor->SetTableStatus(
@@ -6923,11 +7022,26 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 		}
 	};
 
-	auto StartPresentation = [this, WeakTargetPlayer, TargetSlot, TargetName, ClampedBulletCount, bHit, ResultDelay, BroadcastResult, LiveRoundsBeforeShot, ChambersBeforeShot]()
+	auto StartPresentation = [this, WeakTargetPlayer, TargetSlot, TargetName, ClampedBulletCount, bHit, ResultDelay, FinishDelay, BroadcastResult, LiveRoundsBeforeShot, ChambersBeforeShot]()
 	{
 		if (!WeakTargetPlayer.IsValid())
 		{
 			return;
+		}
+
+		ASDSelfShotGunActor* GunActor = FindSelfShotGunActor();
+		const bool bResolveFromGunEvent = GunActor && GunActor->CanInteract_Implementation(nullptr);
+		if (bResolveFromGunEvent)
+		{
+			TFunction<void()> GunResultContinuation = BroadcastResult;
+			ArmMultiplayerGunResult(GunActor, FinishDelay, MoveTemp(GunResultContinuation));
+		}
+		if (ASDPlayerState* ResolvedTargetPlayer = WeakTargetPlayer.Get())
+		{
+			// Apply the target marker when this shot actually starts. Scheduling a
+			// sequence used to leave every earlier shot pointing at the final target.
+			MarkMultiplayerBetBulletRouletteTarget(ResolvedTargetPlayer, ClampedBulletCount);
+			RefreshBetBulletPresentation();
 		}
 
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
@@ -6937,11 +7051,10 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 				LiveRoundsBeforeShot,
 				EShowDownSide::Player,
 				TargetSlot);
-			RefreshBetBulletPresentation();
 			ShowDownGameState->BroadcastMultiplayerRouletteStarted(TargetSlot, TargetName, ClampedBulletCount);
 			ShowDownGameState->BroadcastMultiplayerRoulettePresentation(TargetSlot, TargetName, ClampedBulletCount, bHit);
 		}
-		if (ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
+		if (GunActor)
 		{
 			GunActor->SetTableStatus(
 				LiveRoundsBeforeShot,
@@ -6950,6 +7063,13 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 				TargetSlot);
 		}
 
+		if (bResolveFromGunEvent)
+		{
+			return;
+		}
+
+		// Missing/busy gun fallback only. Normal gameplay resolves from the gun's
+		// real fire or empty-click delegate instead of predicting it with a timer.
 		if (ResultDelay <= KINDA_SMALL_NUMBER)
 		{
 			BroadcastResult();
