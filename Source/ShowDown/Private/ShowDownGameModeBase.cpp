@@ -1158,7 +1158,7 @@ void AShowDownGameModeBase::BeginInitialCardDeckShowcase()
 						RevealMoveDuration,
 						24.0f,
 						false,
-						true);
+						false);
 					LiveCard->ForceNetUpdate();
 				}
 			});
@@ -1183,7 +1183,7 @@ void AShowDownGameModeBase::BeginInitialCardDeckShowcase()
 						FlipDuration,
 						0.0f,
 						false,
-						true);
+						false);
 				}
 			});
 	}
