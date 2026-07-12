@@ -376,7 +376,7 @@ public:
 	float InitialDealShowcaseHoldDuration = 1.50f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "10.0", DisplayName = "Showcase Grid Spacing (Column, Row)"))
-	FVector2D InitialDealShowcaseGridSpacing = FVector2D(10.0f, 10.0f);
+	FVector2D InitialDealShowcaseGridSpacing = FVector2D(10.0f, 12.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro")
 	bool bPlaySinglePlayerIntro = true;

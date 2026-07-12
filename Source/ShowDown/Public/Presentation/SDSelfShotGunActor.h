@@ -102,6 +102,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Status")
 	void SetTableStatus(int32 LiveRounds, int32 RemainingChambers, EShowDownPhase Phase, EShowDownPlayerSlot TurnSlot);
 
+	// Clears the centre of the table while the opening deck is displayed, then
+	// restores the authored gun transform before normal play begins.
+	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Opening Cards")
+	void SetOpeningCardShowcaseStowed(bool bStowed);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Opening Cards", meta = (ClampMin = "0.0"))
+	float OpeningCardShowcaseSinkDistance = 35.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Opening Cards", meta = (ClampMin = "0.05"))
+	float OpeningCardShowcaseMoveDuration = 0.45f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Ammo Status Display")
 	FVector AmmoStatusWorldOffset = FVector(0.0f, 0.0f, 12.0f);
 
@@ -150,6 +161,9 @@ protected:
 	UFUNCTION()
 	void OnRep_TableStatus();
 
+	UFUNCTION()
+	void OnRep_OpeningCardShowcaseStowed();
+
 	void ApplyAmmoStatusDisplaySettings();
 	void UpdateAmmoStatusAnchorLocation();
 
@@ -173,6 +187,9 @@ protected:
 
 	UPROPERTY(ReplicatedUsing = OnRep_TableStatus, BlueprintReadOnly, Category = "Self Shot Gun|Status")
 	EShowDownPlayerSlot StatusTurnSlot = EShowDownPlayerSlot::None;
+
+	UPROPERTY(ReplicatedUsing = OnRep_OpeningCardShowcaseStowed)
+	bool bOpeningCardShowcaseStowed = false;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UStaticMeshComponent> GunMesh;
@@ -578,6 +595,7 @@ private:
 	void StopTinnitusSound();
 	bool IsRuntimeTickRequired() const;
 	void RefreshRuntimeTickState();
+	void UpdateOpeningCardShowcaseStow(float DeltaSeconds);
 	void SetBlackoutInstant(float Alpha, bool bHoldWhenFinished);
 	ASDArtToneController* ResolveHitSequenceArtToneController();
 	bool ResolveCurrentShotIsLive() const;
@@ -621,6 +639,7 @@ private:
 	float HitSequenceElapsedTime = 0.0f;
 	float MuzzleFlashElapsedTime = 0.0f;
 	float TinnitusElapsedTime = 0.0f;
+	float OpeningCardShowcaseStowAlpha = 0.0f;
 	bool bSelfShotCinematicCameraActive = false;
 	bool bSelfShotCinematicCameraStartPending = false;
 	bool bSelfShotCinematicCameraHoldStarted = false;

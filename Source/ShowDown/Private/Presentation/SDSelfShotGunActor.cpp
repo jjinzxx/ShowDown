@@ -289,6 +289,7 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 
 	if (AnimState == EGunAnimState::Idle)
 	{
+		UpdateOpeningCardShowcaseStow(DeltaSeconds);
 		UpdateRevolverPlacementDevPreview();
 		RefreshRuntimeTickState();
 		return;
@@ -643,6 +644,24 @@ void ASDSelfShotGunActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
 	DOREPLIFETIME(ASDSelfShotGunActor, StatusRemainingChambers);
 	DOREPLIFETIME(ASDSelfShotGunActor, StatusPhase);
 	DOREPLIFETIME(ASDSelfShotGunActor, StatusTurnSlot);
+	DOREPLIFETIME(ASDSelfShotGunActor, bOpeningCardShowcaseStowed);
+}
+
+void ASDSelfShotGunActor::SetOpeningCardShowcaseStowed(bool bStowed)
+{
+	if (!HasAuthority() || bOpeningCardShowcaseStowed == bStowed)
+	{
+		return;
+	}
+
+	bOpeningCardShowcaseStowed = bStowed;
+	OnRep_OpeningCardShowcaseStowed();
+	ForceNetUpdate();
+}
+
+void ASDSelfShotGunActor::OnRep_OpeningCardShowcaseStowed()
+{
+	RefreshRuntimeTickState();
 }
 
 bool ASDSelfShotGunActor::TryResolveCharacterPresentationShot(
@@ -1432,13 +1451,15 @@ void ASDSelfShotGunActor::StopTinnitusSound()
 
 bool ASDSelfShotGunActor::IsRuntimeTickRequired() const
 {
+	const float OpeningCardShowcaseTargetAlpha = bOpeningCardShowcaseStowed ? 1.0f : 0.0f;
 	const bool bPresentationActive = AnimState != EGunAnimState::Idle
 		|| HitSequenceState != EHitSequenceState::Idle
 		|| MuzzleFlashElapsedTime > 0.0f
 		|| bSelfShotCinematicCameraActive
 		|| bSelfShotCinematicCameraStartPending
 		|| bCinematicCameraShakeActive
-		|| TinnitusAudioComponent != nullptr;
+		|| TinnitusAudioComponent != nullptr
+		|| !FMath::IsNearlyEqual(OpeningCardShowcaseStowAlpha, OpeningCardShowcaseTargetAlpha);
 
 #if WITH_EDITOR
 	return bPresentationActive || bEnableRevolverPlacementDevMode || bRevolverPlacementDevPreviewActive;
@@ -1450,6 +1471,33 @@ bool ASDSelfShotGunActor::IsRuntimeTickRequired() const
 void ASDSelfShotGunActor::RefreshRuntimeTickState()
 {
 	SetActorTickEnabled(IsRuntimeTickRequired());
+}
+
+void ASDSelfShotGunActor::UpdateOpeningCardShowcaseStow(float DeltaSeconds)
+{
+	if (!bHasCapturedRestActorTransform)
+	{
+		return;
+	}
+
+	const float TargetAlpha = bOpeningCardShowcaseStowed ? 1.0f : 0.0f;
+	const float Duration = FMath::Max(0.05f, OpeningCardShowcaseMoveDuration);
+	OpeningCardShowcaseStowAlpha = FMath::FInterpConstantTo(
+		OpeningCardShowcaseStowAlpha,
+		TargetAlpha,
+		DeltaSeconds,
+		1.0f / Duration);
+
+	FTransform StowedTransform = RestActorTransform;
+	FVector StowedLocation = StowedTransform.GetLocation();
+	StowedLocation.Z -= FMath::Max(0.0f, OpeningCardShowcaseSinkDistance);
+	StowedTransform.SetLocation(StowedLocation);
+	const float EasedAlpha = FMath::InterpEaseInOut(
+		0.0f,
+		1.0f,
+		OpeningCardShowcaseStowAlpha,
+		2.0f);
+	SetActorTransformAlpha(RestActorTransform, StowedTransform, EasedAlpha);
 }
 
 void ASDSelfShotGunActor::SetBlackoutInstant(float Alpha, bool bHoldWhenFinished)

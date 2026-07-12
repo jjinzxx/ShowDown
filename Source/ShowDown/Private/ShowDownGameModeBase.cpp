@@ -961,6 +961,10 @@ bool AShowDownGameModeBase::TryImmediateInitialCardDealFallback()
 void AShowDownGameModeBase::StopInitialCardDealOnFailure(const TCHAR* Reason)
 {
 	UE_LOG(LogTemp, Error, TEXT("Initial card deal stopped safely: %s"), Reason ? Reason : TEXT("unknown failure"));
+	if (ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
+	{
+		GunActor->SetOpeningCardShowcaseStowed(false);
+	}
 	for (FTimerHandle& TimerHandle : InitialCardDealPresentationTimerHandles)
 	{
 		GetWorldTimerManager().ClearTimer(TimerHandle);
@@ -1031,55 +1035,6 @@ void AShowDownGameModeBase::RefreshInitialCardDealSpatialCache() const
 	CachedInitialCardShowcasePlaneZ = CachedInitialCardTableSurfaceZ + 0.05f;
 	CachedInitialCardShowcaseCenter = CachedInitialCardTableCenter;
 
-	FVector TowardTableCenter = CachedInitialCardReferenceHandSlot.IsValid()
-		? CachedInitialCardTableCenter - CachedInitialCardReferenceHandSlot->GetComponentLocation()
-		: FVector::ForwardVector;
-	TowardTableCenter.Z = 0.0f;
-	TowardTableCenter = TowardTableCenter.GetSafeNormal();
-	if (TowardTableCenter.IsNearlyZero())
-	{
-		TowardTableCenter = FVector::ForwardVector;
-	}
-
-	// Keep the laid-out grid on the central CardDec pad while shifting it just
-	// far enough past the gun. This avoids both mesh overlap and the old solution
-	// of floating the whole grid above the gun.
-	if (const ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
-	{
-		FVector GunBoundsOrigin = FVector::ZeroVector;
-		FVector GunBoundsExtent = FVector::ZeroVector;
-		GunActor->GetActorBounds(false, GunBoundsOrigin, GunBoundsExtent, true);
-		const float ColumnSpacing = FMath::Max(10.0f, InitialDealShowcaseGridSpacing.X);
-		const float RowSpacing = FMath::Max(10.0f, InitialDealShowcaseGridSpacing.Y);
-		const float GridHalfWidth = 3.0f * ColumnSpacing + 2.7f;
-		const float GridHalfHeight =
-			static_cast<float>(FMath::Max(0, InitialCardDealDeckCopies - 1)) * 0.5f * RowSpacing + 3.7f;
-		const float GunCenterAlongLayout = FVector::DotProduct(
-			GunBoundsOrigin - CachedInitialCardTableCenter,
-			TowardTableCenter);
-		const float GunExtentAlongLayout =
-			FMath::Abs(TowardTableCenter.X) * GunBoundsExtent.X
-			+ FMath::Abs(TowardTableCenter.Y) * GunBoundsExtent.Y;
-		float ShowcaseOffset = FMath::Max(
-			0.0f,
-			GunCenterAlongLayout + GunExtentAlongLayout + GridHalfHeight + 2.0f);
-		if (CachedInitialCardShowcasePadRadius > GridHalfWidth + 1.0f)
-		{
-			const float UsableRadius = CachedInitialCardShowcasePadRadius - 1.0f;
-			const float MaxOffset = FMath::Max(
-				0.0f,
-				FMath::Sqrt(FMath::Max(0.0f, FMath::Square(UsableRadius) - FMath::Square(GridHalfWidth)))
-				- GridHalfHeight);
-			ShowcaseOffset = FMath::Min(ShowcaseOffset, MaxOffset);
-		}
-		// Avoid solving gun overlap by pushing a four-row grid into the opposite
-		// player's white slot; the array must still read as centred on the pad.
-		if (CachedInitialCardShowcasePadRadius > 0.0f)
-		{
-			ShowcaseOffset = FMath::Min(ShowcaseOffset, CachedInitialCardShowcasePadRadius * 0.36f);
-		}
-		CachedInitialCardShowcaseCenter += TowardTableCenter * ShowcaseOffset;
-	}
 }
 
 void AShowDownGameModeBase::BeginInitialCardDeckShowcase()
@@ -1091,9 +1046,14 @@ void AShowDownGameModeBase::BeginInitialCardDeckShowcase()
 
 	bInitialCardDealShowcaseStarted = true;
 	RefreshInitialCardDealSpatialCache();
+	if (ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
+	{
+		GunActor->SetOpeningCardShowcaseStowed(true);
+	}
 
 	const int32 CardCount = InitialCardDealDeckCopies * 7;
-	const float GridVisualScale = 0.68f;
+	// Showcase the real cards at the same visual scale used by the final hand.
+	const float GridVisualScale = 1.0f;
 	SetInitialDealDeckVisual(CardCount, CardCount);
 	const float BeatDelay = FMath::Max(0.0f, InitialDealBeatDelay);
 	const float LeadInSeconds = bInitialCardDealIsMultiplayer ? 0.55f : 0.65f;
@@ -1238,6 +1198,10 @@ void AShowDownGameModeBase::BeginInitialCardDeckShowcase()
 			}
 		}
 		SetInitialDealDeckVisual(InitialCardDealDeckCards.Num(), InitialCardDealDeckCards.Num());
+		if (ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
+		{
+			GunActor->SetOpeningCardShowcaseStowed(false);
+		}
 	});
 	ScheduleInitialCardDealAction(GatherFinishedAt + FMath::Max(BeatDelay, 0.08f), [this]()
 	{
@@ -1618,6 +1582,10 @@ void AShowDownGameModeBase::AnimatePreparedOpeningHands(
 void AShowDownGameModeBase::FinishInitialCardDealPresentation()
 {
 	TFunction<void()> Continuation = MoveTemp(InitialCardDealPresentationContinuation);
+	if (ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
+	{
+		GunActor->SetOpeningCardShowcaseStowed(false);
+	}
 	for (ACard* Card : InitialCardDealDeckCards)
 	{
 		if (IsValid(Card))
@@ -1648,6 +1616,10 @@ void AShowDownGameModeBase::FinishInitialCardDealPresentation()
 void AShowDownGameModeBase::ClearInitialCardDealPresentation(bool bDestroyDeckCards)
 {
 	const bool bWasInProgress = bInitialCardDealPresentationInProgress;
+	if (ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
+	{
+		GunActor->SetOpeningCardShowcaseStowed(false);
+	}
 	for (FTimerHandle& TimerHandle : InitialCardDealPresentationTimerHandles)
 	{
 		GetWorldTimerManager().ClearTimer(TimerHandle);
@@ -1735,7 +1707,9 @@ FTransform AShowDownGameModeBase::BuildInitialCardGridTransform(int32 CardIndex,
 	const float ColumnFromCenter = static_cast<float>(ColumnIndex) - 3.0f;
 	const float RowFromCenter = static_cast<float>(RowIndex) - static_cast<float>(SafeCopies - 1) * 0.5f;
 	const float ColumnSpacing = FMath::Max(10.0f, InitialDealShowcaseGridSpacing.X);
-	const float RowSpacing = FMath::Max(10.0f, InitialDealShowcaseGridSpacing.Y);
+	// A full-size BP_Card is slightly longer than ten units, so keep enough row
+	// separation for every rank to remain visible without card overlap.
+	const float RowSpacing = FMath::Max(12.0f, InitialDealShowcaseGridSpacing.Y);
 	FVector Location = ShowcaseCenter
 		+ GridRight * (ColumnFromCenter * ColumnSpacing)
 		+ TowardPlayer * (RowFromCenter * RowSpacing);
