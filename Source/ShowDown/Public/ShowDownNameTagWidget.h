@@ -69,9 +69,6 @@ private:
 	TObjectPtr<UTextBlock> NameText;
 
 	UPROPERTY(Transient)
-	TObjectPtr<UTextBlock> LivesText;
-
-	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> StatusText;
 
 	UPROPERTY(Transient)

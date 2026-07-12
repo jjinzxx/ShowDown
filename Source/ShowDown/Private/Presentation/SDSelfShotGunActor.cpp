@@ -86,6 +86,8 @@ ASDSelfShotGunActor::ASDSelfShotGunActor()
 	AmmoStatusWidgetComponent->SetPivot(FVector2D(0.5f, 0.5f));
 	AmmoStatusWidgetComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	AmmoStatusWidgetComponent->SetGenerateOverlapEvents(false);
+	AmmoStatusWidgetComponent->SetVisibility(false);
+	AmmoStatusWidgetComponent->SetHiddenInGame(true);
 
 	GunMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("GunMesh"));
 	GunMesh->SetupAttachment(SceneRoot);
@@ -250,6 +252,9 @@ void ASDSelfShotGunActor::BeginPlay()
 
 	if (AShowDownGameStateBase* ShowDownGameState = GetWorld() ? GetWorld()->GetGameState<AShowDownGameStateBase>() : nullptr)
 	{
+		ShowDownGameState->OnPhaseChanged.AddUniqueDynamic(
+			this,
+			&ASDSelfShotGunActor::HandleGamePhaseChanged);
 		ShowDownGameState->OnMultiplayerRoulettePresentation.AddUniqueDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
@@ -262,6 +267,9 @@ void ASDSelfShotGunActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	if (AShowDownGameStateBase* ShowDownGameState = GetWorld() ? GetWorld()->GetGameState<AShowDownGameStateBase>() : nullptr)
 	{
+		ShowDownGameState->OnPhaseChanged.RemoveDynamic(
+			this,
+			&ASDSelfShotGunActor::HandleGamePhaseChanged);
 		ShowDownGameState->OnMultiplayerRoulettePresentation.RemoveDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
@@ -574,6 +582,12 @@ void ASDSelfShotGunActor::OnRep_TableStatus()
 	ApplyAmmoStatusDisplaySettings();
 }
 
+void ASDSelfShotGunActor::HandleGamePhaseChanged(EShowDownPhase NewPhase)
+{
+	StatusPhase = NewPhase;
+	ApplyAmmoStatusDisplaySettings();
+}
+
 void ASDSelfShotGunActor::ApplyAmmoStatusDisplaySettings()
 {
 	if (AmmoStatusAnchor)
@@ -587,6 +601,9 @@ void ASDSelfShotGunActor::ApplyAmmoStatusDisplaySettings()
 	}
 	if (AmmoStatusWidgetComponent)
 	{
+		const bool bShouldShowAmmoStatus =
+			!bOpeningCardShowcaseStowed
+			&& (StatusPhase == EShowDownPhase::Betting || StatusPhase == EShowDownPhase::Roulette);
 		AmmoStatusWidgetComponent->SetDrawSize(FVector2D(
 			FMath::Max(32.0f, AmmoStatusDrawSize.X),
 			FMath::Max(32.0f, AmmoStatusDrawSize.Y)));
@@ -600,6 +617,8 @@ void ASDSelfShotGunActor::ApplyAmmoStatusDisplaySettings()
 				AmmoStatusTextColor,
 				AmmoStatusBackgroundColor);
 		}
+		AmmoStatusWidgetComponent->SetVisibility(bShouldShowAmmoStatus, true);
+		AmmoStatusWidgetComponent->SetHiddenInGame(!bShouldShowAmmoStatus, true);
 	}
 }
 
@@ -661,6 +680,7 @@ void ASDSelfShotGunActor::SetOpeningCardShowcaseStowed(bool bStowed)
 
 void ASDSelfShotGunActor::OnRep_OpeningCardShowcaseStowed()
 {
+	ApplyAmmoStatusDisplaySettings();
 	RefreshRuntimeTickState();
 }
 

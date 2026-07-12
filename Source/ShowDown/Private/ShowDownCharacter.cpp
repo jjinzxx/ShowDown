@@ -8,8 +8,10 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/TextRenderComponent.h"
 #include "Components/WidgetComponent.h"
 #include "Engine/Engine.h"
+#include "Engine/Font.h"
 #include "Engine/World.h"
 #include "Engine/SkeletalMesh.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -20,6 +22,7 @@
 #include "ShowDownCharacterAnimInstance.h"
 #include "ShowDownGameStateBase.h"
 #include "ShowDownNameTagWidget.h"
+#include "UObject/ConstructorHelpers.h"
 
 namespace
 {
@@ -79,6 +82,41 @@ AShowDownCharacter::AShowDownCharacter()
 	NameTagWidgetComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	NameTagWidgetComponent->SetGenerateOverlapEvents(false);
 	NameTagWidgetComponent->SetVisibility(false);
+
+	WorldLivesAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("WorldLivesAnchor"));
+	WorldLivesAnchor->SetupAttachment(GetCapsuleComponent());
+	WorldLivesAnchor->SetRelativeLocation(WorldLivesRelativeLocation);
+	WorldLivesAnchor->SetRelativeRotation(FRotator::ZeroRotator);
+
+	WorldLivesShadowText = CreateDefaultSubobject<UTextRenderComponent>(TEXT("WorldLivesShadow"));
+	WorldLivesShadowText->SetupAttachment(WorldLivesAnchor);
+	WorldLivesShadowText->SetRelativeLocation(FVector(-0.20f, 0.65f, -0.65f));
+	WorldLivesShadowText->SetHorizontalAlignment(EHTA_Center);
+	WorldLivesShadowText->SetVerticalAlignment(EVRTA_TextCenter);
+	WorldLivesShadowText->SetWorldSize(WorldLivesTextSize);
+	WorldLivesShadowText->SetTextRenderColor(FColor(8, 0, 0, 230));
+	WorldLivesShadowText->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	WorldLivesShadowText->SetCastShadow(false);
+	WorldLivesShadowText->SetVisibility(false);
+
+	WorldLivesText = CreateDefaultSubobject<UTextRenderComponent>(TEXT("WorldLives"));
+	WorldLivesText->SetupAttachment(WorldLivesAnchor);
+	WorldLivesText->SetRelativeLocation(FVector::ZeroVector);
+	WorldLivesText->SetHorizontalAlignment(EHTA_Center);
+	WorldLivesText->SetVerticalAlignment(EVRTA_TextCenter);
+	WorldLivesText->SetWorldSize(WorldLivesTextSize);
+	WorldLivesText->SetTextRenderColor(FColor(245, 24, 48, 255));
+	WorldLivesText->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	WorldLivesText->SetCastShadow(false);
+	WorldLivesText->SetVisibility(false);
+
+	static ConstructorHelpers::FObjectFinder<UFont> WorldLivesFont(
+		TEXT("/Game/UI/Font/Pretendard/static/Pretendard-Bold_Font.Pretendard-Bold_Font"));
+	if (WorldLivesFont.Succeeded())
+	{
+		WorldLivesShadowText->SetFont(WorldLivesFont.Object);
+		WorldLivesText->SetFont(WorldLivesFont.Object);
+	}
 
 	BetStatusAnchorComponent = CreateDefaultSubobject<USceneComponent>(TEXT("BetStatusAnchor"));
 	BetStatusAnchorComponent->SetupAttachment(GetCapsuleComponent());
@@ -1249,7 +1287,6 @@ void AShowDownCharacter::RefreshNameTag()
 	if (UShowDownNameTagWidget* NameTagWidget = Cast<UShowDownNameTagWidget>(NameTagWidgetComponent->GetUserWidgetObject()))
 	{
 		NameTagWidget->SetDisplayName(FText::FromString(DisplayName));
-		NameTagWidget->SetLives(CharacterLives);
 		NameTagWidget->SetStatusText(FText::GetEmpty());
 		NameTagWidget->SetTurnActive(IsNameTagTurnActive());
 		NameTagWidget->SetSpeakingIndicatorVisible(bVoiceTalking);
@@ -1258,6 +1295,40 @@ void AShowDownCharacter::RefreshNameTag()
 	const bool bVisible = ShouldShowNameTag();
 	NameTagWidgetComponent->SetVisibility(bVisible, true);
 	NameTagWidgetComponent->SetHiddenInGame(!bVisible, true);
+	RefreshWorldLives();
+}
+
+void AShowDownCharacter::RefreshWorldLives()
+{
+	if (!WorldLivesAnchor || !WorldLivesText || !WorldLivesShadowText)
+	{
+		return;
+	}
+
+	WorldLivesAnchor->SetRelativeLocation(WorldLivesRelativeLocation);
+	WorldLivesAnchor->SetRelativeRotation(FRotator::ZeroRotator);
+	FString Hearts;
+	for (int32 LifeIndex = 0; LifeIndex < CharacterLives; ++LifeIndex)
+	{
+		if (LifeIndex > 0)
+		{
+			Hearts += TEXT("  ");
+		}
+		Hearts.AppendChar(static_cast<TCHAR>(0x2665));
+	}
+
+	const FText HeartsText = FText::FromString(Hearts);
+	WorldLivesText->SetText(HeartsText);
+	WorldLivesShadowText->SetText(HeartsText);
+	WorldLivesText->SetWorldSize(FMath::Max(4.0f, WorldLivesTextSize));
+	WorldLivesShadowText->SetWorldSize(FMath::Max(4.0f, WorldLivesTextSize));
+	const bool bVisible = bCharacterSceneActive
+		&& CharacterRole != EShowDownCharacterRole::Unassigned
+		&& CharacterLives > 0;
+	WorldLivesText->SetVisibility(bVisible, true);
+	WorldLivesText->SetHiddenInGame(!bVisible, true);
+	WorldLivesShadowText->SetVisibility(bVisible, true);
+	WorldLivesShadowText->SetHiddenInGame(!bVisible, true);
 }
 
 void AShowDownCharacter::RefreshBetStatusWidget()

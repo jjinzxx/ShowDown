@@ -164,6 +164,9 @@ protected:
 	UFUNCTION()
 	void OnRep_OpeningCardShowcaseStowed();
 
+	UFUNCTION()
+	void HandleGamePhaseChanged(EShowDownPhase NewPhase);
+
 	void ApplyAmmoStatusDisplaySettings();
 	void UpdateAmmoStatusAnchorLocation();
 

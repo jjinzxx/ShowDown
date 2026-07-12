@@ -14,6 +14,7 @@ class UAnimInstance;
 class USceneComponent;
 class UShowDownBetStatusWidget;
 class UShowDownCharacterAnimInstance;
+class UTextRenderComponent;
 class UWidgetComponent;
 
 USTRUCT()
@@ -279,6 +280,21 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Name Tag")
 	FVector NameTagRelativeLocation = FVector(0.0f, 0.0f, 135.0f);
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|World Lives")
+	TObjectPtr<USceneComponent> WorldLivesAnchor;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|World Lives")
+	TObjectPtr<UTextRenderComponent> WorldLivesShadowText;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|World Lives")
+	TObjectPtr<UTextRenderComponent> WorldLivesText;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Lives")
+	FVector WorldLivesRelativeLocation = FVector(0.0f, 0.0f, 156.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Lives", meta = (ClampMin = "4.0"))
+	float WorldLivesTextSize = 18.0f;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Bet Status")
 	TObjectPtr<USceneComponent> BetStatusAnchorComponent;
 
@@ -393,6 +409,7 @@ private:
 	void ApplyCharacterSceneActive();
 	void ApplyPresentationCollisionSettings();
 	void RefreshNameTag();
+	void RefreshWorldLives();
 	void RefreshBetStatusWidget();
 	FString ResolveNameTagDisplayName() const;
 	FString ResolveNameTagStatusText() const;
