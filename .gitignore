@@ -46,6 +46,8 @@ Plugins/**/Intermediate/
 cmake-build-*/
 out/
 *.iws
+__pycache__/
+*.py[cod]
 
 # 컴파일된 바이너리 및 라이브러리
 *.obj
@@ -86,3 +88,13 @@ Binaries/*
 Binaries/ThirdParty/*
 !Binaries/ThirdParty/Whisper/
 !Binaries/ThirdParty/Whisper/**
+
+# Local MeloTTS Python environment
+ThirdParty/MeloTTS/*
+!ThirdParty/MeloTTS/hf-cache/
+!ThirdParty/MeloTTS/hf-cache/**
+ThirdParty/MeloTTS/hf-cache/**/.locks/
+ThirdParty/MeloTTS/hf-cache/**/.lock
+ThirdParty/MeloTTS/hf-cache/**/*.lock
+ThirdParty/Python310/
+ThirdParty/Installers/

@@ -26,6 +26,13 @@ enum class EShowDownTranscriptionBackend : uint8
 	LocalWhisper UMETA(DisplayName = "Local Whisper")
 };
 
+UENUM(BlueprintType)
+enum class EShowDownSpeechBackend : uint8
+{
+	OpenAI UMETA(DisplayName = "OpenAI"),
+	LocalMeloTTS UMETA(DisplayName = "Local MeloTTS")
+};
+
 DECLARE_DELEGATE_TwoParams(FShowDownVoiceTextCallback, bool /*bSuccess*/, const FString& /*Text*/);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FShowDownVoiceStatusSignature, bool, bSuccess, const FString&, Message);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FShowDownSpeechPlaybackStateSignature, bool, bIsSpeaking);
@@ -54,6 +61,9 @@ public:
 	EShowDownTranscriptionBackend TranscriptionBackend = EShowDownTranscriptionBackend::OpenAI;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice")
+	EShowDownSpeechBackend SpeechBackend = EShowDownSpeechBackend::OpenAI;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice")
 	FString TTSModel = TEXT("gpt-4o-mini-tts");
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice")
@@ -78,6 +88,14 @@ public:
 		meta = (DisplayName = "Voice Pitch", ClampMin = "0.5", ClampMax = "2.0", UIMin = "0.5", UIMax = "2.0"))
 	float TTSPlaybackPitch = 1.25f;
 
+	UPROPERTY(
+		EditAnywhere,
+		BlueprintReadWrite,
+		Config,
+		Category = "ShowDown|Voice",
+		meta = (DisplayName = "Voice Volume", ClampMin = "0.1", ClampMax = "3.0", UIMin = "0.1", UIMax = "3.0"))
+	float TTSPlaybackVolume = 1.75f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice")
 	FString TranscriptionLanguage = TEXT("ko");
 
@@ -86,6 +104,18 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice|Local")
 	FString LocalSTTModelPath;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice|Local")
+	FString LocalTTSExecutablePath;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice|Local")
+	FString LocalTTSScriptPath;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice|Local")
+	FString LocalTTSCachePath;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice|Local")
+	FString LocalTTSLanguage = TEXT("kr");
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice", meta = (ClampMin = "0.1"))
 	float MinimumRecordingSeconds = 0.25f;
@@ -168,6 +198,7 @@ private:
 	void RequestTranscription(TArray<uint8>&& WavData);
 	void RequestLocalTranscription(TArray<uint8>&& WavData);
 	void RequestSpeech(const FString& Text);
+	void RequestLocalSpeech(const FString& Text);
 	void RequestPendingSpeech();
 	bool ParseTranscriptionResponse(const FString& ResponseBody, FString& OutText) const;
 	bool BuildRecordedWav(TArray<uint8>& OutWavData, float& OutDurationSeconds) const;
