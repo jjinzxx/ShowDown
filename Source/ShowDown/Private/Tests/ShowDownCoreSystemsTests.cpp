@@ -61,9 +61,17 @@ bool FShowDownRoundResolverTest::RunTest(const FString& Parameters)
 		RoundResolver->ResolveRevealedCards(4, 4),
 		EShowDownRoundResult::Draw);
 	TestEqual(
-		TEXT("Seven-card fold loads all chambers when enabled"),
-		RoundResolver->GetFoldLoadCount(7, 2, true),
+		TEXT("Seven-card fold overrides a one-bullet bet with a full cylinder"),
+		RoundResolver->GetFoldLoadCount(7, 1, true),
 		6);
+	TestEqual(
+		TEXT("Seven-card fold keeps the committed bet when the rule is disabled"),
+		RoundResolver->GetFoldLoadCount(7, 1, false),
+		1);
+	TestEqual(
+		TEXT("Non-seven fold keeps the committed bet"),
+		RoundResolver->GetFoldLoadCount(6, 1, true),
+		1);
 	TestEqual(
 		TEXT("Normal fold load is clamped"),
 		RoundResolver->GetFoldLoadCount(3, 9, true),

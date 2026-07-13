@@ -16,7 +16,6 @@
 #include "Engine/SkeletalMesh.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
-#include "Camera/PlayerCameraManager.h"
 #include "Materials/MaterialInterface.h"
 #include "Net/UnrealNetwork.h"
 #include "SDPlayerState.h"
@@ -75,7 +74,7 @@ AShowDownCharacter::AShowDownCharacter()
 
 	NameTagWidgetComponent = CreateDefaultSubobject<UWidgetComponent>(TEXT("NameTag"));
 	NameTagWidgetComponent->SetupAttachment(GetCapsuleComponent());
-	NameTagWidgetComponent->SetRelativeLocation(FVector(0.0f, 0.0f, 80.0f));
+	NameTagWidgetComponent->SetRelativeLocation(NameTagLocalOffset);
 	NameTagWidgetComponent->SetWidgetClass(UShowDownNameTagWidget::StaticClass());
 	NameTagWidgetComponent->SetWidgetSpace(EWidgetSpace::Screen);
 	NameTagWidgetComponent->SetDrawAtDesiredSize(true);
@@ -87,13 +86,16 @@ AShowDownCharacter::AShowDownCharacter()
 
 	WorldLivesAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("WorldLivesAnchor"));
 	WorldLivesAnchor->SetupAttachment(GetCapsuleComponent());
-	WorldLivesAnchor->SetRelativeLocation(FVector(0.0f, 80.0f, 85.0f));
-	WorldLivesAnchor->SetRelativeRotation(FRotator::ZeroRotator);
+	WorldLivesAnchor->SetRelativeLocation(FVector(
+		WorldStatusLocalForwardOffset,
+		WorldStatusLocalRightOffset,
+		WorldLivesLocalHeight));
+	WorldLivesAnchor->SetRelativeRotation(WorldStatusLocalFacingRotation);
 
 	WorldLivesShadowText = CreateDefaultSubobject<UTextRenderComponent>(TEXT("WorldLivesShadow"));
 	WorldLivesShadowText->SetupAttachment(WorldLivesAnchor);
 	WorldLivesShadowText->SetRelativeLocation(FVector(-0.20f, 0.0f, 0.0f));
-	WorldLivesShadowText->SetHorizontalAlignment(EHTA_Center);
+	WorldLivesShadowText->SetHorizontalAlignment(EHTA_Left);
 	WorldLivesShadowText->SetVerticalAlignment(EVRTA_TextCenter);
 	WorldLivesShadowText->SetWorldSize(WorldLivesTextSize);
 	WorldLivesShadowText->SetTextRenderColor(FColor(8, 0, 0, 230));
@@ -105,7 +107,7 @@ AShowDownCharacter::AShowDownCharacter()
 	WorldLivesText = CreateDefaultSubobject<UTextRenderComponent>(TEXT("WorldLives"));
 	WorldLivesText->SetupAttachment(WorldLivesAnchor);
 	WorldLivesText->SetRelativeLocation(FVector::ZeroVector);
-	WorldLivesText->SetHorizontalAlignment(EHTA_Center);
+	WorldLivesText->SetHorizontalAlignment(EHTA_Left);
 	WorldLivesText->SetVerticalAlignment(EVRTA_TextCenter);
 	WorldLivesText->SetWorldSize(WorldLivesTextSize);
 	WorldLivesText->SetTextRenderColor(FColor(245, 24, 48, 255));
@@ -115,7 +117,7 @@ AShowDownCharacter::AShowDownCharacter()
 	WorldLivesText->SetVisibility(false);
 
 	UFont* WorldStatusFontObject = nullptr;
-	UMaterialInterface* WorldStatusOutlinedMaterialObject = nullptr;
+	UMaterialInterface* WorldStatusOpaqueMaterialObject = nullptr;
 	if (!IsRunningDedicatedServer())
 	{
 		static ConstructorHelpers::FObjectFinder<UFont> WorldLivesFont(
@@ -133,25 +135,30 @@ AShowDownCharacter::AShowDownCharacter()
 			WorldStatusFontObject = WorldStatusFont.Object;
 		}
 
-		static ConstructorHelpers::FObjectFinder<UMaterialInterface> WorldStatusOutlinedMaterial(
-			TEXT("/Game/UI/Materials/M_WorldTextOutlined.M_WorldTextOutlined"));
-		if (WorldStatusOutlinedMaterial.Succeeded())
+		static ConstructorHelpers::FObjectFinder<UMaterialInterface> WorldStatusOpaqueMaterial(
+			TEXT("/Engine/EngineMaterials/DefaultTextMaterialOpaque.DefaultTextMaterialOpaque"));
+		if (WorldStatusOpaqueMaterial.Succeeded())
 		{
-			WorldStatusOutlinedMaterialObject = WorldStatusOutlinedMaterial.Object;
+			WorldStatusOpaqueMaterialObject = WorldStatusOpaqueMaterial.Object;
+			WorldLivesShadowText->SetTextMaterial(WorldStatusOpaqueMaterialObject);
+			WorldLivesText->SetTextMaterial(WorldStatusOpaqueMaterialObject);
 		}
 	}
 
 	BetStatusAnchorComponent = CreateDefaultSubobject<USceneComponent>(TEXT("BetStatusAnchor"));
 	BetStatusAnchorComponent->SetupAttachment(GetCapsuleComponent());
-	BetStatusAnchorComponent->SetRelativeLocation(FVector(0.0f, 80.0f, 65.0f));
-	BetStatusAnchorComponent->SetRelativeRotation(FRotator::ZeroRotator);
+	BetStatusAnchorComponent->SetRelativeLocation(FVector(
+		WorldStatusLocalForwardOffset,
+		WorldStatusLocalRightOffset,
+		BetStatusLocalHeight));
+	BetStatusAnchorComponent->SetRelativeRotation(WorldStatusLocalFacingRotation);
 
-	auto ConfigureWorldStatusText = [this, WorldStatusFontObject, WorldStatusOutlinedMaterialObject](
+	auto ConfigureWorldStatusText = [this, WorldStatusFontObject, WorldStatusOpaqueMaterialObject](
 		UTextRenderComponent* TextComponent,
 		const FColor& Color)
 	{
 		TextComponent->SetupAttachment(BetStatusAnchorComponent);
-		TextComponent->SetHorizontalAlignment(EHTA_Center);
+		TextComponent->SetHorizontalAlignment(EHTA_Left);
 		TextComponent->SetVerticalAlignment(EVRTA_TextCenter);
 		TextComponent->SetTextRenderColor(Color);
 		TextComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -162,9 +169,9 @@ AShowDownCharacter::AShowDownCharacter()
 		{
 			TextComponent->SetFont(WorldStatusFontObject);
 		}
-		if (WorldStatusOutlinedMaterialObject)
+		if (WorldStatusOpaqueMaterialObject)
 		{
-			TextComponent->SetTextMaterial(WorldStatusOutlinedMaterialObject);
+			TextComponent->SetTextMaterial(WorldStatusOpaqueMaterialObject);
 		}
 	};
 
@@ -187,6 +194,18 @@ AShowDownCharacter::AShowDownCharacter()
 void AShowDownCharacter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+
+	const EShowDownPlayerSlot LocalPlayerSlot = GetLocalPlayerSlot();
+	if (LastPresentationLocalPlayerSlot != LocalPlayerSlot)
+	{
+		LastPresentationLocalPlayerSlot = LocalPlayerSlot;
+		RefreshNameTag();
+		RefreshWorldBetStatus();
+	}
+	else
+	{
+		SyncNameTagVisibility();
+	}
 	UpdateWorldPresentationTransform();
 }
 
@@ -1332,6 +1351,12 @@ void AShowDownCharacter::RefreshNameTag()
 		return;
 	}
 
+	NameTagWidgetComponent->SetRelativeLocation(NameTagLocalOffset);
+	if (NameTagWidgetComponent->GetWidgetClass() != UShowDownNameTagWidget::StaticClass())
+	{
+		NameTagWidgetComponent->SetWidgetClass(UShowDownNameTagWidget::StaticClass());
+	}
+
 	const FString DisplayName = ResolveNameTagDisplayName();
 	NameTagWidgetComponent->InitWidget();
 	if (UShowDownNameTagWidget* NameTagWidget = Cast<UShowDownNameTagWidget>(NameTagWidgetComponent->GetUserWidgetObject()))
@@ -1342,10 +1367,27 @@ void AShowDownCharacter::RefreshNameTag()
 		NameTagWidget->SetSpeakingIndicatorVisible(bVoiceTalking);
 	}
 
-	const bool bVisible = ShouldShowNameTag();
-	NameTagWidgetComponent->SetVisibility(bVisible, true);
-	NameTagWidgetComponent->SetHiddenInGame(!bVisible, true);
+	SyncNameTagVisibility();
 	RefreshWorldLives();
+}
+
+void AShowDownCharacter::SyncNameTagVisibility()
+{
+	if (!NameTagWidgetComponent)
+	{
+		return;
+	}
+
+	const bool bVisible = ShouldShowNameTag();
+	if (!bNameTagVisibilityInitialized
+		|| bLastNameTagVisible != bVisible
+		|| NameTagWidgetComponent->IsVisible() != bVisible)
+	{
+		NameTagWidgetComponent->SetVisibility(bVisible, true);
+		NameTagWidgetComponent->SetHiddenInGame(!bVisible, true);
+		bLastNameTagVisible = bVisible;
+		bNameTagVisibilityInitialized = true;
+	}
 }
 
 void AShowDownCharacter::RefreshWorldLives()
@@ -1364,6 +1406,13 @@ void AShowDownCharacter::RefreshWorldLives()
 			WorldLivesText->SetFont(HeartFont);
 			WorldLivesShadowText->SetFont(HeartFont);
 		}
+		if (UMaterialInterface* OpaqueTextMaterial = LoadObject<UMaterialInterface>(
+			nullptr,
+			TEXT("/Engine/EngineMaterials/DefaultTextMaterialOpaque.DefaultTextMaterialOpaque")))
+		{
+			WorldLivesText->SetTextMaterial(OpaqueTextMaterial);
+			WorldLivesShadowText->SetTextMaterial(OpaqueTextMaterial);
+		}
 	}
 	FString Hearts;
 	for (int32 LifeIndex = 0; LifeIndex < CharacterLives; ++LifeIndex)
@@ -1373,18 +1422,22 @@ void AShowDownCharacter::RefreshWorldLives()
 
 	const FText HeartsText = FText::FromString(Hearts);
 	WorldLivesText->SetText(HeartsText);
-	WorldLivesShadowText->SetText(HeartsText);
-	const float HeartSize = FMath::Max(4.0f, WorldLivesTextSize);
+	WorldLivesShadowText->SetText(FText::GetEmpty());
+	const float HeartSize = FMath::Clamp(WorldLivesTextSize, 4.0f, 16.0f);
 	WorldLivesText->SetWorldSize(HeartSize);
-	WorldLivesShadowText->SetWorldSize(HeartSize + 1.5f);
+	WorldLivesShadowText->SetWorldSize(HeartSize);
+	WorldLivesText->SetHorizontalAlignment(EHTA_Left);
+	WorldLivesShadowText->SetHorizontalAlignment(EHTA_Left);
 	// Overhead presentation belongs to characters the local player can see.
 	// Rendering it for the local first-person character leaves orphaned hearts/status
 	// in the middle of the screen while the local name tag is intentionally hidden.
 	const bool bVisible = ShouldShowNameTag() && CharacterLives > 0;
 	WorldLivesText->SetVisibility(bVisible, true);
 	WorldLivesText->SetHiddenInGame(!bVisible, true);
-	WorldLivesShadowText->SetVisibility(bVisible, true);
-	WorldLivesShadowText->SetHiddenInGame(!bVisible, true);
+	// The old enlarged duplicate produced a soft/doubled silhouette. The opaque
+	// text material is crisp enough on its own, so keep the legacy component off.
+	WorldLivesShadowText->SetVisibility(false, true);
+	WorldLivesShadowText->SetHiddenInGame(true, true);
 }
 
 void AShowDownCharacter::RefreshWorldBetStatus()
@@ -1405,11 +1458,20 @@ void AShowDownCharacter::RefreshWorldBetStatus()
 			BetStatusValueText->SetFont(StatusFont);
 			BetStatusActionText->SetFont(StatusFont);
 		}
+		if (UMaterialInterface* OpaqueTextMaterial = LoadObject<UMaterialInterface>(
+			nullptr,
+			TEXT("/Engine/EngineMaterials/DefaultTextMaterialOpaque.DefaultTextMaterialOpaque")))
+		{
+			BetStatusValueText->SetTextMaterial(OpaqueTextMaterial);
+			BetStatusActionText->SetTextMaterial(OpaqueTextMaterial);
+		}
 	}
-	const float ValueSize = FMath::Max(4.0f, BetStatusValueTextSize);
-	const float ActionSize = FMath::Max(4.0f, BetStatusActionTextSize);
+	const float ValueSize = FMath::Clamp(BetStatusValueTextSize, 4.0f, 10.0f);
+	const float ActionSize = FMath::Clamp(BetStatusActionTextSize, 4.0f, 12.0f);
 	BetStatusValueText->SetWorldSize(ValueSize);
 	BetStatusActionText->SetWorldSize(ActionSize);
+	BetStatusValueText->SetHorizontalAlignment(EHTA_Left);
+	BetStatusActionText->SetHorizontalAlignment(EHTA_Left);
 
 	const FString ValueString = FString::Printf(
 		TEXT("%d/%d"),
@@ -1449,31 +1511,24 @@ void AShowDownCharacter::UpdateWorldPresentationTransform()
 		return;
 	}
 
-	const UWorld* World = GetWorld();
-	const APlayerController* LocalPlayerController = World ? World->GetFirstPlayerController() : nullptr;
-	const APlayerCameraManager* CameraManager = LocalPlayerController
-		? LocalPlayerController->PlayerCameraManager
-		: nullptr;
-	if (!CameraManager)
-	{
-		return;
-	}
+	// Do not use camera/world right here: every seat has a different yaw. Keeping
+	// both location and facing in the actor frame makes +Y the character's right
+	// for Player 1 through Player 4.
+	const FVector ActorLocation = GetActorLocation();
+	const FVector LocalForward = GetActorForwardVector();
+	const FVector LocalRight = GetActorRightVector();
+	const FVector LocalUp = GetActorUpVector();
+	const FVector CommonOffset =
+		LocalForward * WorldStatusLocalForwardOffset
+		+ LocalRight * WorldStatusLocalRightOffset;
+	const FQuat WorldFacingRotation = GetActorQuat() * WorldStatusLocalFacingRotation.Quaternion();
 
-	const FVector CameraLocation = CameraManager->GetCameraLocation();
-	// Component locations are authored directly in the Blueprint component tree.
-	// Runtime code only billboards the text; it never overwrites editor positioning.
-	const FVector LivesWorldLocation = WorldLivesAnchor->GetComponentLocation();
-	const FVector BetStatusWorldLocation = BetStatusAnchorComponent->GetComponentLocation();
-
-	const FRotator LivesFacingRotation = (CameraLocation - LivesWorldLocation).Rotation();
-	const FRotator BetStatusFacingRotation = (CameraLocation - BetStatusWorldLocation).Rotation();
-	// Text render fronts face opposite the look-at forward axis. Apply a local
-	// half-turn so hearts and status text read correctly instead of mirrored.
-	const FQuat TextFacingCorrection = FRotator(0.0f, 180.0f, 0.0f).Quaternion();
-	WorldLivesAnchor->SetWorldRotation(
-		(LivesFacingRotation.Quaternion() * TextFacingCorrection).Rotator());
-	BetStatusAnchorComponent->SetWorldRotation(
-		(BetStatusFacingRotation.Quaternion() * TextFacingCorrection).Rotator());
+	WorldLivesAnchor->SetWorldLocationAndRotation(
+		ActorLocation + CommonOffset + LocalUp * WorldLivesLocalHeight,
+		WorldFacingRotation);
+	BetStatusAnchorComponent->SetWorldLocationAndRotation(
+		ActorLocation + CommonOffset + LocalUp * BetStatusLocalHeight,
+		WorldFacingRotation);
 }
 
 FString AShowDownCharacter::ResolveNameTagDisplayName() const
@@ -1577,12 +1632,15 @@ bool AShowDownCharacter::ShouldShowNameTag() const
 		return CharacterRole == EShowDownCharacterRole::Opponent;
 	}
 
-	if (CharacterRole != EShowDownCharacterRole::Player)
+	if (PlayerSlot == EShowDownPlayerSlot::None
+		|| (CharacterRole != EShowDownCharacterRole::Player
+			&& CharacterRole != EShowDownCharacterRole::Unassigned))
 	{
 		return false;
 	}
 
-	return !IsLocalPlayerCharacter();
+	const EShowDownPlayerSlot LocalPlayerSlot = GetLocalPlayerSlot();
+	return LocalPlayerSlot == EShowDownPlayerSlot::None || PlayerSlot != LocalPlayerSlot;
 }
 
 bool AShowDownCharacter::ShouldShowOverheadChatMessage(const FString& SenderName) const

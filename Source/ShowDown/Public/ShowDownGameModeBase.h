@@ -773,6 +773,8 @@ private:
 	void ContinueMultiplayerRoundAfterReveal(TArray<ASDPlayerState*> RevealedPlayers, TArray<ASDPlayerState*> Winners);
 	void FinishMultiplayerRoundByFold(ASDPlayerState* FoldedPlayer);
 	void ContinueMultiplayerRoundAfterFoldReveal(ASDPlayerState* FoldedPlayer, int32 LoadCount);
+	int32 ResolveMultiplayerFoldLoadCount(const ASDPlayerState* FoldedPlayer) const;
+	void PrepareMultiplayerFoldCylinder(int32 LoadCount);
 	void InitializeMultiplayerSharedChambers();
 	bool ResolveNextMultiplayerSharedChamber();
 	void RefreshCentralGunStatus();

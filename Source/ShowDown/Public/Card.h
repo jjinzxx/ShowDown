@@ -4,6 +4,7 @@
 #include "GameFramework/Actor.h"
 #include "Interaction/SDInteractable.h"
 #include "ShowDownTypes.h"
+#include "TimerManager.h"
 #include "Card.generated.h"
 
 class UBoxComponent;
@@ -226,6 +227,8 @@ public:
 
 private:
 	void ConfigureInteractionComponents();
+	void ScheduleVisualRefreshRetry();
+	void HandleVisualRefreshRetry();
 	void UpdateTargetTransform();
 	void EnableMotionTick();
 	void MoveToSlotComponent(USceneComponent* Slot, bool bNewFaceUp, FRotator RotationOffset);
@@ -304,6 +307,8 @@ private:
 	int32 CachedVisualRank = INDEX_NONE;
 	bool bCachedVisualVisible = false;
 	bool bHasCachedVisual = false;
+	FTimerHandle VisualRefreshRetryTimerHandle;
+	uint8 VisualRefreshRetryAttempts = 0;
 
 	bool bVisualScaleMotionActive = false;
 	bool bSlotAttachMotionActive = false;

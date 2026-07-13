@@ -531,37 +531,6 @@ void AShowDownGameModeBase::PostLogin(APlayerController* NewPlayer)
 
 	if (bMultiplayerMatchStarted)
 	{
-		int32 ExpectedPlayerCount = 4;
-		if (const UGameInstance* GameInstance = GetGameInstance())
-		{
-			if (const UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
-			{
-				ExpectedPlayerCount = FMath::Clamp(EosSubsystem->GetExpectedLobbyPlayerCount(), 2, 4);
-			}
-		}
-
-		if (ASDPlayerState* ShowDownPlayerState = NewPlayer ? NewPlayer->GetPlayerState<ASDPlayerState>() : nullptr)
-		{
-			if (ShowDownPlayerState->ShowDownSlot == EShowDownPlayerSlot::None)
-			{
-				ShowDownPlayerState->SetShowDownSlot(FindNextOpenPlayerSlot());
-			}
-
-			RefreshNetworkPlayerSlots();
-			TArray<ASDPlayerState*> ConnectedPlayers = GetConnectedShowDownPlayers();
-			if (ShowDownPlayerState->ShowDownSlot != EShowDownPlayerSlot::None
-				&& ConnectedPlayers.Num() <= ExpectedPlayerCount
-				&& MultiplayerPlayers.Num() < ExpectedPlayerCount)
-			{
-				NotifyMultiplayerStatus(FString::Printf(
-					TEXT("늦게 도착한 참가자 포함. 멀티플레이어 동기화 중... %d/%d"),
-					ConnectedPlayers.Num(),
-					ExpectedPlayerCount));
-				StartMultiplayerMatch(ConnectedPlayers);
-				return;
-			}
-		}
-
 		if (AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(NewPlayer))
 		{
 			ShowDownController->ClientShowStatusMessage(TEXT("게임이 이미 시작되어 입장할 수 없습니다."));
@@ -4351,6 +4320,12 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation()
 				: Player->GetPlayerName();
 			LaneState.BulletCount = FMath::Clamp(Player->CurrentBet, 0, 6);
 			LaneState.bFolded = MultiplayerFoldedPlayers.Contains(Player);
+			if (LaneState.bFolded)
+			{
+				// A seven-card fold replaces the regular committed bet with the
+				// stage rule's full-cylinder load for the rest of this round.
+				LaneState.BulletCount = ResolveMultiplayerFoldLoadCount(Player);
+			}
 			const EShowDownPhase CurrentPhase = GetShowDownGameState()
 				? GetShowDownGameState()->CurrentPhase
 				: EShowDownPhase::None;
@@ -4410,6 +4385,7 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation()
 			{
 				LaneState.bRouletteTarget = true;
 				LaneState.RouletteBulletCount = BetBulletRouletteBulletCount;
+				LaneState.BulletCount = LaneState.RouletteBulletCount;
 			}
 
 			LaneStates.Add(LaneState);
@@ -4462,6 +4438,7 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation()
 			{
 				LaneState.bRouletteTarget = true;
 				LaneState.RouletteBulletCount = BetBulletRouletteBulletCount;
+				LaneState.BulletCount = LaneState.RouletteBulletCount;
 			}
 
 			LaneStates.Add(LaneState);
@@ -5544,20 +5521,37 @@ void AShowDownGameModeBase::TryStartMultiplayerMatch()
 
 void AShowDownGameModeBase::StartMultiplayerMatch(const TArray<ASDPlayerState*>& Players)
 {
+	GetWorldTimerManager().ClearTimer(MultiplayerStartTimerHandle);
 	ClearMultiplayerRoundTimers();
 	ClearCardRevealPresentationTimers();
 	ClearInitialCardDealPresentation();
 	bInitialCardDealPresentationPlayed = false;
+	bBettingPhase = false;
+	bMultiplayerRoundResolving = false;
+	MultiplayerCurrentBetter = nullptr;
+	MultiplayerLastCheckedPlayer = nullptr;
+	SetMultiplayerSelectableHand(nullptr);
+	ClearBetActionPanel();
+	ClearBetBulletPresentation();
 	ClearMultiplayerForeheadCards();
 	ClearMultiplayerHands();
 	ClearLooseMultiplayerCards();
 
 	bMultiplayerMatchStarted = true;
-	bMultiplayerRoundResolving = false;
 	MultiplayerPlayers.Reset();
 	MultiplayerEliminationOrder.Reset();
 	MultiplayerRestartVotes.Reset();
+	MultiplayerFoldedPlayers.Reset();
+	MultiplayerPlayersActed.Reset();
+	MultiplayerRoundSpectators.Reset();
+	MultiplayerRoundLeader = nullptr;
+	MultiplayerDuelA = nullptr;
+	MultiplayerDuelB = nullptr;
 	MultiplayerNextFirstPlayer = nullptr;
+	MultiplayerLiveRoundCount = 0;
+	MultiplayerRemainingChamberCount = 6;
+	MultiplayerSharedChamberIndex = 0;
+	MultiplayerSharedChambers.Reset();
 
 	for (ASDPlayerState* Player : Players)
 	{
@@ -6152,7 +6146,16 @@ void AShowDownGameModeBase::HandleMultiplayerPlayerDisconnected(ASDPlayerState* 
 	RefreshMultiplayerCharacterVisibility();
 	NotifyMultiplayerStatus(FString::Printf(TEXT("%s left the match."), *LeavingPlayer->GetPlayerName()));
 
-	if (MultiplayerPlayers.Num() <= 1 || CountActiveMultiplayerPlayers() <= 1)
+	AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState();
+	const EShowDownPhase CurrentPhase = ShowDownGameState
+		? ShowDownGameState->CurrentPhase
+		: EShowDownPhase::None;
+	if (CurrentPhase == EShowDownPhase::GameOver)
+	{
+		return;
+	}
+
+	if (MultiplayerPlayers.Num() <= 1)
 	{
 		EndMultiplayerRound();
 		return;
@@ -6186,8 +6189,17 @@ void AShowDownGameModeBase::HandleMultiplayerPlayerDisconnected(ASDPlayerState* 
 		return;
 	}
 
-	if (bMultiplayerRoundResolving)
+	if (bMultiplayerRoundResolving
+		|| CurrentPhase == EShowDownPhase::Reveal
+		|| CurrentPhase == EShowDownPhase::Roulette
+		|| CurrentPhase == EShowDownPhase::RoundEnd)
 	{
+		return;
+	}
+
+	if (CountActiveMultiplayerPlayers() <= 1)
+	{
+		EndMultiplayerRound();
 		return;
 	}
 
@@ -6204,7 +6216,6 @@ void AShowDownGameModeBase::HandleMultiplayerPlayerDisconnected(ASDPlayerState* 
 		return;
 	}
 
-	AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState();
 	if (ShowDownGameState && ShowDownGameState->CurrentPhase == EShowDownPhase::Betting)
 	{
 		if (CountActiveMultiplayerPlayers() <= 1 || AreAllActiveMultiplayerPlayersDoneBetting(BettingSystem ? BettingSystem->GetCurrentBet() : 0))
@@ -6215,17 +6226,41 @@ void AShowDownGameModeBase::HandleMultiplayerPlayerDisconnected(ASDPlayerState* 
 
 		if (!MultiplayerCurrentBetter)
 		{
-			MultiplayerCurrentBetter = FindNextAliveMultiplayerPlayer(nullptr);
-			while (MultiplayerCurrentBetter && MultiplayerFoldedPlayers.Contains(MultiplayerCurrentBetter))
+			const int32 LeavingTurnOrder = GetMultiplayerTurnOrderIndex(LeavingSlot);
+			ASDPlayerState* FirstActivePlayer = nullptr;
+			ASDPlayerState* NextActivePlayer = nullptr;
+			int32 FirstActiveOrder = MAX_int32;
+			int32 NextActiveOrder = MAX_int32;
+			for (ASDPlayerState* Candidate : MultiplayerPlayers)
 			{
-				MultiplayerCurrentBetter = FindNextAliveMultiplayerPlayer(MultiplayerCurrentBetter);
+				if (!IsValid(Candidate)
+					|| Candidate->Lives <= 0
+					|| MultiplayerFoldedPlayers.Contains(Candidate))
+				{
+					continue;
+				}
+
+				const int32 CandidateOrder = GetMultiplayerTurnOrderIndex(Candidate->ShowDownSlot);
+				if (CandidateOrder < FirstActiveOrder)
+				{
+					FirstActiveOrder = CandidateOrder;
+					FirstActivePlayer = Candidate;
+				}
+				if (CandidateOrder > LeavingTurnOrder && CandidateOrder < NextActiveOrder)
+				{
+					NextActiveOrder = CandidateOrder;
+					NextActivePlayer = Candidate;
+				}
 			}
+			MultiplayerCurrentBetter = NextActivePlayer ? NextActivePlayer : FirstActivePlayer;
 		}
 
 		ShowDownGameState->SetNameTagRoundStatus(
 			BettingSystem ? BettingSystem->GetCurrentBet() : 0,
 			EShowDownSide::Player,
 			MultiplayerCurrentBetter ? MultiplayerCurrentBetter->ShowDownSlot : EShowDownPlayerSlot::None);
+		ClearBetBulletTransientState();
+		RefreshBetBulletPresentation();
 		return;
 	}
 
@@ -6526,44 +6561,62 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 
 	case EShowDownBetAction::Fold:
 	{
+		// Fold reveal and roulette are one resolving transaction. Close every
+		// betting/card-input gate before scheduling presentation callbacks so a
+		// disconnect cannot restart betting while the shot is still in flight.
+		bBettingPhase = false;
+		bMultiplayerRoundResolving = true;
+		MultiplayerCurrentBetter = nullptr;
+		SetMultiplayerSelectableHand(nullptr);
+		ClearBetActionPanel();
 		NotifyMultiplayerStatus(FString::Printf(TEXT("%s 폴드."), *SubmittingPlayer->GetPlayerName()));
 		BroadcastSystemChatMessage(FString::Printf(
 			TEXT("%s님이 폴드했습니다."),
 			*SubmittingPlayer->GetPlayerName()));
-			MultiplayerFoldedPlayers.Add(SubmittingPlayer);
-			BroadcastMultiplayerBetActionCommitted(SubmittingPlayer, EShowDownBetAction::Fold, SubmittingPlayer->CurrentBet);
-			RecordMultiplayerBetBulletAction(SubmittingPlayer, EShowDownBetAction::Fold);
+		MultiplayerFoldedPlayers.Add(SubmittingPlayer);
+		BroadcastMultiplayerBetActionCommitted(SubmittingPlayer, EShowDownBetAction::Fold, SubmittingPlayer->CurrentBet);
+		RecordMultiplayerBetBulletAction(SubmittingPlayer, EShowDownBetAction::Fold);
+		const int32 FoldLoadCount = ResolveMultiplayerFoldLoadCount(SubmittingPlayer);
+		PrepareMultiplayerFoldCylinder(FoldLoadCount);
 
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 		{
-				ShowDownGameState->SetNameTagPlayerLoadedBulletCount(SubmittingPlayer->ShowDownSlot, SubmittingPlayer->CurrentBet);
-				ShowDownGameState->SetNameTagRoundStatus(MultiplayerLiveRoundCount, EShowDownSide::Player, EShowDownPlayerSlot::None);
-			}
-			RefreshBetBulletPresentation();
-			if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
-			{
-				ShowDownGameState->SetPhase(EShowDownPhase::Reveal);
-			}
-			RefreshCentralGunStatus();
-			TArray<ACard*> FoldRevealCards;
-			if (SubmittingPlayer->ForeheadCard)
-			{
-				FoldRevealCards.Add(SubmittingPlayer->ForeheadCard);
-			}
-			const float FoldRevealDelay = PlayCardRevealPresentation(FoldRevealCards);
-			const float RouletteDelay = ApplyMultiplayerRoulette(
-				SubmittingPlayer,
-				MultiplayerLiveRoundCount,
-				FoldRevealDelay,
-				false);
-			const TWeakObjectPtr<ASDPlayerState> WeakSubmittingPlayer(SubmittingPlayer);
-			const auto ContinueAfterRoulette = [this, WeakSubmittingPlayer, CurrentBet, FindNextActivePlayer]()
-			{
-				ASDPlayerState* ResolvedSubmittingPlayer = WeakSubmittingPlayer.Get();
+			ShowDownGameState->SetNameTagPlayerLoadedBulletCount(SubmittingPlayer->ShowDownSlot, FoldLoadCount);
+			ShowDownGameState->SetNameTagRoundStatus(FoldLoadCount, EShowDownSide::Player, EShowDownPlayerSlot::None);
+			ShowDownGameState->SetPhase(EShowDownPhase::Reveal);
+		}
+		RefreshBetBulletPresentation();
+		RefreshCentralGunStatus();
+		TArray<ACard*> FoldRevealCards;
+		if (SubmittingPlayer->ForeheadCard)
+		{
+			FoldRevealCards.Add(SubmittingPlayer->ForeheadCard);
+		}
+		const float FoldRevealDelay = PlayCardRevealPresentation(FoldRevealCards);
+		const float RouletteDelay = ApplyMultiplayerRoulette(
+			SubmittingPlayer,
+			FoldLoadCount,
+			FoldRevealDelay,
+			false);
+		const TWeakObjectPtr<ASDPlayerState> WeakSubmittingPlayer(SubmittingPlayer);
+		const auto ContinueAfterRoulette = [this, WeakSubmittingPlayer, CurrentBet, FindNextActivePlayer]()
+		{
+			ASDPlayerState* ResolvedSubmittingPlayer = WeakSubmittingPlayer.Get();
 			if (!ResolvedSubmittingPlayer || !MultiplayerPlayers.Contains(ResolvedSubmittingPlayer))
 			{
+				// The fold target can disconnect while its reveal/roulette timers are
+				// pending. Advance the survivors instead of leaving resolving latched.
+				EndMultiplayerRound();
 				return;
 			}
+
+			// The folded player uses a private, freshly spun cylinder. Restore the
+			// table bet before either continuing betting or creating the shared
+			// showdown cylinder for the remaining players.
+			MultiplayerLiveRoundCount = FMath::Clamp(CurrentBet, 0, 6);
+			MultiplayerRemainingChamberCount = 6;
+			MultiplayerSharedChamberIndex = 0;
+			MultiplayerSharedChambers.Reset();
 
 			MultiplayerNextFirstPlayer = ResolvedSubmittingPlayer;
 			MultiplayerPlayersActed.Add(ResolvedSubmittingPlayer);
@@ -6574,6 +6627,8 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 				return;
 			}
 
+			bMultiplayerRoundResolving = false;
+			bBettingPhase = true;
 			if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 			{
 				ShowDownGameState->SetPhase(EShowDownPhase::Betting);
@@ -6584,7 +6639,8 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 			}
 			ClearBetBulletTransientState();
 			RefreshBetBulletPresentation();
-			};
+			RefreshCentralGunStatus();
+		};
 
 		if (RouletteDelay > KINDA_SMALL_NUMBER)
 		{
@@ -6706,14 +6762,33 @@ void AShowDownGameModeBase::ContinueMultiplayerRoundAfterReveal(
 	TArray<ASDPlayerState*> RevealedPlayers,
 	TArray<ASDPlayerState*> Winners)
 {
-	RevealedPlayers.RemoveAll([](const ASDPlayerState* Player)
+	RevealedPlayers.RemoveAll([this](const ASDPlayerState* Player)
 	{
-		return !IsValid(Player) || Player->Lives <= 0 || !Player->ForeheadCard;
+		return !IsValid(Player)
+			|| !MultiplayerPlayers.Contains(Player)
+			|| Player->Lives <= 0
+			|| !Player->ForeheadCard;
 	});
-	Winners.RemoveAll([&RevealedPlayers](const ASDPlayerState* Player)
+
+	// A player can leave while the reveal animation is running. Recalculate from
+	// the surviving reveal set so losing the former high card does not skip the
+	// remaining players' comparison and roulette entirely.
+	Winners.Reset();
+	int32 CurrentHighestRank = TNumericLimits<int32>::Min();
+	for (ASDPlayerState* Player : RevealedPlayers)
 	{
-		return !Player || !RevealedPlayers.Contains(Player);
-	});
+		const int32 Rank = Player->ForeheadCard->Rank;
+		if (Rank > CurrentHighestRank)
+		{
+			CurrentHighestRank = Rank;
+			Winners.Reset();
+			Winners.Add(Player);
+		}
+		else if (Rank == CurrentHighestRank)
+		{
+			Winners.Add(Player);
+		}
+	}
 
 	if (Winners.Num() <= 0)
 	{
@@ -6849,15 +6924,12 @@ void AShowDownGameModeBase::FinishMultiplayerRoundByFold(ASDPlayerState* FoldedP
 		LowestRank = FMath::Min(LowestRank, Rank);
 	}
 
-	const bool bSevenFoldLoadsSix = StageRules.Num() > 0 ? StageRules[0].bSevenFoldLoadsSix : true;
-	const int32 FoldedRank = FoldedPlayer->ForeheadCard ? FoldedPlayer->ForeheadCard->Rank : 1;
-	const int32 LoadCount = RoundResolver
-		? RoundResolver->GetFoldLoadCount(FoldedRank, FoldedPlayer->CurrentBet, bSevenFoldLoadsSix)
-		: FoldedPlayer->CurrentBet;
+	const int32 LoadCount = ResolveMultiplayerFoldLoadCount(FoldedPlayer);
+	PrepareMultiplayerFoldCylinder(LoadCount);
 	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 	{
-		ShowDownGameState->SetNameTagPlayerLoadedBulletCount(FoldedPlayer->ShowDownSlot, FoldedPlayer->CurrentBet);
-		ShowDownGameState->SetNameTagRoundStatus(FoldedPlayer->CurrentBet, EShowDownSide::Player, EShowDownPlayerSlot::None);
+		ShowDownGameState->SetNameTagPlayerLoadedBulletCount(FoldedPlayer->ShowDownSlot, LoadCount);
+		ShowDownGameState->SetNameTagRoundStatus(LoadCount, EShowDownSide::Player, EShowDownPlayerSlot::None);
 		ShowDownGameState->SetPhase(EShowDownPhase::Reveal);
 		ShowDownGameState->OnCardsRevealed.Broadcast(
 			HighestRank,
@@ -6883,6 +6955,37 @@ void AShowDownGameModeBase::FinishMultiplayerRoundByFold(ASDPlayerState* FoldedP
 	}
 
 	ContinueMultiplayerRoundAfterFoldReveal(FoldedPlayer, LoadCount);
+}
+
+int32 AShowDownGameModeBase::ResolveMultiplayerFoldLoadCount(const ASDPlayerState* FoldedPlayer) const
+{
+	if (!FoldedPlayer)
+	{
+		return 0;
+	}
+
+	const int32 FoldedRank = FoldedPlayer->ForeheadCard ? FoldedPlayer->ForeheadCard->Rank : 0;
+	const FShowDownStageRule* StageRule = GetCurrentStageRule();
+	const bool bSevenFoldLoadsSix = StageRule ? StageRule->bSevenFoldLoadsSix : true;
+	if (RoundResolver)
+	{
+		return RoundResolver->GetFoldLoadCount(
+			FoldedRank,
+			FoldedPlayer->CurrentBet,
+			bSevenFoldLoadsSix);
+	}
+
+	return bSevenFoldLoadsSix && FoldedRank == 7
+		? 6
+		: FMath::Clamp(FoldedPlayer->CurrentBet, 0, 6);
+}
+
+void AShowDownGameModeBase::PrepareMultiplayerFoldCylinder(int32 LoadCount)
+{
+	MultiplayerLiveRoundCount = FMath::Clamp(LoadCount, 0, 6);
+	MultiplayerRemainingChamberCount = 6;
+	MultiplayerSharedChamberIndex = 0;
+	MultiplayerSharedChambers.Reset();
 }
 
 void AShowDownGameModeBase::ContinueMultiplayerRoundAfterFoldReveal(ASDPlayerState* FoldedPlayer, int32 LoadCount)
@@ -6977,9 +7080,43 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 	}
 
 	const int32 ClampedBulletCount = FMath::Clamp(BulletCount, 0, 6);
-	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+	const float SafeStartDelay = FMath::Max(0.0f, StartDelay);
+	if (bUseSharedChambers && SafeStartDelay > KINDA_SMALL_NUMBER)
 	{
-		ShowDownGameState->SetNameTagRoundStatus(ClampedBulletCount, EShowDownSide::Player, EShowDownPlayerSlot::None);
+		// Resolve a shared chamber only when this target's presentation actually
+		// begins. A queued player may disconnect before then; pre-consuming here
+		// would silently skip a chamber and change every later player's outcome.
+		const float ResultDelay = FMath::Max(0.0f, ResolveMultiplayerRouletteResultDelay());
+		const float MaxPresentationDelay = FMath::Max(
+			ResolveMultiplayerRoulettePresentationDelay(false),
+			ResolveMultiplayerRoulettePresentationDelay(true));
+		const float ReservedFinishDelay = FMath::Max(ResultDelay, MaxPresentationDelay);
+		const TWeakObjectPtr<ASDPlayerState> WeakQueuedTarget(TargetPlayer);
+		FTimerDelegate StartDelegate;
+		StartDelegate.BindWeakLambda(this, [this, WeakQueuedTarget]()
+		{
+			ASDPlayerState* QueuedTarget = WeakQueuedTarget.Get();
+			if (!QueuedTarget
+				|| !MultiplayerPlayers.Contains(QueuedTarget)
+				|| QueuedTarget->Lives <= 0)
+			{
+				return;
+			}
+
+			ApplyMultiplayerRoulette(QueuedTarget, MultiplayerLiveRoundCount, 0.0f, true);
+		});
+		FTimerHandle StartTimerHandle;
+		GetWorldTimerManager().SetTimer(StartTimerHandle, StartDelegate, SafeStartDelay, false);
+		MultiplayerRoundTimerHandles.Add(StartTimerHandle);
+		return SafeStartDelay + ReservedFinishDelay;
+	}
+
+	// Shared showdown shots consume the existing cylinder. A fold shot instead
+	// loads and spins a fresh cylinder using its resolved fold load (which can be
+	// six even when the table bet is one for a folded seven).
+	if (!bUseSharedChambers)
+	{
+		MultiplayerLiveRoundCount = ClampedBulletCount;
 	}
 	const int32 LiveRoundsBeforeShot = MultiplayerLiveRoundCount;
 	const int32 ChambersBeforeShot = bUseSharedChambers ? MultiplayerRemainingChamberCount : 6;
@@ -7001,7 +7138,6 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 	const int32 ChambersAfterShot = MultiplayerRemainingChamberCount;
 	const EShowDownPlayerSlot TargetSlot = TargetPlayer->ShowDownSlot;
 	const FString TargetName = TargetPlayer->GetPlayerName();
-	const float SafeStartDelay = FMath::Max(0.0f, StartDelay);
 	const float ResultDelay = FMath::Max(0.0f, ResolveMultiplayerRouletteResultDelay());
 	const float FinishDelay = FMath::Max(ResultDelay, ResolveMultiplayerRoulettePresentationDelay(bHit));
 	const TWeakObjectPtr<ASDPlayerState> WeakTargetPlayer(TargetPlayer);
@@ -7104,6 +7240,7 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 		{
 			ShowDownGameState->SetPhase(EShowDownPhase::Roulette);
+			ShowDownGameState->SetNameTagPlayerLoadedBulletCount(TargetSlot, ClampedBulletCount);
 			ShowDownGameState->SetNameTagRoundStatus(
 				LiveRoundsBeforeShot,
 				EShowDownSide::Player,
@@ -7160,10 +7297,21 @@ void AShowDownGameModeBase::EndMultiplayerRound()
 {
 	ClearMultiplayerRoundTimers();
 	ClearCardRevealPresentationTimers();
+	bBettingPhase = false;
+	bMultiplayerRoundResolving = false;
+	MultiplayerCurrentBetter = nullptr;
+	MultiplayerLastCheckedPlayer = nullptr;
+	MultiplayerPlayersActed.Reset();
 	SetMultiplayerSelectableHand(nullptr);
+	ClearBetActionPanel();
 	ClearBetBulletPresentation();
 	ClearMultiplayerForeheadCards();
+	MultiplayerFoldedPlayers.Reset();
 	MultiplayerRoundSpectators.Reset();
+	MultiplayerLiveRoundCount = 0;
+	MultiplayerRemainingChamberCount = 6;
+	MultiplayerSharedChamberIndex = 0;
+	MultiplayerSharedChambers.Reset();
 	RefreshMultiplayerCharacterVisibility();
 
 	int32 AliveCount = 0;
@@ -7182,8 +7330,20 @@ void AShowDownGameModeBase::EndMultiplayerRound()
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 		{
 			ShowDownGameState->SetPhase(EShowDownPhase::GameOver);
+			ShowDownGameState->SetNameTagRoundStatus(0, EShowDownSide::Player, EShowDownPlayerSlot::None);
+			for (ASDPlayerState* Player : MultiplayerPlayers)
+			{
+				if (Player && Player->ShowDownSlot != EShowDownPlayerSlot::None)
+				{
+					ShowDownGameState->SetNameTagPlayerLoadedBulletCount(Player->ShowDownSlot, 0);
+				}
+			}
 			ShowDownGameState->OnGameOver.Broadcast(EShowDownSide::Player);
 		}
+		MultiplayerRoundLeader = nullptr;
+		MultiplayerDuelA = nullptr;
+		MultiplayerDuelB = nullptr;
+		MultiplayerNextFirstPlayer = nullptr;
 		NotifyMultiplayerStatus(FString::Printf(
 			TEXT("게임 종료. 승자: %s"),
 			Winner ? *Winner->GetPlayerName() : TEXT("없음")));
@@ -7847,6 +8007,26 @@ FSDCardHandLayoutSettings AShowDownGameModeBase::ResolveHandLayoutSettingsForPla
 		Settings.HeightOffset = HandAnchor->HeightOffset;
 		Settings.LeanAngle = HandAnchor->LeanAngle;
 		Settings.LayerStep = HandAnchor->LayerStep;
+
+		const bool bSideSeat = Player->ShowDownSlot == EShowDownPlayerSlot::Player3
+			|| Player->ShowDownSlot == EShowDownPlayerSlot::Player4;
+		const bool bHasLegacySideSeatLayout =
+			FMath::IsNearlyEqual(Settings.CardSpacing, 70.0f)
+			&& FMath::IsNearlyEqual(Settings.ForwardOffset, 180.0f)
+			&& FMath::IsNearlyEqual(Settings.HeightOffset, 65.0f)
+			&& FMath::IsNearlyZero(Settings.LeanAngle)
+			&& FMath::IsNearlyEqual(Settings.LayerStep, 0.5f);
+		if (bSideSeat && bHasLegacySideSeatLayout)
+		{
+			// Existing maps serialized the generic hand defaults into the Player 3/4
+			// Blueprint instances. Normalize only that exact legacy preset so future
+			// deliberately authored side-seat layouts remain untouched.
+			Settings.CardSpacing = 9.0f;
+			Settings.ForwardOffset = 0.0f;
+			Settings.HeightOffset = 0.0f;
+			Settings.LeanAngle = 0.0f;
+			Settings.LayerStep = 0.0f;
+		}
 		return Settings;
 	}
 

@@ -5,12 +5,19 @@
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
+#include "Engine/World.h"
 #include "GameFramework/GameStateBase.h"
 #include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
 #include "SDPlayerState.h"
 #include "ShowDownPlayerController.h"
 #include "UObject/ConstructorHelpers.h"
+
+namespace
+{
+	constexpr uint8 MaxVisualRefreshRetryAttempts = 50;
+	constexpr float VisualRefreshRetryIntervalSeconds = 0.1f;
+}
 
 ACard::ACard()
 {
@@ -343,10 +350,39 @@ void ACard::RefreshVisual()
 	{
 		LocalPlayerState = LocalPlayerController->GetPlayerState<ASDPlayerState>();
 	}
-
-	if (HiddenFromSlot != EShowDownPlayerSlot::None && LocalPlayerState)
+	const bool bViewerSlotRequired = HiddenFromSlot != EShowDownPlayerSlot::None
+		|| HandOwnerSlot != EShowDownPlayerSlot::None;
+	const bool bViewerSlotResolved = LocalPlayerState
+		&& LocalPlayerState->ShowDownSlot != EShowDownPlayerSlot::None;
+	if (!HasAuthority() && bViewerSlotRequired && !bViewerSlotResolved)
 	{
-		bVisibleToLocalPlayer = bVisibleToLocalPlayer && LocalPlayerState->ShowDownSlot != HiddenFromSlot;
+		// Actor property replication can beat the local PlayerState slot OnRep.
+		// Stay fail-closed, then retry briefly so the owner's hand does not remain
+		// hidden for the rest of the match because of that ordering race.
+		ScheduleVisualRefreshRetry();
+	}
+	else
+	{
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().ClearTimer(VisualRefreshRetryTimerHandle);
+		}
+		VisualRefreshRetryAttempts = 0;
+	}
+
+	if (HiddenFromSlot != EShowDownPlayerSlot::None)
+	{
+		bVisibleToLocalPlayer = LocalPlayerState
+			&& LocalPlayerState->ShowDownSlot != HiddenFromSlot;
+	}
+	if (HandOwnerSlot != EShowDownPlayerSlot::None)
+	{
+		// Multiplayer hands are spawned face-up so their owner can read them.
+		// HandOwnerSlot is therefore also a visual information boundary: every other
+		// client may see the physical card, but never its replicated rank text.
+		bVisibleToLocalPlayer = bVisibleToLocalPlayer
+			&& LocalPlayerState
+			&& LocalPlayerState->ShowDownSlot == HandOwnerSlot;
 	}
 
 	const bool bShouldShowText = bFaceUp && bVisibleToLocalPlayer;
@@ -363,6 +399,41 @@ void ACard::RefreshVisual()
 	}
 
 	bHasCachedVisual = true;
+}
+
+void ACard::ScheduleVisualRefreshRetry()
+{
+	UWorld* World = GetWorld();
+	if (HasAuthority()
+		|| !World
+		|| VisualRefreshRetryAttempts >= MaxVisualRefreshRetryAttempts
+		|| World->GetTimerManager().IsTimerActive(VisualRefreshRetryTimerHandle))
+	{
+		return;
+	}
+
+	World->GetTimerManager().SetTimer(
+		VisualRefreshRetryTimerHandle,
+		this,
+		&ACard::HandleVisualRefreshRetry,
+		VisualRefreshRetryIntervalSeconds,
+		true);
+}
+
+void ACard::HandleVisualRefreshRetry()
+{
+	UWorld* World = GetWorld();
+	if (HasAuthority() || !World)
+	{
+		return;
+	}
+
+	++VisualRefreshRetryAttempts;
+	RefreshVisual();
+	if (VisualRefreshRetryAttempts >= MaxVisualRefreshRetryAttempts)
+	{
+		World->GetTimerManager().ClearTimer(VisualRefreshRetryTimerHandle);
+	}
 }
 
 void ACard::SelectCard(bool bNewSelected)
