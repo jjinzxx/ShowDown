@@ -102,6 +102,23 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Status")
 	void SetTableStatus(int32 LiveRounds, int32 RemainingChambers, EShowDownPhase Phase, EShowDownPlayerSlot TurnSlot);
 
+	// Clears the centre of the table while the opening deck is displayed, then
+	// drops the complete revolver actor back onto its authored table transform.
+	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Opening Cards")
+	void SetOpeningCardShowcaseStowed(bool bStowed);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Opening Cards", meta = (ClampMin = "0.0", DisplayName = "Drop Height"))
+	float OpeningCardDropHeight = 140.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Opening Cards", meta = (ClampMin = "1.0", DisplayName = "Drop Gravity"))
+	float OpeningCardDropGravity = 980.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Opening Cards", meta = (ClampMin = "0.0", ClampMax = "0.8", DisplayName = "Drop Bounciness"))
+	float OpeningCardDropRestitution = 0.22f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Opening Cards", meta = (ClampMin = "1.0", DisplayName = "Drop Stop Speed"))
+	float OpeningCardDropStopSpeed = 35.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Ammo Status Display")
 	FVector AmmoStatusWorldOffset = FVector(0.0f, 0.0f, 12.0f);
 
@@ -150,6 +167,12 @@ protected:
 	UFUNCTION()
 	void OnRep_TableStatus();
 
+	UFUNCTION()
+	void OnRep_OpeningCardShowcaseStowed();
+
+	UFUNCTION()
+	void HandleGamePhaseChanged(EShowDownPhase NewPhase);
+
 	void ApplyAmmoStatusDisplaySettings();
 	void UpdateAmmoStatusAnchorLocation();
 
@@ -173,6 +196,9 @@ protected:
 
 	UPROPERTY(ReplicatedUsing = OnRep_TableStatus, BlueprintReadOnly, Category = "Self Shot Gun|Status")
 	EShowDownPlayerSlot StatusTurnSlot = EShowDownPlayerSlot::None;
+
+	UPROPERTY(ReplicatedUsing = OnRep_OpeningCardShowcaseStowed)
+	bool bOpeningCardShowcaseStowed = false;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UStaticMeshComponent> GunMesh;
@@ -578,6 +604,12 @@ private:
 	void StopTinnitusSound();
 	bool IsRuntimeTickRequired() const;
 	void RefreshRuntimeTickState();
+	void StageOpeningCardDrop();
+	void StartOpeningCardDrop();
+	void UpdateOpeningCardDrop(float DeltaSeconds);
+	void FinishOpeningCardDrop();
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastFinishOpeningCardDrop();
 	void SetBlackoutInstant(float Alpha, bool bHoldWhenFinished);
 	ASDArtToneController* ResolveHitSequenceArtToneController();
 	bool ResolveCurrentShotIsLive() const;
@@ -606,6 +638,7 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<ACameraActor> ActiveSelfShotCinematicCamera = nullptr;
 	ECollisionEnabled::Type OriginalCollisionEnabled = ECollisionEnabled::QueryAndPhysics;
+	ECollisionEnabled::Type OriginalInteractionCollisionEnabled = ECollisionEnabled::QueryOnly;
 	EGunAnimState AnimState = EGunAnimState::Idle;
 	EHitSequenceState HitSequenceState = EHitSequenceState::Idle;
 	float StateElapsedTime = 0.0f;
@@ -621,11 +654,13 @@ private:
 	float HitSequenceElapsedTime = 0.0f;
 	float MuzzleFlashElapsedTime = 0.0f;
 	float TinnitusElapsedTime = 0.0f;
+	float OpeningCardDropVelocityZ = 0.0f;
 	bool bSelfShotCinematicCameraActive = false;
 	bool bSelfShotCinematicCameraStartPending = false;
 	bool bSelfShotCinematicCameraHoldStarted = false;
 	bool bPresentationFinishPending = false;
 	bool bHasCapturedRestActorTransform = false;
+	bool bOpeningCardDropActive = false;
 	bool bRevolverPlacementDevPreviewActive = false;
 	bool bCurrentShotTargetsLocalPlayer = true;
 	bool bCurrentShotWasEmpty = false;

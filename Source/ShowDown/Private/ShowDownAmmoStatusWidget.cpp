@@ -40,13 +40,13 @@ void UShowDownAmmoStatusWidget::BuildDefaultWidget()
 	}
 
 	Background = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("AmmoStatusBackground"));
-	Background->SetPadding(FMargin(18.0f, 7.0f));
+	Background->SetPadding(FMargin(0.0f));
 	Background->SetVisibility(ESlateVisibility::HitTestInvisible);
 
 	AmmoText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("AmmoStatusText"));
 	AmmoText->SetJustification(ETextJustify::Center);
 	AmmoText->SetShadowOffset(FVector2D(0.0f, 2.0f));
-	AmmoText->SetShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.85f));
+	AmmoText->SetShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 1.0f));
 	Background->SetContent(AmmoText);
 	WidgetTree->RootWidget = Background;
 	RefreshVisuals();
@@ -56,12 +56,15 @@ void UShowDownAmmoStatusWidget::RefreshVisuals()
 {
 	if (Background)
 	{
-		Background->SetBrushColor(CachedBackgroundColor);
+		Background->SetBrushColor(FLinearColor::Transparent);
 	}
 	if (AmmoText)
 	{
 		AmmoText->SetText(CachedText);
-		AmmoText->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), CachedFontSize));
+		FSlateFontInfo FontInfo(FCoreStyle::GetDefaultFont(), CachedFontSize);
+		FontInfo.OutlineSettings.OutlineSize = 2;
+		FontInfo.OutlineSettings.OutlineColor = FLinearColor::Black;
+		AmmoText->SetFont(FontInfo);
 		AmmoText->SetColorAndOpacity(FSlateColor(CachedTextColor));
 	}
 }

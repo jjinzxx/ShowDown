@@ -357,17 +357,26 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (DisplayName = "Use Initial Card Deal Presentation"))
 	bool bUseInitialCardDealPresentation = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", DisplayName = "Flat Card Distance From Hand Anchor"))
-	float InitialDealFlatCardDistance = 115.0f;
+	// GameMode defaults cannot safely hold a direct reference to an actor in a
+	// level. Tag the placed deck actor with this value to select it explicitly;
+	// the authored deck mesh is detected automatically when no tag is present.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (DisplayName = "Deck Source Actor Tag"))
+	FName InitialDealDeckSourceActorTag = TEXT("InitialDealDeckSource");
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", DisplayName = "Flat Card Spacing"))
-	float InitialDealFlatCardSpacing = 34.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "20.0", DisplayName = "Flat Card Fan Angle"))
-	float InitialDealFlatCardFanAngle = 6.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "4.0", DisplayName = "Flat Card Overlap Step"))
+	float InitialDealFlatCardSpacing = 4.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.1", ClampMax = "2.0", DisplayName = "Card Move Duration"))
 	float InitialDealCardMoveDuration = 0.70f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "60.0", DisplayName = "Hand Move Arc Height"))
+	float InitialDealHandMoveArcHeight = 8.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.1", ClampMax = "2.0", DisplayName = "Hand Move Duration"))
+	float InitialDealHandMoveDuration = 0.45f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "1.0", DisplayName = "Card Bounce Strength"))
+	float InitialDealCardBounceStrength = 0.20f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "3.0", DisplayName = "Beat Delay"))
 	float InitialDealBeatDelay = 0.80f;
@@ -376,7 +385,7 @@ public:
 	float InitialDealShowcaseHoldDuration = 1.50f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "10.0", DisplayName = "Showcase Grid Spacing (Column, Row)"))
-	FVector2D InitialDealShowcaseGridSpacing = FVector2D(44.0f, 62.0f);
+	FVector2D InitialDealShowcaseGridSpacing = FVector2D(10.0f, 12.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro")
 	bool bPlaySinglePlayerIntro = true;
@@ -447,7 +456,9 @@ private:
 	FTimerHandle CollectorActionPresentationTimerHandle;
 	TFunction<void()> CardPlacementDelayContinuation;
 	TFunction<void()> CollectorActionPresentationContinuation;
+	TFunction<void()> SelfShotGunResultContinuation;
 	TFunction<void()> SelfShotGunPresentationContinuation;
+	TFunction<void()> MultiplayerGunResultContinuation;
 	TArray<TFunction<void()>> QueuedCollectorActionPresentationContinuations;
 	FString LatestPlayerDialogueInput;
 	FString RecentDialogueHistory;
@@ -507,6 +518,7 @@ private:
 	TSet<TObjectPtr<ASDPlayerState>> MultiplayerRestartVotes;
 
 	FTimerHandle MultiplayerStartTimerHandle;
+	FTimerHandle MultiplayerGunResultFallbackTimerHandle;
 	bool bMultiplayerMatchStarted = false;
 	bool bMultiplayerRoundResolving = false;
 	
@@ -516,6 +528,7 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<ASDSelfShotGunActor> ActiveSelfShotGunActor = nullptr;
+	TWeakObjectPtr<ASDSelfShotGunActor> MultiplayerResultGunActor;
 	UPROPERTY()
 	TObjectPtr<ASDBetActionPanelActor> BetActionPanelActor = nullptr;
 
@@ -535,6 +548,8 @@ private:
 	EShowDownSide BetBulletActionSide = EShowDownSide::Player;
 	EShowDownPlayerSlot BetBulletActionSlot = EShowDownPlayerSlot::None;
 	EShowDownBetAction BetBulletAction = EShowDownBetAction::Check;
+	TMap<EShowDownSide, EShowDownBetAction> SingleLastBetActions;
+	TMap<EShowDownPlayerSlot, EShowDownBetAction> MultiplayerLastBetActions;
 	bool bHasBetBulletRouletteTarget = false;
 	bool bBetBulletRouletteTargetIsMultiplayer = false;
 	EShowDownSide BetBulletRouletteTargetSide = EShowDownSide::Player;
@@ -568,9 +583,14 @@ private:
 	TFunction<void()> InitialCardDealPresentationContinuation;
 	mutable bool bInitialCardDeckBoundsCacheValid = false;
 	mutable FVector CachedInitialCardDeckTop = FVector::ZeroVector;
+	mutable float CachedInitialCardDeckBottomZ = 0.0f;
+	mutable bool bInitialCardTableSurfaceCacheValid = false;
 	mutable float CachedInitialCardTableSurfaceZ = 0.0f;
+	mutable float CachedInitialCardShowcasePadRadius = 0.0f;
+	mutable TArray<FVector> CachedInitialCardFlatSlotCenters;
 	mutable bool bInitialCardSpatialCacheValid = false;
 	mutable FVector CachedInitialCardTableCenter = FVector::ZeroVector;
+	mutable FVector CachedInitialCardShowcaseCenter = FVector::ZeroVector;
 	mutable float CachedInitialCardShowcasePlaneZ = 0.0f;
 	mutable TWeakObjectPtr<USceneComponent> CachedInitialCardReferenceHandSlot;
 	TSet<EShowDownPlayerSlot> InitialCardDealCameraReadySlots;
@@ -633,6 +653,7 @@ private:
 	void MarkSingleBetBulletRouletteTarget(EShowDownSide TargetSide, int32 BulletCount);
 	void MarkMultiplayerBetBulletRouletteTarget(ASDPlayerState* TargetPlayer, int32 BulletCount);
 	void ClearBetBulletTransientState();
+	void ClearBetBulletActionHistory();
 	FString BuildBetBulletActionText(EShowDownBetAction Action) const;
 	float PlaySinglePlayerCardRevealPresentation();
 	float PlayMultiplayerCardRevealPresentation(const TArray<ASDPlayerState*>& RevealedPlayers);
@@ -655,9 +676,26 @@ private:
 	void BroadcastMultiplayerCardSelectedAction(ASDPlayerState* Player) const;
 	void BroadcastMultiplayerBetActionCommitted(ASDPlayerState* Player, EShowDownBetAction Action, int32 TargetBet) const;
 	void BroadcastSystemChatMessage(const FString& Message) const;
-	void PlaySelfShotGunPresentationThen(EShowDownSide TargetSide, bool bLiveRound, TFunction<void()>&& Continuation);
+	void PlaySelfShotGunPresentationThen(
+		EShowDownSide TargetSide,
+		bool bLiveRound,
+		TFunction<void()>&& ResultContinuation,
+		TFunction<void()>&& PresentationContinuation);
 	void FinishSelfShotGunPresentation();
+	void ResolvePendingSelfShotGunResult();
 	void BroadcastPendingSelfShotRouletteResult();
+	void ArmMultiplayerGunResult(
+		ASDSelfShotGunActor* GunActor,
+		float FallbackDelay,
+		TFunction<void()>&& ResultContinuation);
+	void ResolvePendingMultiplayerGunResult();
+	void ClearPendingMultiplayerGunResult();
+
+	UFUNCTION()
+	void HandleMultiplayerGunShotResolved();
+
+	UFUNCTION()
+	void HandleMultiplayerGunPresentationFinished();
 	ASDSelfShotGunActor* FindSelfShotGunActor() const;
 	AShowDownCharacter* FindSingleRouletteCharacter(EShowDownSide TargetSide) const;
 	void PlaySinglePlayerIntroThenStartStage();
@@ -670,6 +708,7 @@ private:
 	bool TryImmediateInitialCardDealFallback();
 	void StopInitialCardDealOnFailure(const TCHAR* Reason);
 	void SetInitialCardDealInputLocked(bool bLocked) const;
+	void SetInitialDealDeckVisual(int32 RemainingCards, int32 TotalCards) const;
 	void RefreshInitialCardDealSpatialCache() const;
 	void StartInitialCardDealFromStack();
 	bool PrepareSinglePlayerOpeningHands(
@@ -691,7 +730,7 @@ private:
 	void ClearInitialCardDealPresentation(bool bDestroyDeckCards = true);
 	void ScheduleInitialCardDealAction(float DelaySeconds, TFunction<void()>&& Action);
 	FTransform BuildInitialCardGridTransform(int32 CardIndex, int32 DeckCopies, bool bFaceDown) const;
-	FTransform BuildInitialCardStackTransform(int32 StackIndex) const;
+	FTransform BuildInitialCardStackTransform(float DeckHeightAlpha) const;
 	FTransform BuildInitialFlatCardTransform(USceneComponent* HandSlot, int32 CardIndex, int32 CardCount) const;
 	FQuat BuildInitialFlatCardRotation(const FVector& TowardTableCenter, bool bFaceDown) const;
 	FVector ResolveInitialCardDeckTop() const;

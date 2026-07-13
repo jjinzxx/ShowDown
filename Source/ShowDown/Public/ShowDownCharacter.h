@@ -12,8 +12,8 @@ class UAnimationAsset;
 class UAnimMontage;
 class UAnimInstance;
 class USceneComponent;
-class UShowDownBetStatusWidget;
 class UShowDownCharacterAnimInstance;
+class UTextRenderComponent;
 class UWidgetComponent;
 
 USTRUCT()
@@ -35,6 +35,9 @@ struct FShowDownCharacterBetStatusPresentation
 
 	UPROPERTY()
 	int32 MaxBulletCount = 6;
+
+	UPROPERTY()
+	bool bNeedsToMatchBet = false;
 
 	UPROPERTY()
 	FLinearColor AccentColor = FLinearColor(1.0f, 0.72f, 0.18f, 1.0f);
@@ -140,6 +143,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Character Identity")
 	void SetCharacterDisplayName(const FString& NewDisplayName);
 
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Name Tag")
+	void SetCharacterLives(int32 NewLives);
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Name Tag")
+	int32 GetCharacterLives() const { return CharacterLives; }
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Voice")
 	void SetVoiceTalking(bool bNewVoiceTalking);
 
@@ -150,6 +159,7 @@ public:
 		const FString& StatusText,
 		int32 BulletCount,
 		int32 MaxBulletCount,
+		bool bNeedsToMatchBet,
 		const FLinearColor& AccentColor);
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Bet Status")
@@ -196,6 +206,9 @@ protected:
 	void OnRep_Identity();
 
 	UFUNCTION()
+	void OnRep_CharacterLives();
+
+	UFUNCTION()
 	void OnRep_ViewRotation();
 
 	UFUNCTION()
@@ -218,6 +231,9 @@ protected:
 
 	UFUNCTION()
 	void HandleRouletteResult(EShowDownSide Target, bool bHit);
+
+	UFUNCTION()
+	void HandleLifeChanged(EShowDownSide Target, int32 Life);
 
 	UFUNCTION()
 	void HandleMultiplayerRouletteStarted(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount);
@@ -267,11 +283,56 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Name Tag")
 	FVector NameTagRelativeLocation = FVector(0.0f, 0.0f, 135.0f);
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Bet Status")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|World Lives")
+	TObjectPtr<USceneComponent> WorldLivesAnchor;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|World Lives")
+	TObjectPtr<UTextRenderComponent> WorldLivesShadowText;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|World Lives")
+	TObjectPtr<UTextRenderComponent> WorldLivesText;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Lives")
+	FVector WorldLivesRelativeLocation = FVector(0.0f, 70.0f, 158.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Lives")
+	FRotator WorldLivesRelativeRotation = FRotator::ZeroRotator;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Lives", meta = (ClampMin = "4.0"))
+	float WorldLivesTextSize = 22.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|World Bet Status")
 	TObjectPtr<USceneComponent> BetStatusAnchorComponent;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Bet Status")
-	TObjectPtr<UWidgetComponent> BetStatusWidgetComponent;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|World Bet Status")
+	TObjectPtr<UTextRenderComponent> BetStatusValueOutlineText;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|World Bet Status")
+	TObjectPtr<UTextRenderComponent> BetStatusValueText;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|World Bet Status")
+	TObjectPtr<UTextRenderComponent> BetStatusActionOutlineText;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|World Bet Status")
+	TObjectPtr<UTextRenderComponent> BetStatusActionText;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Bet Status")
+	FVector BetStatusRelativeLocation = FVector(0.0f, 70.0f, 132.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Bet Status")
+	FRotator BetStatusRelativeRotation = FRotator::ZeroRotator;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Bet Status", meta = (ClampMin = "4.0"))
+	float BetStatusValueTextSize = 18.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Bet Status", meta = (ClampMin = "4.0"))
+	float BetStatusActionTextSize = 24.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Bet Status")
+	float BetStatusActionVerticalOffset = -25.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Bet Status", meta = (ClampMin = "0.0", ClampMax = "6.0"))
+	float BetStatusOutlineSize = 1.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Player Camera")
 	FName PlayerCameraAttachName = TEXT("Head");
@@ -342,6 +403,9 @@ protected:
 	UPROPERTY(ReplicatedUsing = OnRep_Identity, EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Identity")
 	FString CharacterDisplayName;
 
+	UPROPERTY(ReplicatedUsing = OnRep_CharacterLives, BlueprintReadOnly, Category = "ShowDown|Name Tag")
+	int32 CharacterLives = 3;
+
 	UPROPERTY(ReplicatedUsing = OnRep_Identity, BlueprintReadOnly, Category = "ShowDown|Voice")
 	bool bVoiceTalking = false;
 
@@ -378,7 +442,8 @@ private:
 	void ApplyCharacterSceneActive();
 	void ApplyPresentationCollisionSettings();
 	void RefreshNameTag();
-	void RefreshBetStatusWidget();
+	void RefreshWorldLives();
+	void RefreshWorldBetStatus();
 	FString ResolveNameTagDisplayName() const;
 	FString ResolveNameTagStatusText() const;
 	bool IsNameTagTurnActive() const;

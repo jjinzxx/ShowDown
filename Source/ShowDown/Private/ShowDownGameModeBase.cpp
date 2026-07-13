@@ -165,6 +165,7 @@ namespace
 		FString DisplayName;
 		int32 BulletCount = 0;
 		bool bCurrentTurn = false;
+		bool bNeedsToMatchBet = false;
 		bool bFolded = false;
 		bool bRouletteTarget = false;
 		int32 RouletteBulletCount = 0;
@@ -182,29 +183,29 @@ namespace
 		{
 			return FLinearColor(1.0f, 0.16f, 0.08f, 1.0f);
 		}
-		if (StatusTextStartsWith(ActionText, TEXT("CALL")) || StatusTextStartsWith(ActionText, TEXT("CHECK")))
+		if (LaneState.bCurrentTurn)
 		{
-			return FLinearColor(0.08f, 0.92f, 0.34f, 1.0f);
+			return FLinearColor(0.12f, 1.0f, 0.28f, 1.0f);
+		}
+		if (StatusTextStartsWith(ActionText, TEXT("CALL")))
+		{
+			return FLinearColor(0.05f, 0.88f, 1.0f, 1.0f);
+		}
+		if (StatusTextStartsWith(ActionText, TEXT("CHECK")))
+		{
+			return FLinearColor(1.0f, 0.86f, 0.12f, 1.0f);
 		}
 		if (StatusTextStartsWith(ActionText, TEXT("RAISE")))
 		{
-			return FLinearColor(1.0f, 0.56f, 0.08f, 1.0f);
-		}
-		if (LaneState.bCurrentTurn)
-		{
-			return FLinearColor(0.05f, 0.82f, 1.0f, 1.0f);
+			return FLinearColor(1.0f, 0.42f, 0.04f, 1.0f);
 		}
 
-		return FLinearColor(1.0f, 0.72f, 0.18f, 1.0f);
+		return FLinearColor(0.82f, 0.86f, 0.92f, 1.0f);
 	}
 
 	FString GetBetStatusLabel(const FShowDownBetStatusLaneState& LaneState)
 	{
 		const FString ActionText = LaneState.ActionText.TrimStartAndEnd();
-		if (!ActionText.IsEmpty())
-		{
-			return ActionText.Left(12);
-		}
 		if (LaneState.bRouletteTarget)
 		{
 			return TEXT("TARGET");
@@ -216,6 +217,10 @@ namespace
 		if (LaneState.bCurrentTurn)
 		{
 			return TEXT("TURN");
+		}
+		if (!ActionText.IsEmpty())
+		{
+			return ActionText.Left(12);
 		}
 
 		return FString();
@@ -648,7 +653,9 @@ void AShowDownGameModeBase::ResetForHubReturn()
 	bPendingSelfShotRouletteResult = false;
 	CardPlacementDelayContinuation = TFunction<void()>();
 	CollectorActionPresentationContinuation = TFunction<void()>();
+	SelfShotGunResultContinuation = TFunction<void()>();
 	SelfShotGunPresentationContinuation = TFunction<void()>();
+	ClearPendingMultiplayerGunResult();
 	QueuedCollectorActionPresentationContinuations.Reset();
 	ActiveSelfShotGunActor = nullptr;
 
@@ -873,6 +880,9 @@ void AShowDownGameModeBase::StartInitialCardDealPresentation(
 	InitialCardDealCameraReadySlots.Reset();
 	bInitialCardSpatialCacheValid = false;
 	bInitialCardDeckBoundsCacheValid = false;
+	bInitialCardTableSurfaceCacheValid = false;
+	CachedInitialCardShowcasePadRadius = 0.0f;
+	CachedInitialCardFlatSlotCenters.Reset();
 	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 	{
 		ShowDownGameState->SetPhase(EShowDownPhase::None);
@@ -959,6 +969,10 @@ bool AShowDownGameModeBase::TryImmediateInitialCardDealFallback()
 void AShowDownGameModeBase::StopInitialCardDealOnFailure(const TCHAR* Reason)
 {
 	UE_LOG(LogTemp, Error, TEXT("Initial card deal stopped safely: %s"), Reason ? Reason : TEXT("unknown failure"));
+	if (ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
+	{
+		GunActor->SetOpeningCardShowcaseStowed(false);
+	}
 	for (FTimerHandle& TimerHandle : InitialCardDealPresentationTimerHandles)
 	{
 		GetWorldTimerManager().ClearTimer(TimerHandle);
@@ -967,6 +981,7 @@ void AShowDownGameModeBase::StopInitialCardDealOnFailure(const TCHAR* Reason)
 	InitialCardDealPresentationContinuation = TFunction<void()>();
 	bInitialCardDealPresentationInProgress = true;
 	bInitialCardDealShowcaseStarted = false;
+	SetInitialDealDeckVisual(0, 0);
 	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 	{
 		ShowDownGameState->SetPhase(EShowDownPhase::None);
@@ -989,6 +1004,19 @@ void AShowDownGameModeBase::SetInitialCardDealInputLocked(bool bLocked) const
 	}
 }
 
+void AShowDownGameModeBase::SetInitialDealDeckVisual(
+	int32 RemainingCards,
+	int32 TotalCards) const
+{
+	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+	{
+		ShowDownGameState->SetInitialDealDeckVisualState(
+			InitialDealDeckSourceActorTag,
+			RemainingCards,
+			TotalCards);
+	}
+}
+
 void AShowDownGameModeBase::RefreshInitialCardDealSpatialCache() const
 {
 	CachedInitialCardTableCenter = ResolveSingleTableCenter(GetWorld());
@@ -999,23 +1027,22 @@ void AShowDownGameModeBase::RefreshInitialCardDealSpatialCache() const
 		{
 			if (Player && Player->ShowDownSlot == EShowDownPlayerSlot::Player1)
 			{
-				CachedInitialCardReferenceHandSlot = GetHandSlotForPlayerState(Player);
+				if (const ASDCardPlacementAnchor* PlayerAnchor = GetHandAnchorForPlayerSlot(Player->ShowDownSlot))
+				{
+					CachedInitialCardReferenceHandSlot = PlayerAnchor->GetSlotComponent();
+				}
 				break;
 			}
 		}
 	}
 	bInitialCardSpatialCacheValid = true;
-	CachedInitialCardShowcasePlaneZ = ResolveInitialCardDeckTop().Z;
-	if (const ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
-	{
-		FVector GunBoundsOrigin = FVector::ZeroVector;
-		FVector GunBoundsExtent = FVector::ZeroVector;
-		GunActor->GetActorBounds(false, GunBoundsOrigin, GunBoundsExtent, true);
-		CachedInitialCardShowcasePlaneZ = FMath::Max(
-			CachedInitialCardShowcasePlaneZ,
-			GunBoundsOrigin.Z + GunBoundsExtent.Z);
-	}
-	CachedInitialCardShowcasePlaneZ += 3.0f;
+	ResolveInitialCardDeckTop();
+	ResolveInitialCardTableSurfaceZ();
+	// The showcase cards lie on the table. Raising them above the gun made the
+	// cards float high enough for their shadows to look like a second grid.
+	CachedInitialCardShowcasePlaneZ = CachedInitialCardTableSurfaceZ + 0.05f;
+	CachedInitialCardShowcaseCenter = CachedInitialCardTableCenter;
+
 }
 
 void AShowDownGameModeBase::BeginInitialCardDeckShowcase()
@@ -1027,9 +1054,15 @@ void AShowDownGameModeBase::BeginInitialCardDeckShowcase()
 
 	bInitialCardDealShowcaseStarted = true;
 	RefreshInitialCardDealSpatialCache();
+	if (ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
+	{
+		GunActor->SetOpeningCardShowcaseStowed(true);
+	}
 
 	const int32 CardCount = InitialCardDealDeckCopies * 7;
-	const float GridVisualScale = 0.68f;
+	// Showcase the real cards at the same visual scale used by the final hand.
+	const float GridVisualScale = 1.0f;
+	SetInitialDealDeckVisual(CardCount, CardCount);
 	const float BeatDelay = FMath::Max(0.0f, InitialDealBeatDelay);
 	const float LeadInSeconds = bInitialCardDealIsMultiplayer ? 0.55f : 0.65f;
 	const float RevealStaggerSeconds = 0.075f;
@@ -1042,7 +1075,9 @@ void AShowDownGameModeBase::BeginInitialCardDeckShowcase()
 
 	for (int32 CardIndex = 0; CardIndex < CardCount; ++CardIndex)
 	{
-		const FTransform StackTransform = BuildInitialCardStackTransform(CardIndex);
+		const float DeckHeightAlpha = static_cast<float>(CardCount - CardIndex)
+			/ static_cast<float>(CardCount);
+		const FTransform StackTransform = BuildInitialCardStackTransform(DeckHeightAlpha);
 		ACard* Card = GetWorld()->SpawnActor<ACard>(CardClass, StackTransform);
 		if (!Card)
 		{
@@ -1067,23 +1102,32 @@ void AShowDownGameModeBase::BeginInitialCardDeckShowcase()
 		Card->SetFaceUp(true);
 		Card->SetSelectable(false);
 		Card->SetHandOwnerSlot(EShowDownPlayerSlot::None);
+		// The placed decorative deck remains the only visible pile. Runtime card
+		// actors stay hidden inside it until each card starts its showcase move.
+		Card->SetActorHiddenInGame(true);
+		// Set the showcase size while hidden so the card does not visibly grow as
+		// it leaves the placed deck.
 		Card->MoveToPresentationTransform(StackTransform, GridVisualScale, 0.12f, 0.0f, false);
+		Card->ForceNetUpdate();
 		InitialCardDealDeckCards.Add(Card);
 
 		const FTransform GridTransform = BuildInitialCardGridTransform(CardIndex, InitialCardDealDeckCopies, false);
 		const TWeakObjectPtr<ACard> WeakCard(Card);
 		ScheduleInitialCardDealAction(LeadInSeconds + CardIndex * RevealStaggerSeconds,
-			[WeakCard, GridTransform, GridVisualScale, RevealMoveDuration]()
+			[this, WeakCard, GridTransform, GridVisualScale, RevealMoveDuration, CardIndex, CardCount]()
 			{
 				if (ACard* LiveCard = WeakCard.Get())
 				{
+					SetInitialDealDeckVisual(CardCount - CardIndex - 1, CardCount);
+					LiveCard->SetActorHiddenInGame(false);
 					LiveCard->MoveToPresentationTransform(
 						GridTransform,
 						GridVisualScale,
 						RevealMoveDuration,
 						24.0f,
 						false,
-						true);
+						false);
+					LiveCard->ForceNetUpdate();
 				}
 			});
 	}
@@ -1107,7 +1151,7 @@ void AShowDownGameModeBase::BeginInitialCardDeckShowcase()
 						FlipDuration,
 						0.0f,
 						false,
-						true);
+						false);
 				}
 			});
 	}
@@ -1119,7 +1163,9 @@ void AShowDownGameModeBase::BeginInitialCardDeckShowcase()
 	for (int32 CardIndex = 0; CardIndex < InitialCardDealDeckCards.Num(); ++CardIndex)
 	{
 		const TWeakObjectPtr<ACard> WeakCard(InitialCardDealDeckCards[CardIndex]);
-		const FTransform StackTransform = BuildInitialCardStackTransform(CardIndex);
+		const float RestoredDeckHeightAlpha = static_cast<float>(CardIndex + 1)
+			/ static_cast<float>(CardCount);
+		const FTransform StackTransform = BuildInitialCardStackTransform(RestoredDeckHeightAlpha);
 		ScheduleInitialCardDealAction(GatherStartedAt + CardIndex * GatherStaggerSeconds,
 			[WeakCard, StackTransform, GridVisualScale, GatherDuration]()
 			{
@@ -1133,12 +1179,39 @@ void AShowDownGameModeBase::BeginInitialCardDeckShowcase()
 						false);
 				}
 			});
+		ScheduleInitialCardDealAction(
+			GatherStartedAt + CardIndex * GatherStaggerSeconds + GatherDuration,
+			[this, WeakCard, CardIndex, CardCount]()
+			{
+				if (ACard* LiveCard = WeakCard.Get())
+				{
+					LiveCard->SetActorHiddenInGame(true);
+					LiveCard->ForceNetUpdate();
+				}
+				SetInitialDealDeckVisual(CardIndex + 1, CardCount);
+			});
 	}
 
 	const float GatherFinishedAt = GatherStartedAt
 		+ FMath::Max(0, CardCount - 1) * GatherStaggerSeconds
 		+ GatherDuration;
-	ScheduleInitialCardDealAction(GatherFinishedAt + BeatDelay, [this]()
+	ScheduleInitialCardDealAction(GatherFinishedAt + 0.05f, [this]()
+	{
+		for (ACard* Card : InitialCardDealDeckCards)
+		{
+			if (IsValid(Card))
+			{
+				Card->SetActorHiddenInGame(true);
+				Card->ForceNetUpdate();
+			}
+		}
+		SetInitialDealDeckVisual(InitialCardDealDeckCards.Num(), InitialCardDealDeckCards.Num());
+		if (ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
+		{
+			GunActor->SetOpeningCardShowcaseStowed(false);
+		}
+	});
+	ScheduleInitialCardDealAction(GatherFinishedAt + FMath::Max(BeatDelay, 0.08f), [this]()
 	{
 		StartInitialCardDealFromStack();
 	});
@@ -1193,6 +1266,16 @@ bool AShowDownGameModeBase::PrepareSinglePlayerOpeningHands(
 	}
 
 	const TArray<USceneComponent*> HandSlots = { PlayerHandSlot, CollectorHandSlot };
+	const ASDCardPlacementAnchor* PlayerFlatAnchor = GetHandAnchorForSide(EShowDownSide::Player);
+	const ASDCardPlacementAnchor* CollectorFlatAnchor = GetHandAnchorForSide(EShowDownSide::Collector);
+	const TArray<USceneComponent*> FlatSlots = {
+		PlayerFlatAnchor && PlayerFlatAnchor->GetSlotComponent()
+			? PlayerFlatAnchor->GetSlotComponent()
+			: PlayerHandSlot,
+		CollectorFlatAnchor && CollectorFlatAnchor->GetSlotComponent()
+			? CollectorFlatAnchor->GetSlotComponent()
+			: CollectorHandSlot
+	};
 	const TArray<FSDCardHandLayoutSettings> HandLayouts = {
 		ResolveHandLayoutSettings(EShowDownSide::Player),
 		ResolveHandLayoutSettings(EShowDownSide::Collector)
@@ -1245,7 +1328,7 @@ bool AShowDownGameModeBase::PrepareSinglePlayerOpeningHands(
 			}
 
 			OutCardsInDealOrder.Add(Card);
-			OutFlatTransforms.Add(BuildInitialFlatCardTransform(HandSlots[ParticipantIndex], CardIndex, HandCount));
+			OutFlatTransforms.Add(BuildInitialFlatCardTransform(FlatSlots[ParticipantIndex], CardIndex, HandCount));
 			OutFinalTransforms.Add(CardSystem->BuildHandCardTransform(
 				HandSlots[ParticipantIndex],
 				HandLayouts[ParticipantIndex],
@@ -1273,6 +1356,7 @@ bool AShowDownGameModeBase::PrepareMultiplayerOpeningHands(
 
 	TArray<ASDPlayerState*> Participants;
 	TArray<USceneComponent*> HandSlots;
+	TArray<USceneComponent*> FlatSlots;
 	TArray<FSDCardHandLayoutSettings> HandLayouts;
 	for (ASDPlayerState* Player : MultiplayerPlayers)
 	{
@@ -1288,6 +1372,10 @@ bool AShowDownGameModeBase::PrepareMultiplayerOpeningHands(
 		}
 		Participants.Add(Player);
 		HandSlots.Add(HandSlot);
+		const ASDCardPlacementAnchor* FlatAnchor = GetHandAnchorForPlayerSlot(Player->ShowDownSlot);
+		FlatSlots.Add(FlatAnchor && FlatAnchor->GetSlotComponent()
+			? FlatAnchor->GetSlotComponent()
+			: HandSlot);
 		HandLayouts.Add(ResolveHandLayoutSettingsForPlayerState(Player));
 	}
 
@@ -1342,7 +1430,7 @@ bool AShowDownGameModeBase::PrepareMultiplayerOpeningHands(
 			Card->SetHandOwnerSlot(Player->ShowDownSlot);
 			Player->AddHandCard(Card);
 			OutCardsInDealOrder.Add(Card);
-			OutFlatTransforms.Add(BuildInitialFlatCardTransform(HandSlots[ParticipantIndex], CardIndex, HandCount));
+			OutFlatTransforms.Add(BuildInitialFlatCardTransform(FlatSlots[ParticipantIndex], CardIndex, HandCount));
 			OutFinalTransforms.Add(CardSystem->BuildHandCardTransform(
 				HandSlots[ParticipantIndex],
 				HandLayouts[ParticipantIndex],
@@ -1377,13 +1465,18 @@ void AShowDownGameModeBase::AnimatePreparedOpeningHands(
 		return;
 	}
 
-	const float StackVisualScale = 0.68f;
+	const int32 DealCardCount = CardsInDealOrder.Num();
+	SetInitialDealDeckVisual(DealCardCount, DealCardCount);
+	// Cards are hidden while restacking, so they can be prepared at their full
+	// deal size before becoming visible. No scale-up should occur in flight.
+	const float StackVisualScale = 1.0f;
 	for (int32 DeckIndex = 0; DeckIndex < InitialCardDealDeckCards.Num(); ++DeckIndex)
 	{
 		if (ACard* DeckCard = InitialCardDealDeckCards[DeckIndex])
 		{
+			DeckCard->SetActorHiddenInGame(true);
 			DeckCard->MoveToPresentationTransform(
-				BuildInitialCardStackTransform(DeckIndex),
+				BuildInitialCardStackTransform(1.0f),
 				StackVisualScale,
 				0.12f,
 				0.0f,
@@ -1394,15 +1487,18 @@ void AShowDownGameModeBase::AnimatePreparedOpeningHands(
 	{
 		if (ACard* DealCard = CardsInDealOrder[DealIndex])
 		{
-			// The first card dealt is physically the top card. This short hidden
-			// restack prevents a shuffled rank from appearing to pass through the pile.
-			const int32 StackIndex = InitialCardDealDeckCards.Num() + CardsInDealOrder.Num() - 1 - DealIndex;
+			// Prepare every hidden card at the current top of the progressively
+			// shrinking decorative deck. The full-size card is already in place before
+			// its replicated movement begins, so clients never see a floating source.
+			const float DeckHeightAlpha = static_cast<float>(DealCardCount - DealIndex)
+				/ static_cast<float>(DealCardCount);
 			DealCard->MoveToPresentationTransform(
-				BuildInitialCardStackTransform(StackIndex),
+				BuildInitialCardStackTransform(DeckHeightAlpha),
 				StackVisualScale,
 				0.12f,
 				0.0f,
 				false);
+			DealCard->SetActorHiddenInGame(true);
 		}
 	}
 
@@ -1410,21 +1506,27 @@ void AShowDownGameModeBase::AnimatePreparedOpeningHands(
 	const float DealLeadInSeconds = 0.30f;
 	const float DealStaggerSeconds = 0.16f;
 	const float DealMoveDuration = FMath::Max(0.65f, InitialDealCardMoveDuration);
+	const float DealBounceStrength = FMath::Clamp(InitialDealCardBounceStrength, 0.0f, 1.0f);
 	for (int32 DealIndex = 0; DealIndex < CardsInDealOrder.Num(); ++DealIndex)
 	{
 		const TWeakObjectPtr<ACard> WeakCard(CardsInDealOrder[DealIndex]);
 		const FTransform FlatTransform = FlatTransforms[DealIndex];
 		ScheduleInitialCardDealAction(DealLeadInSeconds + DealIndex * DealStaggerSeconds,
-			[WeakCard, FlatTransform, DealMoveDuration]()
+			[this, WeakCard, FlatTransform, DealMoveDuration, DealBounceStrength, DealIndex, DealCardCount]()
 			{
+				SetInitialDealDeckVisual(DealCardCount - DealIndex - 1, DealCardCount);
 				if (ACard* LiveCard = WeakCard.Get())
 				{
+					LiveCard->SetActorHiddenInGame(false);
 					LiveCard->MoveToPresentationTransform(
 						FlatTransform,
 						1.0f,
 						DealMoveDuration,
 						34.0f,
-						true);
+						true,
+						false,
+						DealBounceStrength);
+					LiveCard->ForceNetUpdate();
 				}
 			});
 	}
@@ -1434,7 +1536,8 @@ void AShowDownGameModeBase::AnimatePreparedOpeningHands(
 		+ DealMoveDuration;
 	const float LiftStartedAt = FlatDealFinishedAt + BeatDelay;
 	const float LiftStepSeconds = 0.32f;
-	const float LiftMoveDuration = DealMoveDuration * 1.2f;
+	const float LiftMoveDuration = FMath::Max(0.1f, InitialDealHandMoveDuration);
+	const float LiftArcHeight = FMath::Max(0.0f, InitialDealHandMoveArcHeight);
 	const int32 CardsPerParticipant = CardsInDealOrder.Num() / ParticipantCount;
 	for (int32 CardIndex = 0; CardIndex < CardsPerParticipant; ++CardIndex)
 	{
@@ -1450,7 +1553,7 @@ void AShowDownGameModeBase::AnimatePreparedOpeningHands(
 			const TWeakObjectPtr<ACard> WeakCard(CardsInDealOrder[DealIndex]);
 			const FTransform FinalTransform = FinalTransforms[DealIndex];
 			ScheduleInitialCardDealAction(StartDelay,
-				[WeakCard, FinalTransform, LiftMoveDuration]()
+				[WeakCard, FinalTransform, LiftMoveDuration, LiftArcHeight]()
 				{
 					if (ACard* LiveCard = WeakCard.Get())
 					{
@@ -1458,8 +1561,8 @@ void AShowDownGameModeBase::AnimatePreparedOpeningHands(
 							FinalTransform,
 							1.0f,
 							LiftMoveDuration,
-							42.0f,
-							true);
+							LiftArcHeight,
+							false);
 					}
 				});
 		}
@@ -1491,6 +1594,10 @@ void AShowDownGameModeBase::AnimatePreparedOpeningHands(
 void AShowDownGameModeBase::FinishInitialCardDealPresentation()
 {
 	TFunction<void()> Continuation = MoveTemp(InitialCardDealPresentationContinuation);
+	if (ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
+	{
+		GunActor->SetOpeningCardShowcaseStowed(false);
+	}
 	for (ACard* Card : InitialCardDealDeckCards)
 	{
 		if (IsValid(Card))
@@ -1508,6 +1615,7 @@ void AShowDownGameModeBase::FinishInitialCardDealPresentation()
 	bInitialCardDealPresentationPlayed = true;
 	bInitialCardDealShowcaseStarted = false;
 	InitialCardDealCameraReadySlots.Reset();
+	SetInitialDealDeckVisual(0, 1);
 	SetInitialCardDealInputLocked(false);
 	UE_LOG(LogTemp, Log, TEXT("Initial card deal presentation completed."));
 
@@ -1520,6 +1628,10 @@ void AShowDownGameModeBase::FinishInitialCardDealPresentation()
 void AShowDownGameModeBase::ClearInitialCardDealPresentation(bool bDestroyDeckCards)
 {
 	const bool bWasInProgress = bInitialCardDealPresentationInProgress;
+	if (ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
+	{
+		GunActor->SetOpeningCardShowcaseStowed(false);
+	}
 	for (FTimerHandle& TimerHandle : InitialCardDealPresentationTimerHandles)
 	{
 		GetWorldTimerManager().ClearTimer(TimerHandle);
@@ -1541,9 +1653,14 @@ void AShowDownGameModeBase::ClearInitialCardDealPresentation(bool bDestroyDeckCa
 	bInitialCardDealShowcaseStarted = false;
 	InitialCardDealCameraReadySlots.Reset();
 	bInitialCardSpatialCacheValid = false;
+	bInitialCardDeckBoundsCacheValid = false;
+	bInitialCardTableSurfaceCacheValid = false;
+	CachedInitialCardShowcasePadRadius = 0.0f;
+	CachedInitialCardFlatSlotCenters.Reset();
 	CachedInitialCardReferenceHandSlot.Reset();
 	if (bWasInProgress)
 	{
+		SetInitialDealDeckVisual(0, 0);
 		SetInitialCardDealInputLocked(false);
 	}
 }
@@ -1581,6 +1698,9 @@ FTransform AShowDownGameModeBase::BuildInitialCardGridTransform(int32 CardIndex,
 	const FVector TableCenter = bInitialCardSpatialCacheValid
 		? CachedInitialCardTableCenter
 		: ResolveSingleTableCenter(GetWorld());
+	const FVector ShowcaseCenter = bInitialCardSpatialCacheValid
+		? CachedInitialCardShowcaseCenter
+		: TableCenter;
 	USceneComponent* ReferenceHandSlot = bInitialCardSpatialCacheValid
 		? CachedInitialCardReferenceHandSlot.Get()
 		: GetHandSlotForSide(EShowDownSide::Player);
@@ -1599,18 +1719,20 @@ FTransform AShowDownGameModeBase::BuildInitialCardGridTransform(int32 CardIndex,
 	const float ColumnFromCenter = static_cast<float>(ColumnIndex) - 3.0f;
 	const float RowFromCenter = static_cast<float>(RowIndex) - static_cast<float>(SafeCopies - 1) * 0.5f;
 	const float ColumnSpacing = FMath::Max(10.0f, InitialDealShowcaseGridSpacing.X);
-	const float RowSpacing = FMath::Max(10.0f, InitialDealShowcaseGridSpacing.Y);
-	FVector Location = TableCenter
+	// A full-size BP_Card is slightly longer than ten units, so keep enough row
+	// separation for every rank to remain visible without card overlap.
+	const float RowSpacing = FMath::Max(12.0f, InitialDealShowcaseGridSpacing.Y);
+	FVector Location = ShowcaseCenter
 		+ GridRight * (ColumnFromCenter * ColumnSpacing)
 		+ TowardPlayer * (RowFromCenter * RowSpacing);
 	Location.Z = (bInitialCardSpatialCacheValid
 		? CachedInitialCardShowcasePlaneZ
-		: ResolveInitialCardDeckTop().Z + 3.0f)
+		: ResolveInitialCardTableSurfaceZ() + 0.05f)
 		+ CardIndex * 0.015f;
 	return FTransform(BuildInitialFlatCardRotation(TowardTableCenter, bFaceDown), Location);
 }
 
-FTransform AShowDownGameModeBase::BuildInitialCardStackTransform(int32 StackIndex) const
+FTransform AShowDownGameModeBase::BuildInitialCardStackTransform(float DeckHeightAlpha) const
 {
 	const FVector TableCenter = bInitialCardSpatialCacheValid
 		? CachedInitialCardTableCenter
@@ -1629,11 +1751,13 @@ FTransform AShowDownGameModeBase::BuildInitialCardStackTransform(int32 StackInde
 		TowardTableCenter = FVector::ForwardVector;
 	}
 	FVector Location = ResolveInitialCardDeckTop();
-	Location.Z = (bInitialCardSpatialCacheValid
-		? CachedInitialCardShowcasePlaneZ
-		: Location.Z + 3.0f)
-		+ 0.8f
-		+ FMath::Max(0, StackIndex) * 0.16f;
+	// The decorative deck shrinks with its bottom fixed. Prepare hidden runtime
+	// cards at that same moving top so every revealed/dealt card emerges from the
+	// visible pile rather than the original full-height top.
+	Location.Z = FMath::Lerp(
+		CachedInitialCardDeckBottomZ,
+		Location.Z,
+		FMath::Clamp(DeckHeightAlpha, 0.0f, 1.0f)) + 0.04f;
 	return FTransform(BuildInitialFlatCardRotation(TowardTableCenter, true), Location);
 }
 
@@ -1647,12 +1771,26 @@ FTransform AShowDownGameModeBase::BuildInitialFlatCardTransform(
 		return FTransform::Identity;
 	}
 
+	const float TableSurfaceZ = ResolveInitialCardTableSurfaceZ();
 	const FVector TableCenter = bInitialCardSpatialCacheValid
 		? CachedInitialCardTableCenter
 		: ResolveSingleTableCenter(GetWorld());
-	FVector TowardTableCenter = TableCenter - HandSlot->GetComponentLocation();
+
+	const FVector HandSlotLocation = HandSlot->GetComponentLocation();
+	FVector SlotCenter = HandSlotLocation;
+	float ClosestSlotDistanceSquared = TNumericLimits<float>::Max();
+	for (const FVector& CandidateSlotCenter : CachedInitialCardFlatSlotCenters)
+	{
+		const float DistanceSquared = FVector::DistSquared2D(CandidateSlotCenter, HandSlotLocation);
+		if (DistanceSquared < ClosestSlotDistanceSquared)
+		{
+			ClosestSlotDistanceSquared = DistanceSquared;
+			SlotCenter = CandidateSlotCenter;
+		}
+	}
+
+	FVector TowardTableCenter = TableCenter - SlotCenter;
 	TowardTableCenter.Z = 0.0f;
-	const float HandDistanceFromCenter = TowardTableCenter.Size();
 	TowardTableCenter = TowardTableCenter.GetSafeNormal();
 	if (TowardTableCenter.IsNearlyZero())
 	{
@@ -1664,24 +1802,11 @@ FTransform AShowDownGameModeBase::BuildInitialFlatCardTransform(
 	}
 
 	const float CardFromCenter = static_cast<float>(CardIndex) - static_cast<float>(CardCount - 1) * 0.5f;
-	const float HalfCount = FMath::Max(1.0f, static_cast<float>(CardCount - 1) * 0.5f);
-	const float FanAngle = (CardFromCenter / HalfCount) * InitialDealFlatCardFanAngle;
-	const FVector CardLongAxis = FQuat(FVector::UpVector, FMath::DegreesToRadians(FanAngle))
-		.RotateVector(TowardTableCenter)
-		.GetSafeNormal();
 	const FVector CardRight = FVector::CrossProduct(FVector::UpVector, TowardTableCenter).GetSafeNormal();
-	// Keep every flat fan inside its own outer table sector. Side-seat pawn hand
-	// components can sit only ~100 units from centre, so using the full authored
-	// distance would make the P3/P4 fans cross through each other at the deck.
-	const float SafeFlatDistance = FMath::Min(
-		InitialDealFlatCardDistance,
-		FMath::Max(0.0f, HandDistanceFromCenter * 0.25f));
-	FVector Location = HandSlot->GetComponentLocation()
-		+ TowardTableCenter * SafeFlatDistance
-		+ CardRight * (CardFromCenter * InitialDealFlatCardSpacing)
-		+ TowardTableCenter * (FMath::Abs(CardFromCenter) * 2.0f);
-	Location.Z = ResolveInitialCardTableSurfaceZ() + 2.2f + CardIndex * 0.12f;
-	return FTransform(BuildInitialFlatCardRotation(CardLongAxis, true), Location);
+	const float OverlapStep = FMath::Clamp(InitialDealFlatCardSpacing, 0.0f, 4.0f);
+	FVector Location = SlotCenter + CardRight * (CardFromCenter * OverlapStep);
+	Location.Z = TableSurfaceZ + 0.05f + CardIndex * 0.02f;
+	return FTransform(BuildInitialFlatCardRotation(TowardTableCenter, true), Location);
 }
 
 FQuat AShowDownGameModeBase::BuildInitialFlatCardRotation(const FVector& TowardTableCenter, bool bFaceDown) const
@@ -1706,44 +1831,137 @@ FVector AShowDownGameModeBase::ResolveInitialCardDeckTop() const
 		return CachedInitialCardDeckTop;
 	}
 
+	const FVector TableCenter = bInitialCardSpatialCacheValid
+		? CachedInitialCardTableCenter
+		: ResolveSingleTableCenter(GetWorld());
+	AStaticMeshActor* TaggedDeckActor = nullptr;
+	AStaticMeshActor* AuthoredDeckActor = nullptr;
+	float TaggedDeckDistanceSquared = TNumericLimits<float>::Max();
+	float AuthoredDeckDistanceSquared = TNumericLimits<float>::Max();
+	if (UWorld* World = GetWorld())
+	{
+		for (TActorIterator<AStaticMeshActor> It(World); It; ++It)
+		{
+			AStaticMeshActor* MeshActor = *It;
+			const UStaticMeshComponent* MeshComponent = It->GetStaticMeshComponent();
+			const UStaticMesh* StaticMesh = MeshComponent ? MeshComponent->GetStaticMesh() : nullptr;
+			if (!MeshActor || !StaticMesh)
+			{
+				continue;
+			}
+
+			const float DistanceSquared = FVector::DistSquared2D(MeshComponent->Bounds.Origin, TableCenter);
+			if (!InitialDealDeckSourceActorTag.IsNone()
+				&& MeshActor->ActorHasTag(InitialDealDeckSourceActorTag)
+				&& DistanceSquared < TaggedDeckDistanceSquared)
+			{
+				TaggedDeckActor = MeshActor;
+				TaggedDeckDistanceSquared = DistanceSquared;
+			}
+			if (StaticMesh->GetPathName() == TEXT("/Game/Fab/Card/SM_carddummyMesh.SM_carddummyMesh")
+				&& DistanceSquared < AuthoredDeckDistanceSquared)
+			{
+				AuthoredDeckActor = MeshActor;
+				AuthoredDeckDistanceSquared = DistanceSquared;
+			}
+		}
+	}
+
+	AStaticMeshActor* DeckActor = TaggedDeckActor ? TaggedDeckActor : AuthoredDeckActor;
+	if (DeckActor && DeckActor->GetStaticMeshComponent())
+	{
+		const FBoxSphereBounds Bounds = DeckActor->GetStaticMeshComponent()->Bounds;
+		CachedInitialCardDeckTop = FVector(
+			Bounds.Origin.X,
+			Bounds.Origin.Y,
+			Bounds.Origin.Z + Bounds.BoxExtent.Z);
+		CachedInitialCardDeckBottomZ = Bounds.Origin.Z - Bounds.BoxExtent.Z;
+		bInitialCardDeckBoundsCacheValid = true;
+		UE_LOG(LogTemp, Log, TEXT("Initial deal cards use placed deck source %s%s."),
+			*DeckActor->GetName(),
+			TaggedDeckActor ? TEXT(" (tagged)") : TEXT(" (authored mesh fallback)"));
+		return CachedInitialCardDeckTop;
+	}
+
+	CachedInitialCardDeckTop = TableCenter;
+	CachedInitialCardDeckBottomZ = TableCenter.Z;
+	bInitialCardDeckBoundsCacheValid = true;
+	UE_LOG(LogTemp, Warning, TEXT("No placed initial-deal deck source was found; using the table centre fallback."));
+	return CachedInitialCardDeckTop;
+}
+
+float AShowDownGameModeBase::ResolveInitialCardTableSurfaceZ() const
+{
+	if (bInitialCardTableSurfaceCacheValid)
+	{
+		return CachedInitialCardTableSurfaceZ;
+	}
+
+	const FVector ApproximateTableCenter = bInitialCardSpatialCacheValid
+		? CachedInitialCardTableCenter
+		: ResolveSingleTableCenter(GetWorld());
+	const UStaticMeshComponent* CardDecComponent = nullptr;
+	float CardDecDistanceSquared = TNumericLimits<float>::Max();
 	if (UWorld* World = GetWorld())
 	{
 		for (TActorIterator<AStaticMeshActor> It(World); It; ++It)
 		{
 			const UStaticMeshComponent* MeshComponent = It->GetStaticMeshComponent();
 			const UStaticMesh* StaticMesh = MeshComponent ? MeshComponent->GetStaticMesh() : nullptr;
-			if (StaticMesh && StaticMesh->GetPathName() == TEXT("/Game/Fab/Table/CardDec.CardDec"))
+			if (!StaticMesh || StaticMesh->GetPathName() != TEXT("/Game/Fab/Table/CardDec.CardDec"))
 			{
-				const FBoxSphereBounds Bounds = MeshComponent->Bounds;
-				CachedInitialCardDeckTop = FVector(Bounds.Origin.X, Bounds.Origin.Y, Bounds.Origin.Z + Bounds.BoxExtent.Z);
-				CachedInitialCardTableSurfaceZ = Bounds.Origin.Z - Bounds.BoxExtent.Z;
-				bInitialCardDeckBoundsCacheValid = true;
-				return CachedInitialCardDeckTop;
+				continue;
+			}
+
+			const float DistanceSquared = FVector::DistSquared2D(MeshComponent->Bounds.Origin, ApproximateTableCenter);
+			if (DistanceSquared < CardDecDistanceSquared)
+			{
+				CardDecComponent = MeshComponent;
+				CardDecDistanceSquared = DistanceSquared;
 			}
 		}
 	}
-	const FVector FallbackCenter = bInitialCardSpatialCacheValid
-		? CachedInitialCardTableCenter
-		: ResolveSingleTableCenter(GetWorld());
-	CachedInitialCardDeckTop = FallbackCenter;
-	CachedInitialCardTableSurfaceZ = FallbackCenter.Z;
-	bInitialCardDeckBoundsCacheValid = true;
-	return CachedInitialCardDeckTop;
-}
 
-float AShowDownGameModeBase::ResolveInitialCardTableSurfaceZ() const
-{
-	if (!bInitialCardDeckBoundsCacheValid)
+	if (CardDecComponent)
 	{
-		ResolveInitialCardDeckTop();
+		const FBoxSphereBounds Bounds = CardDecComponent->Bounds;
+		CachedInitialCardTableSurfaceZ = Bounds.Origin.Z + Bounds.BoxExtent.Z;
+		CachedInitialCardShowcasePadRadius = FMath::Min(Bounds.BoxExtent.X, Bounds.BoxExtent.Y);
+		CachedInitialCardTableCenter.X = Bounds.Origin.X;
+		CachedInitialCardTableCenter.Y = Bounds.Origin.Y;
+		CachedInitialCardTableCenter.Z = CachedInitialCardTableSurfaceZ;
+
+		// These are the four white outlined slot centres authored into CardDec's
+		// Line mesh. Transforming the local points keeps them exact when the table
+		// is moved or uniformly scaled in the level.
+		static const FVector LocalFlatSlotCenters[] = {
+			FVector(-59.971f, 0.034f, 127.354f),
+			FVector(59.971f, 0.034f, 127.354f),
+			FVector(0.000f, 60.005f, 127.354f),
+			FVector(0.000f, -59.937f, 127.354f)
+		};
+		CachedInitialCardFlatSlotCenters.Reset(UE_ARRAY_COUNT(LocalFlatSlotCenters));
+		const FTransform CardDecTransform = CardDecComponent->GetComponentTransform();
+		for (const FVector& LocalSlotCenter : LocalFlatSlotCenters)
+		{
+			CachedInitialCardFlatSlotCenters.Add(CardDecTransform.TransformPosition(LocalSlotCenter));
+		}
 	}
-	if (bInitialCardDeckBoundsCacheValid)
+	else
 	{
-		return CachedInitialCardTableSurfaceZ;
+		if (!bInitialCardDeckBoundsCacheValid)
+		{
+			ResolveInitialCardDeckTop();
+		}
+		CachedInitialCardTableSurfaceZ = bInitialCardDeckBoundsCacheValid
+			? CachedInitialCardDeckBottomZ
+			: ApproximateTableCenter.Z;
+		CachedInitialCardShowcasePadRadius = 0.0f;
+		CachedInitialCardFlatSlotCenters.Reset();
 	}
-	return bInitialCardSpatialCacheValid
-		? CachedInitialCardTableCenter.Z
-		: ResolveSingleTableCenter(GetWorld()).Z;
+
+	bInitialCardTableSurfaceCacheValid = true;
+	return CachedInitialCardTableSurfaceZ;
 }
 
 void AShowDownGameModeBase::FindCollector()
@@ -1949,26 +2167,32 @@ void AShowDownGameModeBase::BroadcastSystemChatMessage(const FString& Message) c
 void AShowDownGameModeBase::PlaySelfShotGunPresentationThen(
 	EShowDownSide TargetSide,
 	bool bLiveRound,
-	TFunction<void()>&& Continuation)
+	TFunction<void()>&& ResultContinuation,
+	TFunction<void()>&& PresentationContinuation)
 {
+	auto ResolveWithoutGun = [this, TargetSide, bLiveRound, &ResultContinuation, &PresentationContinuation]() mutable
+	{
+		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+		{
+			ShowDownGameState->OnRouletteResult.Broadcast(TargetSide, bLiveRound);
+		}
+		if (ResultContinuation)
+		{
+			ResultContinuation();
+		}
+		PlayCollectorActionPresentationThen(MoveTemp(PresentationContinuation));
+	};
+
 	if (GetNetMode() != NM_Standalone)
 	{
-		bPendingSelfShotRouletteResult = true;
-		bPendingSelfShotLiveRound = bLiveRound;
-		PendingSelfShotTargetSide = TargetSide;
-		BroadcastPendingSelfShotRouletteResult();
-		PlayCollectorActionPresentationThen(MoveTemp(Continuation));
+		ResolveWithoutGun();
 		return;
 	}
 
 	if (bSelfShotGunPresentationInProgress)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Self shot gun presentation is already running. Falling back to collector presentation."));
-		bPendingSelfShotRouletteResult = true;
-		bPendingSelfShotLiveRound = bLiveRound;
-		PendingSelfShotTargetSide = TargetSide;
-		BroadcastPendingSelfShotRouletteResult();
-		PlayCollectorActionPresentationThen(MoveTemp(Continuation));
+		ResolveWithoutGun();
 		return;
 	}
 
@@ -1976,11 +2200,7 @@ void AShowDownGameModeBase::PlaySelfShotGunPresentationThen(
 	if (!GunActor || !GunActor->CanInteract_Implementation(nullptr))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Self shot gun actor is missing or busy. Falling back to collector presentation."));
-		bPendingSelfShotRouletteResult = true;
-		bPendingSelfShotLiveRound = bLiveRound;
-		PendingSelfShotTargetSide = TargetSide;
-		BroadcastPendingSelfShotRouletteResult();
-		PlayCollectorActionPresentationThen(MoveTemp(Continuation));
+		ResolveWithoutGun();
 		return;
 	}
 
@@ -1990,7 +2210,8 @@ void AShowDownGameModeBase::PlaySelfShotGunPresentationThen(
 
 	bSelfShotGunPresentationInProgress = true;
 	ActiveSelfShotGunActor = GunActor;
-	SelfShotGunPresentationContinuation = MoveTemp(Continuation);
+	SelfShotGunResultContinuation = MoveTemp(ResultContinuation);
+	SelfShotGunPresentationContinuation = MoveTemp(PresentationContinuation);
 	bPendingSelfShotRouletteResult = true;
 	bPendingSelfShotLiveRound = bLiveRound;
 	PendingSelfShotTargetSide = TargetSide;
@@ -2114,7 +2335,7 @@ void AShowDownGameModeBase::HandleSelfShotGunPresentationFinished()
 
 void AShowDownGameModeBase::HandleSelfShotGunShotResolved()
 {
-	BroadcastPendingSelfShotRouletteResult();
+	ResolvePendingSelfShotGunResult();
 }
 
 void AShowDownGameModeBase::FinishSelfShotGunPresentation()
@@ -2132,7 +2353,7 @@ void AShowDownGameModeBase::FinishSelfShotGunPresentation()
 			&AShowDownGameModeBase::HandleSelfShotGunShotResolved);
 	}
 
-	BroadcastPendingSelfShotRouletteResult();
+	ResolvePendingSelfShotGunResult();
 	bSelfShotGunPresentationInProgress = false;
 	ActiveSelfShotGunActor = nullptr;
 
@@ -2141,6 +2362,17 @@ void AShowDownGameModeBase::FinishSelfShotGunPresentation()
 	if (Continuation)
 	{
 		Continuation();
+	}
+}
+
+void AShowDownGameModeBase::ResolvePendingSelfShotGunResult()
+{
+	BroadcastPendingSelfShotRouletteResult();
+	TFunction<void()> ResultContinuation = MoveTemp(SelfShotGunResultContinuation);
+	SelfShotGunResultContinuation = TFunction<void()>();
+	if (ResultContinuation)
+	{
+		ResultContinuation();
 	}
 }
 
@@ -2564,6 +2796,7 @@ void AShowDownGameModeBase::ConfigureSinglePlayerCharacters()
 			EShowDownCharacterRole::Player,
 			EShowDownPlayerSlot::Player1,
 			TEXT("Player"));
+		PlayerCharacter->SetCharacterLives(PlayerState.Lives);
 		PlayerCharacter->SetCharacterSceneActive(true);
 	}
 
@@ -2577,6 +2810,7 @@ void AShowDownGameModeBase::ConfigureSinglePlayerCharacters()
 			EShowDownCharacterRole::Opponent,
 			EShowDownPlayerSlot::None,
 			OpponentDisplayName);
+		OpponentCharacter->SetCharacterLives(CollectorState.Lives);
 		OpponentCharacter->SetCharacterSceneActive(true);
 	}
 
@@ -2672,6 +2906,7 @@ void AShowDownGameModeBase::ConfigureMultiplayerCharacters(const TArray<ASDPlaye
 			EShowDownCharacterRole::Player,
 			Player->ShowDownSlot,
 			GetNetworkPlayerDisplayName(Player));
+		AssignedCharacter->SetCharacterLives(Player->Lives);
 		AssignedCharacter->SetCharacterSceneActive(
 			Player->Lives > 0 && !MultiplayerRoundSpectators.Contains(Player));
 	}
@@ -2849,6 +3084,7 @@ void AShowDownGameModeBase::StartBettingPhase()
 			EShowDownPlayerSlot::Player1);
 	}
 	ClearBetBulletTransientState();
+	ClearBetBulletActionHistory();
 	RefreshBetBulletPresentation();
 	ShowEventDebugMessage(FString::Printf(TEXT("베팅 시작: 기본 %d발"), StageRule->MinimumBet));
 
@@ -4061,6 +4297,7 @@ ASDBetActionPanelActor* AShowDownGameModeBase::EnsureBetActionPanelActor()
 void AShowDownGameModeBase::ClearBetBulletPresentation()
 {
 	ClearBetBulletTransientState();
+	ClearBetBulletActionHistory();
 	for (AShowDownCharacter* Character : GetShowDownCharacters())
 	{
 		if (IsValid(Character))
@@ -4117,11 +4354,21 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation()
 			const EShowDownPhase CurrentPhase = GetShowDownGameState()
 				? GetShowDownGameState()->CurrentPhase
 				: EShowDownPhase::None;
+			if (const EShowDownBetAction* LastAction = MultiplayerLastBetActions.Find(Player->ShowDownSlot))
+			{
+				LaneState.ActionText = BuildBetBulletActionText(*LastAction);
+			}
 			LaneState.bCurrentTurn = bBettingPhase
 				&& !bMultiplayerRoundResolving
 				&& MultiplayerCurrentBetter == Player
 				&& !LaneState.bFolded
 				&& !bHasBetBulletRouletteTarget;
+			const int32 RequiredBet = BettingSystem
+				? FMath::Clamp(BettingSystem->GetCurrentBet(), 0, 6)
+				: LaneState.BulletCount;
+			LaneState.bNeedsToMatchBet = CurrentPhase == EShowDownPhase::Betting
+				&& !LaneState.bFolded
+				&& LaneState.BulletCount < RequiredBet;
 
 			if (CurrentPhase == EShowDownPhase::SelectCard)
 			{
@@ -4131,7 +4378,14 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation()
 			}
 			else if (CurrentPhase == EShowDownPhase::Reveal)
 			{
-				LaneState.ActionText = LaneState.bFolded ? TEXT("FOLD") : TEXT("REVEAL");
+				if (LaneState.bFolded)
+				{
+					LaneState.ActionText = TEXT("FOLD");
+				}
+				else if (LaneState.ActionText.IsEmpty())
+				{
+					LaneState.ActionText = TEXT("REVEAL");
+				}
 				LaneState.bCurrentTurn = false;
 			}
 			else if (CurrentPhase == EShowDownPhase::Roulette)
@@ -4139,8 +4393,7 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation()
 				const bool bFiringNow = GetShowDownGameState()
 					&& GetShowDownGameState()->NameTagTurnSlot == Player->ShowDownSlot;
 				LaneState.ActionText = bFiringNow ? TEXT("FIRING") : TEXT("WAIT");
-				LaneState.bCurrentTurn = bFiringNow;
-				LaneState.BulletCount = MultiplayerLiveRoundCount;
+				LaneState.bCurrentTurn = false;
 			}
 
 			if (CurrentPhase == EShowDownPhase::Betting
@@ -4175,11 +4428,25 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation()
 			LaneState.Slot = Side == EShowDownSide::Player ? EShowDownPlayerSlot::Player1 : EShowDownPlayerSlot::None;
 			LaneState.DisplayName = Side == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector");
 			LaneState.BulletCount = FMath::Clamp(ParticipantState.CurrentBet, 0, 6);
+			if (const EShowDownBetAction* LastAction = SingleLastBetActions.Find(Side))
+			{
+				LaneState.ActionText = BuildBetBulletActionText(*LastAction);
+				LaneState.bFolded = *LastAction == EShowDownBetAction::Fold;
+			}
 			LaneState.bCurrentTurn = bBettingPhase
 				&& !bHasBetBulletRouletteTarget
 				&& GetShowDownGameState()
 				&& GetShowDownGameState()->NameTagTurnSide == Side
 				&& GetShowDownGameState()->NameTagTurnSlot != EShowDownPlayerSlot::None;
+			const EShowDownPhase CurrentPhase = GetShowDownGameState()
+				? GetShowDownGameState()->CurrentPhase
+				: EShowDownPhase::None;
+			const int32 RequiredBet = BettingSystem
+				? FMath::Clamp(BettingSystem->GetCurrentBet(), 0, 6)
+				: LaneState.BulletCount;
+			LaneState.bNeedsToMatchBet = CurrentPhase == EShowDownPhase::Betting
+				&& !LaneState.bFolded
+				&& LaneState.BulletCount < RequiredBet;
 
 			if (bHasBetBulletAction
 				&& !bBetBulletActionIsMultiplayer
@@ -4228,8 +4495,9 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation()
 			true,
 			LaneState.DisplayName,
 			GetBetStatusLabel(LaneState),
-			LaneState.bRouletteTarget ? LaneState.RouletteBulletCount : LaneState.BulletCount,
+			LaneState.BulletCount,
 			6,
+			LaneState.bNeedsToMatchBet,
 			GetBetStatusAccentColor(LaneState));
 	}
 
@@ -4486,6 +4754,7 @@ void AShowDownGameModeBase::RecordSingleBetBulletAction(
 	EShowDownSide Side,
 	EShowDownBetAction Action)
 {
+	SingleLastBetActions.Add(Side, Action);
 	bHasBetBulletAction = true;
 	bBetBulletActionIsMultiplayer = false;
 	BetBulletActionSide = Side;
@@ -4503,6 +4772,7 @@ void AShowDownGameModeBase::RecordMultiplayerBetBulletAction(
 		return;
 	}
 
+	MultiplayerLastBetActions.Add(Player->ShowDownSlot, Action);
 	bHasBetBulletAction = true;
 	bBetBulletActionIsMultiplayer = true;
 	BetBulletActionSide = EShowDownSide::Player;
@@ -4546,6 +4816,12 @@ void AShowDownGameModeBase::ClearBetBulletTransientState()
 	BetBulletRouletteTargetSide = EShowDownSide::Player;
 	BetBulletRouletteTargetSlot = EShowDownPlayerSlot::None;
 	BetBulletRouletteBulletCount = 0;
+}
+
+void AShowDownGameModeBase::ClearBetBulletActionHistory()
+{
+	SingleLastBetActions.Reset();
+	MultiplayerLastBetActions.Reset();
 }
 
 FString AShowDownGameModeBase::BuildBetBulletActionText(EShowDownBetAction Action) const
@@ -4691,6 +4967,76 @@ void AShowDownGameModeBase::ClearMultiplayerRoundTimers()
 		GetWorldTimerManager().ClearTimer(TimerHandle);
 	}
 	MultiplayerRoundTimerHandles.Reset();
+	ClearPendingMultiplayerGunResult();
+}
+
+void AShowDownGameModeBase::ArmMultiplayerGunResult(
+	ASDSelfShotGunActor* GunActor,
+	float FallbackDelay,
+	TFunction<void()>&& ResultContinuation)
+{
+	if (!GunActor || !ResultContinuation)
+	{
+		return;
+	}
+
+	if (MultiplayerGunResultContinuation)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("A multiplayer gun result was still pending. Resolving it before arming the next shot."));
+		ResolvePendingMultiplayerGunResult();
+	}
+
+	MultiplayerResultGunActor = GunActor;
+	MultiplayerGunResultContinuation = MoveTemp(ResultContinuation);
+	GunActor->OnGunFired.AddUniqueDynamic(this, &AShowDownGameModeBase::HandleMultiplayerGunShotResolved);
+	GunActor->OnGunEmptyFired.AddUniqueDynamic(this, &AShowDownGameModeBase::HandleMultiplayerGunShotResolved);
+	GunActor->OnGunPresentationFinished.AddUniqueDynamic(
+		this,
+		&AShowDownGameModeBase::HandleMultiplayerGunPresentationFinished);
+
+	GetWorldTimerManager().SetTimer(
+		MultiplayerGunResultFallbackTimerHandle,
+		this,
+		&AShowDownGameModeBase::ResolvePendingMultiplayerGunResult,
+		FMath::Max(0.05f, FallbackDelay),
+		false);
+}
+
+void AShowDownGameModeBase::HandleMultiplayerGunShotResolved()
+{
+	ResolvePendingMultiplayerGunResult();
+}
+
+void AShowDownGameModeBase::HandleMultiplayerGunPresentationFinished()
+{
+	// The fire/empty delegates are the normal path. This protects state if a
+	// presentation is interrupted after it starts but before either delegate.
+	ResolvePendingMultiplayerGunResult();
+}
+
+void AShowDownGameModeBase::ResolvePendingMultiplayerGunResult()
+{
+	TFunction<void()> ResultContinuation = MoveTemp(MultiplayerGunResultContinuation);
+	ClearPendingMultiplayerGunResult();
+	if (ResultContinuation)
+	{
+		ResultContinuation();
+	}
+}
+
+void AShowDownGameModeBase::ClearPendingMultiplayerGunResult()
+{
+	GetWorldTimerManager().ClearTimer(MultiplayerGunResultFallbackTimerHandle);
+	if (ASDSelfShotGunActor* GunActor = MultiplayerResultGunActor.Get())
+	{
+		GunActor->OnGunFired.RemoveDynamic(this, &AShowDownGameModeBase::HandleMultiplayerGunShotResolved);
+		GunActor->OnGunEmptyFired.RemoveDynamic(this, &AShowDownGameModeBase::HandleMultiplayerGunShotResolved);
+		GunActor->OnGunPresentationFinished.RemoveDynamic(
+			this,
+			&AShowDownGameModeBase::HandleMultiplayerGunPresentationFinished);
+	}
+	MultiplayerResultGunActor.Reset();
+	MultiplayerGunResultContinuation = TFunction<void()>();
 }
 
 FTransform AShowDownGameModeBase::BuildCardRevealPresentationTransform(
@@ -4754,43 +5100,56 @@ void AShowDownGameModeBase::ApplyRouletteResult(EShowDownSide TargetSide, int32 
 
 	if (!bHit)
 	{
-		BroadcastSystemChatMessage(FString::Printf(
-			TEXT("%s님이 %d발 룰렛을 피했습니다."),
-			TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
-			ClampedBulletCount));
-		ShowEventDebugMessage(FString::Printf(TEXT("룰렛: %s %d발 / 안 맞음"),
-			*GetSideDisplayText(TargetSide),
-			ClampedBulletCount));
-		PlaySelfShotGunPresentationThen(TargetSide, false, MoveTemp(Continuation));
+		auto ResolveMiss = [this, TargetSide, ClampedBulletCount]()
+		{
+			BroadcastSystemChatMessage(FString::Printf(
+				TEXT("%s님이 %d발 룰렛을 피했습니다."),
+				TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
+				ClampedBulletCount));
+			ShowEventDebugMessage(FString::Printf(TEXT("룰렛: %s %d발 / 안 맞음"),
+				*GetSideDisplayText(TargetSide),
+				ClampedBulletCount));
+		};
+		PlaySelfShotGunPresentationThen(
+			TargetSide,
+			false,
+			MoveTemp(ResolveMiss),
+			MoveTemp(Continuation));
 		return;
 	}
 
-	FShowDownParticipantState& TargetState = TargetSide == EShowDownSide::Player ? PlayerState : CollectorState;
-	TargetState.Lives = FMath::Max(0, TargetState.Lives - 1);
-	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+	auto ResolveHit = [this, TargetSide, ClampedBulletCount]()
 	{
-		ShowDownGameState->OnLifeChanged.Broadcast(TargetSide, TargetState.Lives);
-	}
-	BroadcastSystemChatMessage(FString::Printf(
-		TEXT("%s님이 %d발 룰렛에 맞았습니다. 남은 목숨: %d"),
-		TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
-		ClampedBulletCount,
-		TargetState.Lives));
-	if (TargetState.Lives <= 0)
-	{
+		FShowDownParticipantState& TargetState = TargetSide == EShowDownSide::Player ? PlayerState : CollectorState;
+		TargetState.Lives = FMath::Max(0, TargetState.Lives - 1);
+		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+		{
+			ShowDownGameState->OnLifeChanged.Broadcast(TargetSide, TargetState.Lives);
+		}
 		BroadcastSystemChatMessage(FString::Printf(
-			TEXT("%s님이 사망했습니다."),
-			TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector")));
-	}
-	ShowEventDebugMessage(FString::Printf(TEXT("룰렛: %s %d발 / 총 맞음 / 목숨 %d"),
-		*GetSideDisplayText(TargetSide),
-		ClampedBulletCount,
-		TargetState.Lives));
-	PlaySelfShotGunPresentationThen(TargetSide, true, MoveTemp(Continuation));
-
-	UE_LOG(LogTemp, Log, TEXT("%s lives: %d"),
-		TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
-		TargetState.Lives);
+			TEXT("%s님이 %d발 룰렛에 맞았습니다. 남은 목숨: %d"),
+			TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
+			ClampedBulletCount,
+			TargetState.Lives));
+		if (TargetState.Lives <= 0)
+		{
+			BroadcastSystemChatMessage(FString::Printf(
+				TEXT("%s님이 사망했습니다."),
+				TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector")));
+		}
+		ShowEventDebugMessage(FString::Printf(TEXT("룰렛: %s %d발 / 총 맞음 / 목숨 %d"),
+			*GetSideDisplayText(TargetSide),
+			ClampedBulletCount,
+			TargetState.Lives));
+		UE_LOG(LogTemp, Log, TEXT("%s lives: %d"),
+			TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
+			TargetState.Lives);
+	};
+	PlaySelfShotGunPresentationThen(
+		TargetSide,
+		true,
+		MoveTemp(ResolveHit),
+		MoveTemp(Continuation));
 }
 
 void AShowDownGameModeBase::EndRound()
@@ -6012,6 +6371,7 @@ void AShowDownGameModeBase::StartMultiplayerBetting()
 			MultiplayerCurrentBetter ? MultiplayerCurrentBetter->ShowDownSlot : EShowDownPlayerSlot::None);
 	}
 	ClearBetBulletTransientState();
+	ClearBetBulletActionHistory();
 	RefreshBetBulletPresentation();
 	RefreshCentralGunStatus();
 
@@ -6195,10 +6555,10 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 				MultiplayerLiveRoundCount,
 				FoldRevealDelay,
 				false);
-		const TWeakObjectPtr<ASDPlayerState> WeakSubmittingPlayer(SubmittingPlayer);
-		const auto ContinueAfterRoulette = [this, WeakSubmittingPlayer, CurrentBet, FindNextActivePlayer]()
-		{
-			ASDPlayerState* ResolvedSubmittingPlayer = WeakSubmittingPlayer.Get();
+			const TWeakObjectPtr<ASDPlayerState> WeakSubmittingPlayer(SubmittingPlayer);
+			const auto ContinueAfterRoulette = [this, WeakSubmittingPlayer, CurrentBet, FindNextActivePlayer]()
+			{
+				ASDPlayerState* ResolvedSubmittingPlayer = WeakSubmittingPlayer.Get();
 			if (!ResolvedSubmittingPlayer || !MultiplayerPlayers.Contains(ResolvedSubmittingPlayer))
 			{
 				return;
@@ -6215,14 +6575,14 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 
 			if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 			{
-					ShowDownGameState->SetPhase(EShowDownPhase::Betting);
-					ShowDownGameState->SetNameTagRoundStatus(
-						CurrentBet,
-						EShowDownSide::Player,
-						MultiplayerCurrentBetter->ShowDownSlot);
-				}
-				ClearBetBulletTransientState();
-				RefreshBetBulletPresentation();
+				ShowDownGameState->SetPhase(EShowDownPhase::Betting);
+				ShowDownGameState->SetNameTagRoundStatus(
+					CurrentBet,
+					EShowDownSide::Player,
+					MultiplayerCurrentBetter->ShowDownSlot);
+			}
+			ClearBetBulletTransientState();
+			RefreshBetBulletPresentation();
 			};
 
 		if (RouletteDelay > KINDA_SMALL_NUMBER)
@@ -6620,8 +6980,6 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 	{
 		ShowDownGameState->SetNameTagRoundStatus(ClampedBulletCount, EShowDownSide::Player, EShowDownPlayerSlot::None);
 	}
-	MarkMultiplayerBetBulletRouletteTarget(TargetPlayer, ClampedBulletCount);
-	RefreshBetBulletPresentation();
 	const int32 LiveRoundsBeforeShot = MultiplayerLiveRoundCount;
 	const int32 ChambersBeforeShot = bUseSharedChambers ? MultiplayerRemainingChamberCount : 6;
 	const bool bHit = bUseSharedChambers
@@ -6668,9 +7026,20 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 			}
 		}
 
-		ResolvedTargetPlayer->ForceNetUpdate();
-		RefreshMultiplayerCharacterVisibility();
 		const int32 RemainingLives = ResolvedTargetPlayer->Lives;
+		// Publish the actual shot outcome before any explanatory chat. Character
+		// hit reactions and heart updates therefore begin from the result event,
+		// never from a message that arrives ahead of the gun.
+		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+		{
+			ShowDownGameState->BroadcastMultiplayerRouletteResult(
+				TargetSlot,
+				TargetName,
+				ClampedBulletCount,
+				bHit,
+				RemainingLives);
+		}
+		ResolvedTargetPlayer->ForceNetUpdate();
 		if (bHit)
 		{
 			BroadcastSystemChatMessage(FString::Printf(
@@ -6699,15 +7068,6 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 			bHit ? TEXT("hit") : TEXT("miss"),
 			RemainingLives));
 
-		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
-		{
-			ShowDownGameState->BroadcastMultiplayerRouletteResult(
-				TargetSlot,
-				TargetName,
-				ClampedBulletCount,
-				bHit,
-				RemainingLives);
-		}
 		if (ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
 		{
 			GunActor->SetTableStatus(
@@ -6718,11 +7078,26 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 		}
 	};
 
-	auto StartPresentation = [this, WeakTargetPlayer, TargetSlot, TargetName, ClampedBulletCount, bHit, ResultDelay, BroadcastResult, LiveRoundsBeforeShot, ChambersBeforeShot]()
+	auto StartPresentation = [this, WeakTargetPlayer, TargetSlot, TargetName, ClampedBulletCount, bHit, ResultDelay, FinishDelay, BroadcastResult, LiveRoundsBeforeShot, ChambersBeforeShot]()
 	{
 		if (!WeakTargetPlayer.IsValid())
 		{
 			return;
+		}
+
+		ASDSelfShotGunActor* GunActor = FindSelfShotGunActor();
+		const bool bResolveFromGunEvent = GunActor && GunActor->CanInteract_Implementation(nullptr);
+		if (bResolveFromGunEvent)
+		{
+			TFunction<void()> GunResultContinuation = BroadcastResult;
+			ArmMultiplayerGunResult(GunActor, FinishDelay, MoveTemp(GunResultContinuation));
+		}
+		if (ASDPlayerState* ResolvedTargetPlayer = WeakTargetPlayer.Get())
+		{
+			// Apply the target marker when this shot actually starts. Scheduling a
+			// sequence used to leave every earlier shot pointing at the final target.
+			MarkMultiplayerBetBulletRouletteTarget(ResolvedTargetPlayer, ClampedBulletCount);
+			RefreshBetBulletPresentation();
 		}
 
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
@@ -6732,11 +7107,10 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 				LiveRoundsBeforeShot,
 				EShowDownSide::Player,
 				TargetSlot);
-			RefreshBetBulletPresentation();
 			ShowDownGameState->BroadcastMultiplayerRouletteStarted(TargetSlot, TargetName, ClampedBulletCount);
 			ShowDownGameState->BroadcastMultiplayerRoulettePresentation(TargetSlot, TargetName, ClampedBulletCount, bHit);
 		}
-		if (ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
+		if (GunActor)
 		{
 			GunActor->SetTableStatus(
 				LiveRoundsBeforeShot,
@@ -6745,6 +7119,13 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 				TargetSlot);
 		}
 
+		if (bResolveFromGunEvent)
+		{
+			return;
+		}
+
+		// Missing/busy gun fallback only. Normal gameplay resolves from the gun's
+		// real fire or empty-click delegate instead of predicting it with a timer.
 		if (ResultDelay <= KINDA_SMALL_NUMBER)
 		{
 			BroadcastResult();
@@ -7253,6 +7634,14 @@ void AShowDownGameModeBase::StartStage(int32 StageIndex)
 
 	PlayerState.Lives = StageRule.StartingLives;
 	CollectorState.Lives = StageRule.StartingLives;
+	if (AShowDownCharacter* PlayerCharacter = FindSingleRouletteCharacter(EShowDownSide::Player))
+	{
+		PlayerCharacter->SetCharacterLives(PlayerState.Lives);
+	}
+	if (AShowDownCharacter* CollectorCharacter = FindSingleRouletteCharacter(EShowDownSide::Collector))
+	{
+		CollectorCharacter->SetCharacterLives(CollectorState.Lives);
+	}
 	PlayerState.CurrentBet = StageRule.MinimumBet;
 	CollectorState.CurrentBet = StageRule.MinimumBet;
 	BettingRaisesLeft = 6;

@@ -40,6 +40,11 @@ void UShowDownNameTagWidget::SetDisplayName(const FText& NewDisplayName)
 	}
 }
 
+void UShowDownNameTagWidget::SetLives(int32 NewLives)
+{
+	CachedLives = FMath::Max(0, NewLives);
+}
+
 void UShowDownNameTagWidget::SetStatusText(const FText& NewStatusText)
 {
 	CachedStatusText = NewStatusText;
@@ -136,6 +141,7 @@ void UShowDownNameTagWidget::NativeConstruct()
 
 	BuildDefaultWidget();
 	SetDisplayName(CachedDisplayName);
+	SetLives(CachedLives);
 	SetStatusText(CachedStatusText);
 	SetTurnActive(bCachedTurnActive);
 	SetSpeakingIndicatorVisible(bCachedSpeakingIndicatorVisible);
@@ -209,13 +215,20 @@ void UShowDownNameTagWidget::BuildDefaultWidget()
 
 	NameBackground->SetContent(NameRow);
 
+	UHorizontalBox* NameTagLine = WidgetTree->ConstructWidget<UHorizontalBox>(
+		UHorizontalBox::StaticClass(),
+		TEXT("NameTagLine"));
+	if (UHorizontalBoxSlot* NameBackgroundSlot = NameTagLine->AddChildToHorizontalBox(NameBackground))
+	{
+		NameBackgroundSlot->SetVerticalAlignment(VAlign_Center);
+	}
 	if (UVerticalBoxSlot* ChatStackSlot = Root->AddChildToVerticalBox(ChatStack))
 	{
 		ChatStackSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 2.0f));
 		ChatStackSlot->SetHorizontalAlignment(HAlign_Center);
 	}
 
-	if (UVerticalBoxSlot* NameSlot = Root->AddChildToVerticalBox(NameBackground))
+	if (UVerticalBoxSlot* NameSlot = Root->AddChildToVerticalBox(NameTagLine))
 	{
 		NameSlot->SetHorizontalAlignment(HAlign_Center);
 	}
@@ -227,6 +240,7 @@ void UShowDownNameTagWidget::BuildDefaultWidget()
 	}
 
 	WidgetTree->RootWidget = Root;
+	SetLives(CachedLives);
 	RefreshNameBackgroundColor();
 }
 

@@ -36,6 +36,9 @@ public:
 	void SetDisplayName(const FText& NewDisplayName);
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Name Tag")
+	void SetLives(int32 NewLives);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Name Tag")
 	void SetStatusText(const FText& NewStatusText);
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Name Tag")
@@ -82,6 +85,7 @@ private:
 
 	FText CachedDisplayName;
 	FText CachedStatusText;
+	int32 CachedLives = 3;
 	FTimerHandle ChatBubbleAnimationTimerHandle;
 	float CurrentSpeakingIndicatorOpacity = 0.0f;
 	bool bCachedTurnActive = false;
