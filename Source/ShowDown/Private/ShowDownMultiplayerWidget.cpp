@@ -17,11 +17,11 @@
 
 namespace
 {
-UObject* PretendardRegularFont()
+UObject* MultiplayerPretendardRegularFont()
 {
 	return LoadObject<UObject>(nullptr, TEXT("/Game/UI/Font/Pretendard/static/Pretendard-Regular_Font.Pretendard-Regular_Font"));
 }
-FSlateBrush FlatBlackBrush(float Alpha)
+FSlateBrush MultiplayerFlatBlackBrush(float Alpha)
 {
 	FSlateBrush Brush; Brush.DrawAs = ESlateBrushDrawType::Box;
 	Brush.TintColor = FSlateColor(FLinearColor(0, 0, 0, Alpha)); Brush.Margin = FMargin(0); return Brush;
@@ -84,7 +84,7 @@ TSharedRef<SWidget> UShowDownPublicRoomEntryWidget::RebuildWidget()
 
 	Text_RoomName = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_RoomName"));
 	Text_RoomName->SetColorAndOpacity(FSlateColor(FLinearColor::White));
-	Text_RoomName->SetFont(FSlateFontInfo(PretendardRegularFont(), 22));
+	Text_RoomName->SetFont(FSlateFontInfo(MultiplayerPretendardRegularFont(), 22));
 	if (UHorizontalBoxSlot* NameSlot = HeaderBox->AddChildToHorizontalBox(Text_RoomName))
 	{
 		NameSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
@@ -92,7 +92,7 @@ TSharedRef<SWidget> UShowDownPublicRoomEntryWidget::RebuildWidget()
 
 	Text_RoomCode = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_RoomCode"));
 	Text_RoomCode->SetColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.75f, 0.32f, 1.0f)));
-	Text_RoomCode->SetFont(FSlateFontInfo(PretendardRegularFont(), 16));
+	Text_RoomCode->SetFont(FSlateFontInfo(MultiplayerPretendardRegularFont(), 16));
 	Text_RoomCode->SetJustification(ETextJustify::Right);
 	if (UHorizontalBoxSlot* CodeSlot = HeaderBox->AddChildToHorizontalBox(Text_RoomCode))
 	{
@@ -101,7 +101,7 @@ TSharedRef<SWidget> UShowDownPublicRoomEntryWidget::RebuildWidget()
 
 	Text_PlayerCount = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_PlayerCount"));
 	Text_PlayerCount->SetColorAndOpacity(FSlateColor(TextMutedColor));
-	Text_PlayerCount->SetFont(FSlateFontInfo(PretendardRegularFont(), 15));
+	Text_PlayerCount->SetFont(FSlateFontInfo(MultiplayerPretendardRegularFont(), 15));
 	if (UVerticalBoxSlot* PlayerSlot = CardBox->AddChildToVerticalBox(Text_PlayerCount))
 	{
 		PlayerSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 10.0f));
@@ -113,7 +113,7 @@ TSharedRef<SWidget> UShowDownPublicRoomEntryWidget::RebuildWidget()
 	ButtonText->SetText(FText::FromString(TEXT("로비 참가")));
 	ButtonText->SetJustification(ETextJustify::Center);
 	ButtonText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
-	ButtonText->SetFont(FSlateFontInfo(PretendardRegularFont(), 18));
+	ButtonText->SetFont(FSlateFontInfo(MultiplayerPretendardRegularFont(), 18));
 	Button_Join->SetContent(ButtonText);
 	if (UVerticalBoxSlot* ButtonSlot = CardBox->AddChildToVerticalBox(Button_Join))
 	{
@@ -384,7 +384,7 @@ void UShowDownMultiplayerWidget::BuildDefaultLayout()
 	EditableTextBox_RoomName = WidgetTree->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass(), TEXT("EditableTextBox_RoomName"));
 	EditableTextBox_RoomName->SetHintText(FText::FromString(TEXT("방 이름 입력")));
 	FEditableTextBoxStyle NameFieldStyle = EditableTextBox_RoomName->WidgetStyle;
-	NameFieldStyle.SetBackgroundImageNormal(FlatBlackBrush(0.62f)).SetBackgroundImageHovered(FlatBlackBrush(0.68f)).SetBackgroundImageFocused(FlatBlackBrush(0.72f)).SetBackgroundImageReadOnly(FlatBlackBrush(0.52f));
+	NameFieldStyle.SetBackgroundImageNormal(MultiplayerFlatBlackBrush(0.62f)).SetBackgroundImageHovered(MultiplayerFlatBlackBrush(0.68f)).SetBackgroundImageFocused(MultiplayerFlatBlackBrush(0.72f)).SetBackgroundImageReadOnly(MultiplayerFlatBlackBrush(0.52f));
 	EditableTextBox_RoomName->WidgetStyle = NameFieldStyle;
 	if (UVerticalBoxSlot* NameSlot = SideBox->AddChildToVerticalBox(EditableTextBox_RoomName)) NameSlot->SetPadding(FMargin(0.0f, 12.0f, 0.0f, 10.0f));
 
@@ -421,7 +421,7 @@ void UShowDownMultiplayerWidget::BuildDefaultLayout()
 	);
 	EditableTextBox_RoomCode->SetHintText(FText::FromString(TEXT("방 코드 입력")));
 	FEditableTextBoxStyle FieldStyle = EditableTextBox_RoomCode->WidgetStyle;
-	FieldStyle.SetBackgroundImageNormal(FlatBlackBrush(0.62f)).SetBackgroundImageHovered(FlatBlackBrush(0.68f)).SetBackgroundImageFocused(FlatBlackBrush(0.72f)).SetBackgroundImageReadOnly(FlatBlackBrush(0.52f));
+	FieldStyle.SetBackgroundImageNormal(MultiplayerFlatBlackBrush(0.62f)).SetBackgroundImageHovered(MultiplayerFlatBlackBrush(0.68f)).SetBackgroundImageFocused(MultiplayerFlatBlackBrush(0.72f)).SetBackgroundImageReadOnly(MultiplayerFlatBlackBrush(0.52f));
 	EditableTextBox_RoomCode->WidgetStyle = FieldStyle;
 	if (UVerticalBoxSlot* CodeSlot = SideBox->AddChildToVerticalBox(EditableTextBox_RoomCode))
 	{
@@ -459,7 +459,7 @@ void UShowDownMultiplayerWidget::BuildDefaultLayout()
 UButton* UShowDownMultiplayerWidget::CreateMenuButton(const FString& Label)
 {
 	UButton* Button = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
-	FButtonStyle Style; Style.SetNormal(FlatBlackBrush(0.72f)).SetHovered(FlatBlackBrush(0.78f)).SetPressed(FlatBlackBrush(0.84f)).SetDisabled(FlatBlackBrush(0.36f)); Button->SetStyle(Style);
+	FButtonStyle Style; Style.SetNormal(MultiplayerFlatBlackBrush(0.72f)).SetHovered(MultiplayerFlatBlackBrush(0.78f)).SetPressed(MultiplayerFlatBlackBrush(0.84f)).SetDisabled(MultiplayerFlatBlackBrush(0.36f)); Button->SetStyle(Style);
 	UTextBlock* ButtonText = CreateTextBlock(Label, 18, FLinearColor::White, ETextJustify::Center);
 	Button->SetContent(ButtonText);
 	return Button;
@@ -475,7 +475,7 @@ UTextBlock* UShowDownMultiplayerWidget::CreateTextBlock(
 	TextBlock->SetText(FText::FromString(Text));
 	TextBlock->SetColorAndOpacity(FSlateColor(Color));
 	TextBlock->SetJustification(Justification);
-	TextBlock->SetFont(FSlateFontInfo(PretendardRegularFont(), FontSize));
+	TextBlock->SetFont(FSlateFontInfo(MultiplayerPretendardRegularFont(), FontSize));
 	return TextBlock;
 }
 
