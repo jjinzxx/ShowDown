@@ -87,8 +87,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	Message
 );
 
-// 상점/스킨 데이터 로딩 결과를 알려주는 이벤트입니다.
-// skins, player_skins, player_equipment 요청이 각각 끝날 때마다 호출됩니다.
+// 상점/스킨 데이터 스냅샷 로딩 결과를 알려주는 이벤트입니다.
+// 관련 REST 요청이 모두 끝난 뒤 한 번만 호출됩니다.
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	FOnCosmeticDataLoaded,
 	bool,
@@ -216,6 +216,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Supabase")
 	FString GetEquippedSkinId(const FString& SkinType) const;
 
+	// Resolves a shop product (skin_sets.id) to the concrete skins.id used by
+	// runtime presentation. Returns an empty string when the set has no item
+	// for the requested slot.
+	UFUNCTION(BlueprintCallable, Category = "Supabase")
+	FString GetSkinIdForShopSet(
+		const FString& SetId,
+		const FString& SkinType = TEXT("character")) const;
+
 	// 상점 상품 세트 id 또는 실제 스킨 id를 보유 중인지 확인합니다.
 	UFUNCTION(BlueprintCallable, Category = "Supabase")
 	bool IsSkinOwned(const FString& SkinId) const;
@@ -253,6 +261,10 @@ public:
 
 private:
 	bool bAwardWinRewardInFlight = false;
+	bool bCosmeticDataLoadInFlight = false;
+	bool bCosmeticDataLoadFailed = false;
+	int32 PendingCosmeticDataRequests = 0;
+	TArray<FString> CosmeticDataLoadErrors;
 
 	// Supabase 프로젝트 기본 URL입니다.
 	FString SupabaseUrl = TEXT("https://xfyzrqsbdweckjgxefjr.supabase.co");
@@ -330,6 +342,10 @@ private:
 
 	// player_equipment 테이블 응답을 처리해서 현재 장착 정보를 저장합니다.
 	void HandlePlayerEquipmentResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+
+	// All five cosmetic REST calls form one snapshot. This keeps listeners from
+	// rebuilding the shop from a partially refreshed cache.
+	void CompleteCosmeticDataRequest(bool bSuccess, const FString& Message);
 
 	// AccessToken이 필요한 Supabase REST 요청을 공통으로 만들어주는 helper 함수입니다.
 	// apikey, Authorization, Content-Type 헤더를 매번 반복해서 쓰지 않기 위해 분리했습니다.

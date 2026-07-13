@@ -156,6 +156,13 @@ public:
 		FVector LocationAmplitude,
 		float StepInterval);
 
+	// Local-only view override used by the roulette hit presentation. Keeping
+	// ownership in the controller prevents the normal character-camera update
+	// from replacing the cinematic view on the next tick.
+	bool BeginGunShotCameraOverride(ACameraActor* Camera, float BlendInTime, float BlendExponent);
+	void EndGunShotCameraOverride(ACameraActor* Camera, float BlendOutTime, float BlendExponent);
+	void CancelGunShotCameraOverride(ACameraActor* ExpectedCamera = nullptr);
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Camera")
 	void SetFixedCameraComponentMouseLook(
 		USceneComponent* CameraComponent,
@@ -335,6 +342,9 @@ public:
 	void ServerSetMultiplayerDisplayName(const FString& DisplayName);
 
 	UFUNCTION(Server, Reliable)
+	void ServerSetEquippedCharacterSkinId(const FString& SkinId);
+
+	UFUNCTION(Server, Reliable)
 	void ServerSetMultiplayerVoiceTalking(bool bIsTalking);
 
 	UFUNCTION(Server, Reliable)
@@ -410,6 +420,8 @@ private:
 	void ApplyPawnCameraInput(float YawInput, float PitchInput);
 	AShowDownCharacter* FindLocalCharacterForPlayerCamera() const;
 	void UpdateCharacterPlayerCamera(float DeltaTime);
+	void UpdateGunShotCameraOverride(float DeltaTime);
+	void ClearGunShotCameraOverrideState();
 	void UpdateFixedCameraMouseLook(float DeltaTime);
 	void SubmitCharacterHeadLookRotation(const FRotator& LookRotation, float DeltaTime);
 	void RestoreFixedCameraBaseTransform();
@@ -419,6 +431,7 @@ private:
 	FVector GetCameraSteppedShakeLocationOffset(const FRotator& CameraRotation) const;
 	void HandleBettingHotkeys();
 	void HandleVoicePushToTalkInput();
+	bool CanCreateLocalPlayerWidgets() const;
 	void EnsureChatWidget();
 	void EnsureLeaveConfirmWidget();
 	bool TryApplyPendingMultiplayerSeatCamera();
@@ -429,6 +442,7 @@ private:
 	void UpdateCenterCrosshairVisibility();
 	void RemoveCenterCrosshairWidget();
 	void SubmitLocalMultiplayerDisplayName();
+	void SubmitLocalEquippedCharacterSkin();
 	void TryBindVoiceChatEvents();
 	void BroadcastLocalCollectorStatus(bool bSuccess, const FString& Message) const;
 	void SetLocalSpeakingIndicatorVisible(bool bVisible);
@@ -493,12 +507,20 @@ private:
 	UPROPERTY()
 	TObjectPtr<AShowDownCharacter> LocalPlayerCameraCharacterTarget = nullptr;
 
+	TWeakObjectPtr<ACameraActor> GunShotCameraOverrideTarget;
+	TWeakObjectPtr<AActor> GunShotCameraReturnViewTarget;
+	float GunShotCameraBlendOutTimeRemaining = 0.0f;
+	bool bGunShotCameraOverrideActive = false;
+	bool bGunShotCameraBlendingOut = false;
+
 	TSharedPtr<SWidget> CenterCrosshairWidget;
 	TArray<FSDPrimitiveCustomDepthState> FocusedPrimitiveStates;
 
 	bool bChatOpen = false;
 	FString LastSubmittedMultiplayerDisplayName;
 	float LastMultiplayerDisplayNameSubmitTime = -1000.0f;
+	FString LastSubmittedEquippedCharacterSkinId;
+	float LastEquippedCharacterSkinSubmitTime = -1000.0f;
 	bool bPendingMultiplayerSeatCamera = false;
 	int32 PendingMultiplayerSeatIndex = INDEX_NONE;
 	float PendingMultiplayerSeatCameraLookSensitivity = 0.08f;

@@ -5,12 +5,15 @@
 #include "Components/Button.h"
 #include "Components/ComboBoxString.h"
 #include "Components/HorizontalBox.h"
+#include "Components/HorizontalBoxSlot.h"
+#include "Components/Spacer.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Engine/GameInstance.h"
 #include "Input/Reply.h"
 #include "InputCoreTypes.h"
+#include "ShowDownCharacterSkinCatalog.h"
 #include "ShowDownMainMenuWidget.h"
 #include "SupabaseSubsystem.h"
 
@@ -186,10 +189,30 @@ void UShowDownShopWidget::BuildWidgetTreeIfNeeded()
 		return;
 	}
 
-	UBorder* RootBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("ShopRoot"));
+	// Keep the left side clear for the world-space character preview and place
+	// controls in an opaque panel on the right.
+	UHorizontalBox* RootLayout = WidgetTree->ConstructWidget<UHorizontalBox>(
+		UHorizontalBox::StaticClass(),
+		TEXT("ShopRoot"));
+	WidgetTree->RootWidget = RootLayout;
+
+	USpacer* PreviewViewport = WidgetTree->ConstructWidget<USpacer>(
+		USpacer::StaticClass(),
+		TEXT("PreviewViewport"));
+	UHorizontalBoxSlot* PreviewSlot = RootLayout->AddChildToHorizontalBox(PreviewViewport);
+	FSlateChildSize PreviewSize;
+	PreviewSize.SizeRule = ESlateSizeRule::Fill;
+	PreviewSize.Value = 2.0f;
+	PreviewSlot->SetSize(PreviewSize);
+
+	UBorder* RootBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("ShopPanel"));
 	RootBorder->SetPadding(FMargin(32.0f));
 	RootBorder->SetBrushColor(FLinearColor(0.02f, 0.02f, 0.02f, 0.92f));
-	WidgetTree->RootWidget = RootBorder;
+	UHorizontalBoxSlot* PanelSlot = RootLayout->AddChildToHorizontalBox(RootBorder);
+	FSlateChildSize PanelSize;
+	PanelSize.SizeRule = ESlateSizeRule::Fill;
+	PanelSize.Value = 1.0f;
+	PanelSlot->SetSize(PanelSize);
 
 	UVerticalBox* RootBox = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("ShopContent"));
 	RootBorder->SetContent(RootBox);
@@ -289,6 +312,10 @@ void UShowDownShopWidget::RefreshSkinOptions()
 	}
 
 	const TArray<FShowDownSkin> ShopSkins = SupabaseSubsystem->GetShopSkins();
+	FString PreservedOption;
+	FString EquippedOption;
+	FString DefaultOption;
+	FString FirstOwnedOption;
 
 	for (const FShowDownSkin& Skin : ShopSkins)
 	{
@@ -306,24 +333,49 @@ void UShowDownShopWidget::RefreshSkinOptions()
 
 		if (!PreviousSelectedSkinId.IsEmpty() && Skin.Id == PreviousSelectedSkinId)
 		{
-			SelectedOption = OptionText;
+			PreservedOption = OptionText;
 		}
-		else if (SelectedOption.IsEmpty() && SupabaseSubsystem->IsSkinOwned(Skin.Id))
+
+		if (EquippedOption.IsEmpty() && SupabaseSubsystem->IsShopItemEquipped(Skin.Id))
 		{
-			SelectedOption = OptionText;
+			EquippedOption = OptionText;
+		}
+
+		const FString CharacterSkinId = SupabaseSubsystem->GetSkinIdForShopSet(Skin.Id, TEXT("character"));
+		if (DefaultOption.IsEmpty()
+			&& !CharacterSkinId.IsEmpty()
+			&& UShowDownCharacterSkinCatalog::CanonicalizeSkinId(CharacterSkinId).Equals(
+				UShowDownCharacterSkinCatalog::GetDefaultSkinId(),
+				ESearchCase::IgnoreCase))
+		{
+			DefaultOption = OptionText;
+		}
+
+		if (FirstOwnedOption.IsEmpty() && SupabaseSubsystem->IsSkinOwned(Skin.Id))
+		{
+			FirstOwnedOption = OptionText;
 		}
 	}
 
-	if (SelectedOption.IsEmpty() && ShopSkins.Num() > 0)
+	if (!PreservedOption.IsEmpty())
 	{
-		for (const FShowDownSkin& Skin : ShopSkins)
-		{
-			if (ShouldShowSkinAsShopOption(Skin))
-			{
-				SelectedOption = MakeSkinOptionText(Skin);
-				break;
-			}
-		}
+		SelectedOption = PreservedOption;
+	}
+	else if (!EquippedOption.IsEmpty())
+	{
+		SelectedOption = EquippedOption;
+	}
+	else if (!DefaultOption.IsEmpty())
+	{
+		SelectedOption = DefaultOption;
+	}
+	else if (!FirstOwnedOption.IsEmpty())
+	{
+		SelectedOption = FirstOwnedOption;
+	}
+	else if (OrderedSkinOptions.Num() > 0)
+	{
+		SelectedOption = OrderedSkinOptions[0];
 	}
 
 	if (!SelectedOption.IsEmpty())
@@ -356,24 +408,29 @@ void UShowDownShopWidget::RefreshSelectedSkinText()
 	if (!SelectedSkin || !SupabaseSubsystem)
 	{
 		Text_SelectedSkin->SetText(FText::FromString(TEXT("No skin selected.")));
+		if (Button_Equip) Button_Equip->SetIsEnabled(false);
+		if (Button_Buy) Button_Buy->SetIsEnabled(false);
 		return;
 	}
 
 	const bool bOwned = SupabaseSubsystem->IsSkinOwned(SelectedSkin->Id);
 	const bool bEquipped = SupabaseSubsystem->IsShopItemEquipped(SelectedSkin->Id);
+	if (Button_Equip) Button_Equip->SetIsEnabled(bOwned && !bEquipped);
+	if (Button_Buy) Button_Buy->SetIsEnabled(!bOwned);
 
 	// SelectedSkin은 skin_sets의 상품 정보입니다.
 	// Equipped는 세트 안의 실제 스킨들이 모두 player_equipment와 일치하는지로 판단합니다.
 	Text_SelectedSkin->SetText(
 		FText::FromString(
 			FString::Printf(
-				TEXT("%d / %d\n%s\nItem Type: %s\nRarity: %s\nPrice: %d\nOwned: %s\nEquipped: %s"),
+				TEXT("%d / %d\n%s\nItem Type: %s\nRarity: %s\nPrice: %d\nCoin: %d\nOwned: %s\nEquipped: %s"),
 				SelectedSkinIndex + 1,
 				OrderedSkinOptions.Num(),
 				*SelectedSkin->Name,
 				*SelectedSkin->Type,
 				*SelectedSkin->Rarity,
 				SelectedSkin->Price,
+				SupabaseSubsystem->GetCoin(),
 				bOwned ? TEXT("true") : TEXT("false"),
 				bEquipped ? TEXT("true") : TEXT("false")
 			)
@@ -405,6 +462,13 @@ void UShowDownShopWidget::SelectSkinByOffset(int32 Offset)
 
 void UShowDownShopWidget::SelectSkinOption(const FString& OptionText)
 {
+	if (bUpdatingSelection || !SkinsByOption.Contains(OptionText))
+	{
+		return;
+	}
+
+	TGuardValue<bool> SelectionGuard(bUpdatingSelection, true);
+
 	// ComboBox 선택, 내부 선택 문자열, carousel index를 한 곳에서 동기화합니다.
 	SelectedOption = OptionText;
 	SelectedSkinIndex = OrderedSkinOptions.IndexOfByKey(SelectedOption);
@@ -415,6 +479,7 @@ void UShowDownShopWidget::SelectSkinOption(const FString& OptionText)
 	}
 
 	RefreshSelectedSkinText();
+	BroadcastSelectedPreviewSkin();
 }
 
 FString UShowDownShopWidget::MakeSkinOptionText(const FShowDownSkin& Skin) const
@@ -439,9 +504,41 @@ FString UShowDownShopWidget::MakeSkinOptionText(const FShowDownSkin& Skin) const
 
 bool UShowDownShopWidget::ShouldShowSkinAsShopOption(const FShowDownSkin& Skin) const
 {
-	// card/card_back 중복 문제는 DB의 skin_sets 구조로 해결했으므로,
-	// 코드에서는 별도 타입 필터 없이 모든 활성 상품을 보여줍니다.
-	return true;
+	if (!Skin.bIsActive)
+	{
+		return false;
+	}
+
+	const USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
+		: nullptr;
+
+	// This first shop release intentionally exposes character products only.
+	// Set contents cover legacy rows whose skin_sets.type is missing.
+	return Skin.Type.Equals(TEXT("character"), ESearchCase::IgnoreCase)
+		|| (SupabaseSubsystem
+			&& !SupabaseSubsystem->GetSkinIdForShopSet(Skin.Id, TEXT("character")).IsEmpty());
+}
+
+void UShowDownShopWidget::BroadcastSelectedPreviewSkin()
+{
+	const FShowDownSkin* SelectedSkin = SkinsByOption.Find(SelectedOption);
+	const USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
+		: nullptr;
+
+	FString PreviewSkinId;
+	if (SelectedSkin && SupabaseSubsystem)
+	{
+		PreviewSkinId = SupabaseSubsystem->GetSkinIdForShopSet(SelectedSkin->Id, TEXT("character"));
+	}
+
+	if (PreviewSkinId.IsEmpty())
+	{
+		PreviewSkinId = UShowDownCharacterSkinCatalog::GetDefaultSkinId();
+	}
+
+	OnPreviewSkinChanged.Broadcast(PreviewSkinId);
 }
 
 void UShowDownShopWidget::HandleSkinSelectionChanged(FString SelectedItem, ESelectInfo::Type SelectionType)

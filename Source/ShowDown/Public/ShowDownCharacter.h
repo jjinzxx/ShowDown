@@ -13,6 +13,8 @@ class UAnimMontage;
 class UAnimInstance;
 class USceneComponent;
 class UShowDownCharacterAnimInstance;
+class UShowDownCharacterSkinCatalog;
+class USkeletalMesh;
 class UTextRenderComponent;
 class UWidgetComponent;
 
@@ -89,6 +91,15 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Character Animation")
 	EShowDownCharacterAnimState GetCharacterAnimState() const { return ReplicatedAnimState; }
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Character Skin")
+	void SetCharacterSkinId(const FString& NewSkinId);
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Character Skin")
+	FString GetCharacterSkinId() const { return CharacterSkinId; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Character Skin")
+	static FString GetDefaultCharacterSkinId();
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Player Camera")
 	void SetPlayerViewRotation(FRotator ViewRotation);
@@ -199,9 +210,15 @@ public:
 	UFUNCTION(BlueprintImplementableEvent, Category = "ShowDown|Character Animation")
 	void OnCharacterAnimStateChanged(EShowDownCharacterAnimState NewState);
 
+	UFUNCTION(BlueprintImplementableEvent, Category = "ShowDown|Character Skin")
+	void OnCharacterSkinChanged(const FString& NewSkinId);
+
 protected:
 	UFUNCTION()
 	void OnRep_AnimState();
+
+	UFUNCTION()
+	void OnRep_CharacterSkinId();
 
 	UFUNCTION()
 	void OnRep_Identity();
@@ -265,6 +282,12 @@ protected:
 
 	UPROPERTY(ReplicatedUsing = OnRep_AnimState, BlueprintReadOnly, Category = "ShowDown|Character Animation")
 	EShowDownCharacterAnimState ReplicatedAnimState = EShowDownCharacterAnimState::Idle;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ShowDown|Character Skin")
+	TObjectPtr<UShowDownCharacterSkinCatalog> CharacterSkinCatalog;
+
+	UPROPERTY(ReplicatedUsing = OnRep_CharacterSkinId, EditDefaultsOnly, BlueprintReadOnly, Category = "ShowDown|Character Skin")
+	FString CharacterSkinId = TEXT("robot");
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Presentation")
 	TObjectPtr<USceneComponent> RevolverPresentationAnchor;
@@ -390,6 +413,7 @@ protected:
 	FShowDownCharacterBetStatusPresentation ReplicatedBetStatusPresentation;
 
 private:
+	void ApplyCharacterSkin();
 	void ApplyCharacterAnimState(EShowDownCharacterAnimState NewState);
 	void FinishCharacterActionAnimIfCurrent(EShowDownCharacterAnimState FinishedState);
 	void BindToRouletteEvents();
@@ -437,7 +461,16 @@ private:
 	TSubclassOf<UAnimInstance> CachedAnimBlueprintClass;
 	UPROPERTY(Transient)
 	TObjectPtr<UAnimMontage> ActiveActionMontage = nullptr;
+	// Hard CDO references guarantee that all built-in skins are included in a
+	// packaged build even when no optional catalog asset has been created.
+	UPROPERTY()
+	TObjectPtr<USkeletalMesh> BuiltInRobotMesh = nullptr;
+	UPROPERTY()
+	TObjectPtr<USkeletalMesh> BuiltInHoodmanMesh = nullptr;
+	UPROPERTY()
+	TObjectPtr<USkeletalMesh> BuiltInMicuMesh = nullptr;
 	FVector BaseMeshRelativeLocation = FVector::ZeroVector;
 	FRotator BaseMeshRelativeRotation = FRotator::ZeroRotator;
+	FString AppliedCharacterSkinId;
 	bool bRagdollActive = false;
 };

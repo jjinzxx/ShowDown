@@ -32,6 +32,7 @@
 #include "ShowDownGameStateBase.h"
 #include "ShowDownHubFlowManager.h"
 #include "ShowDownPlayerController.h"
+#include "SupabaseSubsystem.h"
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
@@ -1053,6 +1054,11 @@ void AShowDownGameModeBase::SetInitialCardDealInputLocked(bool bLocked) const
 	{
 		if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(Iterator->Get()))
 		{
+			if (!IsActiveNetworkPlayerController(PlayerController))
+			{
+				continue;
+			}
+
 			PlayerController->ClientSetInitialCardDealInputLocked(bLocked);
 		}
 	}
@@ -2579,7 +2585,6 @@ void AShowDownGameModeBase::PlaySelfShotGunPresentationThen(
 		this,
 		&AShowDownGameModeBase::HandleSelfShotGunShotResolved);
 	AActor* ShotTargetActor = nullptr;
-	ACameraActor* EnemyShotCamera = nullptr;
 	bool bHasShotSourceLocation = false;
 	bool bHasShotAimLocation = false;
 	bool bHasShotRotationOffset = false;
@@ -2594,10 +2599,7 @@ void AShowDownGameModeBase::PlaySelfShotGunPresentationThen(
 			ShotAimLocation,
 			&ShotRotationOffset))
 		{
-			ShotTargetActor = TargetSide == EShowDownSide::Player ? nullptr : TargetCharacter;
-			EnemyShotCamera = TargetSide == EShowDownSide::Collector
-				? GunActor->GetEnemyShotCinematicCamera()
-				: nullptr;
+			ShotTargetActor = TargetCharacter;
 			bHasShotSourceLocation = true;
 			bHasShotAimLocation = true;
 			bHasShotRotationOffset = true;
@@ -2609,7 +2611,6 @@ void AShowDownGameModeBase::PlaySelfShotGunPresentationThen(
 		ShotTargetActor = Collector
 			? Collector
 			: UGameplayStatics::GetActorOfClass(this, ACollector::StaticClass());
-		EnemyShotCamera = GunActor->GetEnemyShotCinematicCamera();
 
 		USceneComponent* CollectorHeadSlot = GetHeadSlotForSide(EShowDownSide::Collector);
 		if (IsValid(CollectorState.ForeheadCard))
@@ -2629,10 +2630,6 @@ void AShowDownGameModeBase::PlaySelfShotGunPresentationThen(
 			bHasShotAimLocation = true;
 
 			FVector SourcePullDirection = FVector::ZeroVector;
-			if (EnemyShotCamera)
-			{
-				SourcePullDirection = (ShotSourceLocation - EnemyShotCamera->GetActorLocation()).GetSafeNormal();
-			}
 			if (SourcePullDirection.IsNearlyZero() && CollectorHeadSlot)
 			{
 				SourcePullDirection = CollectorHeadSlot->GetForwardVector().GetSafeNormal();
@@ -2656,7 +2653,7 @@ void AShowDownGameModeBase::PlaySelfShotGunPresentationThen(
 				ShotSourceLocation,
 				ShotAimLocation,
 				ShotRotationOffset,
-				EnemyShotCamera);
+				nullptr);
 		}
 		else
 		{
@@ -2665,7 +2662,7 @@ void AShowDownGameModeBase::PlaySelfShotGunPresentationThen(
 				ShotTargetActor,
 				ShotSourceLocation,
 				ShotAimLocation,
-				EnemyShotCamera);
+				nullptr);
 		}
 	}
 	else if (bHasShotSourceLocation)
@@ -2674,7 +2671,7 @@ void AShowDownGameModeBase::PlaySelfShotGunPresentationThen(
 			bLiveRound,
 			ShotTargetActor,
 			ShotSourceLocation,
-			EnemyShotCamera);
+			nullptr);
 	}
 	else
 	{
@@ -3146,10 +3143,24 @@ void AShowDownGameModeBase::ConfigureSinglePlayerCharacters()
 
 	if (PlayerCharacter)
 	{
+		FString PlayerSkinId = AShowDownCharacter::GetDefaultCharacterSkinId();
+		if (UGameInstance* GameInstance = GetGameInstance())
+		{
+			if (const USupabaseSubsystem* SupabaseSubsystem = GameInstance->GetSubsystem<USupabaseSubsystem>())
+			{
+				const FString EquippedSkinId = SupabaseSubsystem->GetEquippedSkinId(TEXT("character"));
+				if (!EquippedSkinId.TrimStartAndEnd().IsEmpty())
+				{
+					PlayerSkinId = EquippedSkinId;
+				}
+			}
+		}
+
 		PlayerCharacter->SetCharacterIdentity(
 			EShowDownCharacterRole::Player,
 			EShowDownPlayerSlot::Player1,
 			TEXT("Player"));
+		PlayerCharacter->SetCharacterSkinId(PlayerSkinId);
 		PlayerCharacter->SetCharacterLives(PlayerState.Lives);
 		PlayerCharacter->SetCharacterSceneActive(true);
 	}
@@ -3260,6 +3271,7 @@ void AShowDownGameModeBase::ConfigureMultiplayerCharacters(const TArray<ASDPlaye
 			EShowDownCharacterRole::Player,
 			Player->ShowDownSlot,
 			GetNetworkPlayerDisplayName(Player));
+		AssignedCharacter->SetCharacterSkinId(Player->GetEquippedCharacterSkinId());
 		AssignedCharacter->SetCharacterLives(Player->Lives);
 		AssignedCharacter->SetCharacterSceneActive(
 			Player->Lives > 0 && !MultiplayerRoundSpectators.Contains(Player));

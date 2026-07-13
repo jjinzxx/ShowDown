@@ -5,8 +5,10 @@
 #include "CollectorAISystem.h"
 #include "Misc/AutomationTest.h"
 #include "Presentation/SDCardRevealLayout.h"
+#include "Presentation/SDSelfShotGunActor.h"
 #include "RoundResolver.h"
 #include "RouletteSystem.h"
+#include "ShowDownCharacterSkinCatalog.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FShowDownBettingSystemTest,
@@ -249,6 +251,138 @@ bool FShowDownCollectorAISystemTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Low confidence folds against a large bet"), CollectorAI->ChooseBetAction(0.2f, 3), EShowDownBetAction::Fold);
 	TestEqual(TEXT("A neutral opening action checks"), CollectorAI->ChooseBetAction(0.5f, 0), EShowDownBetAction::Check);
 	TestEqual(TEXT("A neutral response calls an existing bet"), CollectorAI->ChooseBetAction(0.5f, 2), EShowDownBetAction::Call);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownCharacterSkinCatalogTest,
+	"ShowDown.Core.CharacterSkinCatalog",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownCharacterSkinCatalogTest::RunTest(const FString& Parameters)
+{
+	TestEqual(
+		TEXT("Robot is the permanent default character skin"),
+		UShowDownCharacterSkinCatalog::GetDefaultSkinId(),
+		FString(TEXT("robot")));
+	TestEqual(
+		TEXT("Product-style robot aliases resolve to the runtime id"),
+		UShowDownCharacterSkinCatalog::CanonicalizeSkinId(TEXT("  CHARACTER_ROBOT  ")),
+		FString(TEXT("robot")));
+
+	FShowDownCharacterSkinDefinition Definition;
+	FString ResolvedSkinId;
+	TestTrue(
+		TEXT("An empty selection resolves to a built-in default"),
+		UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
+			nullptr,
+			FString(),
+			Definition,
+			ResolvedSkinId));
+	TestEqual(TEXT("An empty selection resolves to robot"), ResolvedSkinId, FString(TEXT("robot")));
+	TestFalse(TEXT("The default robot mesh reference is configured"), Definition.SkeletalMesh.IsNull());
+
+	TestTrue(
+		TEXT("Unknown backend ids still resolve safely"),
+		UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
+			nullptr,
+			TEXT("not_in_this_build"),
+			Definition,
+			ResolvedSkinId));
+	TestEqual(TEXT("Unknown ids fall back to robot"), ResolvedSkinId, FString(TEXT("robot")));
+
+	for (const FString SkinId : { FString(TEXT("robot")), FString(TEXT("hoodman")), FString(TEXT("micu")) })
+	{
+		TestTrue(
+			*FString::Printf(TEXT("Built-in skin '%s' is registered"), *SkinId),
+			UShowDownCharacterSkinCatalog::FindBuiltInSkinDefinition(SkinId, Definition));
+		TestFalse(
+			*FString::Printf(TEXT("Built-in skin '%s' has a mesh reference"), *SkinId),
+			Definition.SkeletalMesh.IsNull());
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownGunShotCameraTest,
+	"ShowDown.Core.GunShotCamera",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownGunShotCameraTest::RunTest(const FString& Parameters)
+{
+	TestTrue(
+		TEXT("Only a live hit targeting the local player enables the camera"),
+		ASDSelfShotGunActor::ShouldUseGunShotCamera(true, true));
+	TestFalse(
+		TEXT("A live hit on another player leaves this camera unchanged"),
+		ASDSelfShotGunActor::ShouldUseGunShotCamera(true, false));
+	TestFalse(
+		TEXT("An empty chamber never enables the target camera"),
+		ASDSelfShotGunActor::ShouldUseGunShotCamera(false, true));
+
+	const TArray<EShowDownPlayerSlot> PlayerSlots = {
+		EShowDownPlayerSlot::Player1,
+		EShowDownPlayerSlot::Player2,
+		EShowDownPlayerSlot::Player3,
+		EShowDownPlayerSlot::Player4
+	};
+	for (const EShowDownPlayerSlot TargetSlot : PlayerSlots)
+	{
+		for (const EShowDownPlayerSlot LocalSlot : PlayerSlots)
+		{
+			TestEqual(
+				*FString::Printf(
+					TEXT("Target slot %d changes only matching local slot %d"),
+					static_cast<int32>(TargetSlot),
+					static_cast<int32>(LocalSlot)),
+				ASDSelfShotGunActor::IsGunShotTargetLocalPlayer(TargetSlot, LocalSlot),
+				TargetSlot == LocalSlot);
+		}
+	}
+	TestFalse(
+		TEXT("An unassigned target never owns a local gun-shot camera"),
+		ASDSelfShotGunActor::IsGunShotTargetLocalPlayer(
+			EShowDownPlayerSlot::None,
+			EShowDownPlayerSlot::Player1));
+
+	const FTransform PlayerOneTransform(
+		FRotator(0.0f, 35.0f, 0.0f),
+		FVector(120.0f, -80.0f, 10.0f));
+	const FVector CameraRelativeLocation(145.0f, -55.0f, 92.0f);
+	const FQuat CameraRelativeRotation = FRotator(-8.0f, 165.0f, 2.0f).Quaternion();
+	const FTransform PlayerOneCameraTransform(
+		PlayerOneTransform.GetRotation() * CameraRelativeRotation,
+		PlayerOneTransform.TransformPosition(CameraRelativeLocation),
+		FVector(1.0f));
+
+	const FTransform PlayerOneResult = ASDSelfShotGunActor::BuildSeatRelativeGunShotCameraTransform(
+		PlayerOneCameraTransform,
+		PlayerOneTransform,
+		PlayerOneTransform);
+	TestTrue(
+		TEXT("Player 1 keeps the exact authored camera location"),
+		PlayerOneResult.GetLocation().Equals(PlayerOneCameraTransform.GetLocation(), 0.01f));
+	TestTrue(
+		TEXT("Player 1 keeps the exact authored camera rotation"),
+		PlayerOneResult.GetRotation().AngularDistance(PlayerOneCameraTransform.GetRotation()) < 0.001f);
+
+	const FTransform PlayerThreeTransform(
+		FRotator(0.0f, -105.0f, 0.0f),
+		FVector(-230.0f, 310.0f, 10.0f));
+	const FTransform PlayerThreeResult = ASDSelfShotGunActor::BuildSeatRelativeGunShotCameraTransform(
+		PlayerOneCameraTransform,
+		PlayerOneTransform,
+		PlayerThreeTransform);
+	const FVector ExpectedPlayerThreeLocation = PlayerThreeTransform.TransformPosition(CameraRelativeLocation);
+	const FQuat ExpectedPlayerThreeRotation = PlayerThreeTransform.GetRotation() * CameraRelativeRotation;
+	TestTrue(
+		TEXT("Player 3 receives the same character-relative camera offset"),
+		PlayerThreeResult.GetLocation().Equals(ExpectedPlayerThreeLocation, 0.01f));
+	TestTrue(
+		TEXT("Player 3 receives the same character-relative camera rotation"),
+		PlayerThreeResult.GetRotation().AngularDistance(ExpectedPlayerThreeRotation) < 0.001f);
+
 	return true;
 }
 

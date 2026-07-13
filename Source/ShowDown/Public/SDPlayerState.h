@@ -39,6 +39,11 @@ public:
 	UPROPERTY(Replicated, BlueprintReadOnly, Category = "ShowDown|Multiplayer")
 	bool bHostPlayer = false;
 
+	// Stable catalog id for the character appearance selected by this player.
+	// Only the id is replicated; every client resolves the matching local assets.
+	UPROPERTY(ReplicatedUsing = OnRep_EquippedCharacterSkinId, BlueprintReadOnly, Category = "ShowDown|Cosmetics")
+	FString EquippedCharacterSkinId = TEXT("robot");
+
 	//손패에 카드 추가
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Card")
 	void AddHandCard(ACard* Card);
@@ -60,6 +65,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Multiplayer")
 	void SetHostPlayer(bool bNewHostPlayer);
 
+	// Authority-only. Unknown or empty ids fall back to the built-in robot skin.
+	void SetEquippedCharacterSkinId(const FString& NewSkinId);
+	const FString& GetEquippedCharacterSkinId() const { return EquippedCharacterSkinId; }
+
+	virtual void CopyProperties(APlayerState* PlayerState) override;
+	virtual void OverrideWith(APlayerState* PlayerState) override;
+
 protected:
+	UFUNCTION()
+	void OnRep_EquippedCharacterSkinId();
+
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 };

@@ -4,6 +4,7 @@
 #include "Interfaces/IHttpResponse.h"
 #include "Json.h"
 #include "JsonUtilities.h"
+#include "ShowDownCharacterSkinCatalog.h"
 
 namespace
 {
@@ -425,7 +426,20 @@ void USupabaseSubsystem::LoadCosmeticData()
 		return;
 	}
 
+	// A refresh represents one coherent five-request snapshot. Starting a
+	// second batch before the first one completes would allow stale callbacks to
+	// overwrite newer caches, so coalesce repeated refresh requests here.
+	if (bCosmeticDataLoadInFlight)
+	{
+		UE_LOG(LogTemp, Verbose, TEXT("Cosmetic data load is already in flight."));
+		return;
+	}
+
 	UE_LOG(LogTemp, Log, TEXT("Loading cosmetic data..."));
+	bCosmeticDataLoadInFlight = true;
+	bCosmeticDataLoadFailed = false;
+	PendingCosmeticDataRequests = 5;
+	CosmeticDataLoadErrors.Empty();
 
 	ShopSkins.Empty();
 	OwnedSkinIds.Empty();
@@ -492,6 +506,39 @@ void USupabaseSubsystem::LoadCosmeticData()
 	);
 
 	EquipmentRequest->ProcessRequest();
+}
+
+void USupabaseSubsystem::CompleteCosmeticDataRequest(bool bSuccess, const FString& Message)
+{
+	if (!bCosmeticDataLoadInFlight)
+	{
+		return;
+	}
+
+	if (!bSuccess)
+	{
+		bCosmeticDataLoadFailed = true;
+		CosmeticDataLoadErrors.AddUnique(Message);
+	}
+
+	PendingCosmeticDataRequests = FMath::Max(0, PendingCosmeticDataRequests - 1);
+	if (PendingCosmeticDataRequests > 0)
+	{
+		return;
+	}
+
+	bCosmeticDataLoadInFlight = false;
+
+	if (bCosmeticDataLoadFailed)
+	{
+		const FString ErrorSummary = CosmeticDataLoadErrors.Num() > 0
+			? FString::Join(CosmeticDataLoadErrors, TEXT(" "))
+			: TEXT("Cosmetic data load failed.");
+		OnCosmeticDataLoaded.Broadcast(false, ErrorSummary);
+		return;
+	}
+
+	OnCosmeticDataLoaded.Broadcast(true, TEXT("Cosmetic data loaded."));
 }
 
 void USupabaseSubsystem::HandleProfileResponse(
@@ -643,7 +690,7 @@ void USupabaseSubsystem::HandleSkinsResponse(
 	// 현재 응답은 skin_sets 테이블의 상점 상품 목록입니다.
 	if (!bWasSuccessful || !Response.IsValid())
 	{
-		OnCosmeticDataLoaded.Broadcast(false, TEXT("Skins request failed."));
+		CompleteCosmeticDataRequest(false, TEXT("Skins request failed."));
 		return;
 	}
 
@@ -653,7 +700,7 @@ void USupabaseSubsystem::HandleSkinsResponse(
 	if (StatusCode < 200 || StatusCode >= 300)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Skins load failed: %d / %s"), StatusCode, *ResponseText);
-		OnCosmeticDataLoaded.Broadcast(false, TEXT("Skins load failed."));
+		CompleteCosmeticDataRequest(false, TEXT("Skins load failed."));
 		return;
 	}
 
@@ -662,7 +709,7 @@ void USupabaseSubsystem::HandleSkinsResponse(
 
 	if (!FJsonSerializer::Deserialize(Reader, JsonArray))
 	{
-		OnCosmeticDataLoaded.Broadcast(false, TEXT("Skins response parse failed."));
+		CompleteCosmeticDataRequest(false, TEXT("Skins response parse failed."));
 		return;
 	}
 
@@ -696,7 +743,7 @@ void USupabaseSubsystem::HandleSkinsResponse(
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("Shop skins loaded: %d"), ShopSkins.Num());
-	OnCosmeticDataLoaded.Broadcast(true, TEXT("Shop skins loaded."));
+	CompleteCosmeticDataRequest(true, TEXT("Shop skins loaded."));
 }
 
 void USupabaseSubsystem::HandlePlayerSkinsResponse(
@@ -707,7 +754,7 @@ void USupabaseSubsystem::HandlePlayerSkinsResponse(
 {
 	if (!bWasSuccessful || !Response.IsValid())
 	{
-		OnCosmeticDataLoaded.Broadcast(false, TEXT("Player skins request failed."));
+		CompleteCosmeticDataRequest(false, TEXT("Player skins request failed."));
 		return;
 	}
 
@@ -717,7 +764,7 @@ void USupabaseSubsystem::HandlePlayerSkinsResponse(
 	if (StatusCode < 200 || StatusCode >= 300)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Player skins load failed: %d / %s"), StatusCode, *ResponseText);
-		OnCosmeticDataLoaded.Broadcast(false, TEXT("Player skins load failed."));
+		CompleteCosmeticDataRequest(false, TEXT("Player skins load failed."));
 		return;
 	}
 
@@ -726,7 +773,7 @@ void USupabaseSubsystem::HandlePlayerSkinsResponse(
 
 	if (!FJsonSerializer::Deserialize(Reader, JsonArray))
 	{
-		OnCosmeticDataLoaded.Broadcast(false, TEXT("Player skins response parse failed."));
+		CompleteCosmeticDataRequest(false, TEXT("Player skins response parse failed."));
 		return;
 	}
 
@@ -751,7 +798,7 @@ void USupabaseSubsystem::HandlePlayerSkinsResponse(
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("Owned skins loaded: %d"), OwnedSkinIds.Num());
-	OnCosmeticDataLoaded.Broadcast(true, TEXT("Player skins loaded."));
+	CompleteCosmeticDataRequest(true, TEXT("Player skins loaded."));
 }
 
 void USupabaseSubsystem::HandlePlayerSkinSetsResponse(
@@ -762,7 +809,7 @@ void USupabaseSubsystem::HandlePlayerSkinSetsResponse(
 {
 	if (!bWasSuccessful || !Response.IsValid())
 	{
-		OnCosmeticDataLoaded.Broadcast(false, TEXT("Player skin sets request failed."));
+		CompleteCosmeticDataRequest(false, TEXT("Player skin sets request failed."));
 		return;
 	}
 
@@ -772,7 +819,7 @@ void USupabaseSubsystem::HandlePlayerSkinSetsResponse(
 	if (StatusCode < 200 || StatusCode >= 300)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Player skin sets load failed: %d / %s"), StatusCode, *ResponseText);
-		OnCosmeticDataLoaded.Broadcast(false, TEXT("Player skin sets load failed."));
+		CompleteCosmeticDataRequest(false, TEXT("Player skin sets load failed."));
 		return;
 	}
 
@@ -781,7 +828,7 @@ void USupabaseSubsystem::HandlePlayerSkinSetsResponse(
 
 	if (!FJsonSerializer::Deserialize(Reader, JsonArray))
 	{
-		OnCosmeticDataLoaded.Broadcast(false, TEXT("Player skin sets response parse failed."));
+		CompleteCosmeticDataRequest(false, TEXT("Player skin sets response parse failed."));
 		return;
 	}
 
@@ -806,7 +853,7 @@ void USupabaseSubsystem::HandlePlayerSkinSetsResponse(
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("Owned skin sets loaded: %d"), OwnedSkinSetIds.Num());
-	OnCosmeticDataLoaded.Broadcast(true, TEXT("Player skin sets loaded."));
+	CompleteCosmeticDataRequest(true, TEXT("Player skin sets loaded."));
 }
 
 void USupabaseSubsystem::HandleSkinSetItemsResponse(
@@ -817,7 +864,7 @@ void USupabaseSubsystem::HandleSkinSetItemsResponse(
 {
 	if (!bWasSuccessful || !Response.IsValid())
 	{
-		OnCosmeticDataLoaded.Broadcast(false, TEXT("Skin set items request failed."));
+		CompleteCosmeticDataRequest(false, TEXT("Skin set items request failed."));
 		return;
 	}
 
@@ -827,7 +874,7 @@ void USupabaseSubsystem::HandleSkinSetItemsResponse(
 	if (StatusCode < 200 || StatusCode >= 300)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Skin set items load failed: %d / %s"), StatusCode, *ResponseText);
-		OnCosmeticDataLoaded.Broadcast(false, TEXT("Skin set items load failed."));
+		CompleteCosmeticDataRequest(false, TEXT("Skin set items load failed."));
 		return;
 	}
 
@@ -836,7 +883,7 @@ void USupabaseSubsystem::HandleSkinSetItemsResponse(
 
 	if (!FJsonSerializer::Deserialize(Reader, JsonArray))
 	{
-		OnCosmeticDataLoaded.Broadcast(false, TEXT("Skin set items response parse failed."));
+		CompleteCosmeticDataRequest(false, TEXT("Skin set items response parse failed."));
 		return;
 	}
 
@@ -867,7 +914,7 @@ void USupabaseSubsystem::HandleSkinSetItemsResponse(
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("Skin set items loaded: %d"), SkinSetItemsBySetId.Num());
-	OnCosmeticDataLoaded.Broadcast(true, TEXT("Skin set items loaded."));
+	CompleteCosmeticDataRequest(true, TEXT("Skin set items loaded."));
 }
 
 void USupabaseSubsystem::HandlePlayerEquipmentResponse(
@@ -878,7 +925,7 @@ void USupabaseSubsystem::HandlePlayerEquipmentResponse(
 {
 	if (!bWasSuccessful || !Response.IsValid())
 	{
-		OnCosmeticDataLoaded.Broadcast(false, TEXT("Equipment request failed."));
+		CompleteCosmeticDataRequest(false, TEXT("Equipment request failed."));
 		return;
 	}
 
@@ -888,7 +935,7 @@ void USupabaseSubsystem::HandlePlayerEquipmentResponse(
 	if (StatusCode < 200 || StatusCode >= 300)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Equipment load failed: %d / %s"), StatusCode, *ResponseText);
-		OnCosmeticDataLoaded.Broadcast(false, TEXT("Equipment load failed."));
+		CompleteCosmeticDataRequest(false, TEXT("Equipment load failed."));
 		return;
 	}
 
@@ -897,7 +944,7 @@ void USupabaseSubsystem::HandlePlayerEquipmentResponse(
 
 	if (!FJsonSerializer::Deserialize(Reader, JsonArray))
 	{
-		OnCosmeticDataLoaded.Broadcast(false, TEXT("Equipment response parse failed."));
+		CompleteCosmeticDataRequest(false, TEXT("Equipment response parse failed."));
 		return;
 	}
 
@@ -927,7 +974,7 @@ void USupabaseSubsystem::HandlePlayerEquipmentResponse(
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("Equipment loaded: %d"), EquippedSkinIdsByType.Num());
-	OnCosmeticDataLoaded.Broadcast(true, TEXT("Equipment loaded."));
+	CompleteCosmeticDataRequest(true, TEXT("Equipment loaded."));
 }
 
 FString USupabaseSubsystem::GetAccessToken() const
@@ -977,12 +1024,49 @@ FString USupabaseSubsystem::GetEquippedSkinId(const FString& SkinType) const
 		return *EquippedSkinId;
 	}
 
+	// Existing accounts may not have a character equipment row yet. Robot is
+	// the playable baseline, so an absent row intentionally resolves to it.
+	if (SkinType.Equals(TEXT("character"), ESearchCase::IgnoreCase))
+	{
+		return UShowDownCharacterSkinCatalog::GetDefaultSkinId();
+	}
+
+	return TEXT("");
+}
+
+FString USupabaseSubsystem::GetSkinIdForShopSet(
+	const FString& SetId,
+	const FString& SkinType) const
+{
+	const TArray<FShowDownSkin>* SkinSetItems = SkinSetItemsBySetId.Find(SetId);
+	if (!SkinSetItems)
+	{
+		return TEXT("");
+	}
+
+	for (const FShowDownSkin& SkinItem : *SkinSetItems)
+	{
+		if (SkinItem.Type.Equals(SkinType, ESearchCase::IgnoreCase))
+		{
+			return SkinItem.Id;
+		}
+	}
+
 	return TEXT("");
 }
 
 bool USupabaseSubsystem::IsSkinOwned(const FString& SkinId) const
 {
-	return OwnedSkinSetIds.Contains(SkinId) || OwnedSkinIds.Contains(SkinId);
+	if (OwnedSkinSetIds.Contains(SkinId) || OwnedSkinIds.Contains(SkinId))
+	{
+		return true;
+	}
+
+	const FString ConcreteCharacterSkinId = GetSkinIdForShopSet(SkinId, TEXT("character"));
+	const FString CandidateSkinId = ConcreteCharacterSkinId.IsEmpty() ? SkinId : ConcreteCharacterSkinId;
+	return UShowDownCharacterSkinCatalog::CanonicalizeSkinId(CandidateSkinId).Equals(
+		UShowDownCharacterSkinCatalog::GetDefaultSkinId(),
+		ESearchCase::IgnoreCase);
 }
 
 bool USupabaseSubsystem::IsShopItemEquipped(const FString& SetId) const
@@ -998,9 +1082,11 @@ bool USupabaseSubsystem::IsShopItemEquipped(const FString& SetId) const
 
 	for (const FShowDownSkin& SkinItem : *SkinSetItems)
 	{
-		const FString* EquippedSkinId = EquippedSkinIdsByType.Find(SkinItem.Type);
+		const FString EquippedSkinId = GetEquippedSkinId(SkinItem.Type);
 
-		if (!EquippedSkinId || *EquippedSkinId != SkinItem.Id)
+		if (!UShowDownCharacterSkinCatalog::CanonicalizeSkinId(EquippedSkinId).Equals(
+			UShowDownCharacterSkinCatalog::CanonicalizeSkinId(SkinItem.Id),
+			ESearchCase::IgnoreCase))
 		{
 			return false;
 		}
@@ -1039,42 +1125,25 @@ void USupabaseSubsystem::EquipSkin(const FString& SkinId)
 		return;
 	}
 
-	for (const FShowDownSkin& SkinItem : *SkinSetItems)
-	{
-		// 세트 안의 각 실제 스킨을 slot별 장착값으로 저장합니다.
-		// 카드 세트라면 card와 card_back PATCH 요청이 각각 나갑니다.
-		if (SkinItem.Type.IsEmpty() || SkinItem.Id.IsEmpty())
-		{
-			continue;
-		}
+	// The security-definer RPC validates ownership and upserts every slot in
+	// the set atomically, including accounts missing an equipment row.
+	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request =
+		CreateAuthorizedRequest(TEXT("/rest/v1/rpc/equip_skin_set"), TEXT("POST"));
 
-		TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request =
-			CreateAuthorizedRequest(
-				FString::Printf(
-					TEXT("/rest/v1/player_equipment?user_id=eq.%s&skin_type=eq.%s"),
-					*UserId,
-					*SkinItem.Type
-				),
-				TEXT("PATCH")
-			);
+	TSharedPtr<FJsonObject> BodyObject = MakeShared<FJsonObject>();
+	BodyObject->SetStringField(TEXT("p_set_id"), SkinId);
 
-		Request->SetHeader(TEXT("Prefer"), TEXT("return=representation"));
+	FString BodyString;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&BodyString);
+	FJsonSerializer::Serialize(BodyObject.ToSharedRef(), Writer);
 
-		TSharedPtr<FJsonObject> BodyObject = MakeShared<FJsonObject>();
-		BodyObject->SetStringField(TEXT("equipped_skin_id"), SkinItem.Id);
+	Request->SetContentAsString(BodyString);
+	Request->OnProcessRequestComplete().BindUObject(
+		this,
+		&USupabaseSubsystem::HandleEquipSkinResponse
+	);
 
-		FString BodyString;
-		TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&BodyString);
-		FJsonSerializer::Serialize(BodyObject.ToSharedRef(), Writer);
-
-		Request->SetContentAsString(BodyString);
-		Request->OnProcessRequestComplete().BindUObject(
-			this,
-			&USupabaseSubsystem::HandleEquipSkinResponse
-		);
-
-		Request->ProcessRequest();
-	}
+	Request->ProcessRequest();
 
 	OnSkinEquipped.Broadcast(false, TEXT("Equipping shop item..."));
 }
@@ -1373,39 +1442,37 @@ void USupabaseSubsystem::HandleEquipSkinResponse(
 		return;
 	}
 
-	TArray<TSharedPtr<FJsonValue>> JsonArray;
+	TSharedPtr<FJsonObject> ResultObject;
 	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseText);
-
-	if (!FJsonSerializer::Deserialize(Reader, JsonArray) || JsonArray.Num() == 0)
+	if (!FJsonSerializer::Deserialize(Reader, ResultObject) || !ResultObject.IsValid())
 	{
 		OnSkinEquipped.Broadcast(false, TEXT("Equip skin response parse failed."));
 		return;
 	}
 
-	const TSharedPtr<FJsonObject> EquipmentObject = JsonArray[0]->AsObject();
-
-	if (!EquipmentObject.IsValid())
+	bool bResultSuccess = false;
+	if (!ResultObject->TryGetBoolField(TEXT("success"), bResultSuccess) || !bResultSuccess)
 	{
-		OnSkinEquipped.Broadcast(false, TEXT("Equip skin response was empty."));
+		OnSkinEquipped.Broadcast(false, TEXT("Equip skin was rejected."));
 		return;
 	}
 
-	FString SkinType;
-	FString EquippedSkinId;
-
-	if (
-		!EquipmentObject->TryGetStringField(TEXT("skin_type"), SkinType) ||
-		!EquipmentObject->TryGetStringField(TEXT("equipped_skin_id"), EquippedSkinId)
-	)
+	const TSharedPtr<FJsonObject>* EquippedObject = nullptr;
+	if (ResultObject->TryGetObjectField(TEXT("equipped"), EquippedObject) && EquippedObject)
 	{
-		OnSkinEquipped.Broadcast(false, TEXT("Equip skin fields were missing."));
-		return;
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& Entry : (*EquippedObject)->Values)
+		{
+			FString EquippedSkinId;
+			if (Entry.Value.IsValid() && Entry.Value->TryGetString(EquippedSkinId))
+			{
+				EquippedSkinIdsByType.Add(Entry.Key, EquippedSkinId);
+			}
+		}
 	}
 
-	EquippedSkinIdsByType.Add(SkinType, EquippedSkinId);
-
-	UE_LOG(LogTemp, Log, TEXT("Skin equipped: %s -> %s"), *SkinType, *EquippedSkinId);
+	UE_LOG(LogTemp, Log, TEXT("Skin set equipped successfully."));
 	OnSkinEquipped.Broadcast(true, TEXT("Skin equipped."));
+	LoadCosmeticData();
 }
 
 void USupabaseSubsystem::HandlePurchaseSkinSetResponse(
@@ -1456,12 +1523,15 @@ void USupabaseSubsystem::HandlePurchaseSkinSetResponse(
 
 	FString PurchasedSetId;
 	JsonObject->TryGetStringField(TEXT("set_id"), PurchasedSetId);
+	if (!PurchasedSetId.IsEmpty())
+	{
+		OwnedSkinSetIds.AddUnique(PurchasedSetId);
+	}
 
 	UE_LOG(LogTemp, Log, TEXT("Shop item purchased: %s / coin=%d"), *PurchasedSetId, Coin);
+	OnSkinSetPurchased.Broadcast(true, TEXT("Shop item purchased."));
 
 	// RPC가 DB를 갱신했으므로 클라이언트 캐시도 다시 맞춥니다.
 	LoadPlayerData();
 	LoadCosmeticData();
-
-	OnSkinSetPurchased.Broadcast(true, TEXT("Shop item purchased."));
 }

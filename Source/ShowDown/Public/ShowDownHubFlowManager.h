@@ -19,6 +19,8 @@ class UShowDownRankWidget;
 class UShowDownSettingsWidget;
 class UUserWidget;
 class AShowDownGameStateBase;
+class AShowDownShopPreviewActor;
+class UShowDownCharacterSkinCatalog;
 
 UENUM(BlueprintType)
 enum class EShowDownHubFlowScreen : uint8
@@ -131,6 +133,32 @@ private:
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera")
 	ACameraActor* ShopCamera;
 
+	// Optional data asset for future character skins. Robot, hoodman, and micu
+	// still resolve in code when this is left empty.
+	UPROPERTY(EditDefaultsOnly, Category = "ShowDown|Shop Preview")
+	TObjectPtr<UShowDownCharacterSkinCatalog> CharacterSkinCatalog;
+
+	UPROPERTY(EditDefaultsOnly, Category = "ShowDown|Shop Preview")
+	TSubclassOf<AShowDownShopPreviewActor> ShopPreviewActorClass;
+
+	UPROPERTY(
+		EditAnywhere,
+		Category = "ShowDown|Shop Preview",
+		meta = (ClampMin = "50.0", UIMin = "100.0", UIMax = "1000.0"))
+	float ShopPreviewDistance = 450.0f;
+
+	UPROPERTY(
+		EditAnywhere,
+		Category = "ShowDown|Shop Preview",
+		meta = (UIMin = "-300.0", UIMax = "300.0"))
+	float ShopPreviewHeight = -120.0f;
+
+	UPROPERTY(
+		EditAnywhere,
+		Category = "ShowDown|Shop Preview",
+		meta = (UIMin = "-180.0", UIMax = "180.0"))
+	float ShopPreviewYawOffset = 0.0f;
+
 	// Camera used by the multiplayer browser and lobby. Falls back to MainMenuCamera.
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera", meta = (DisplayName = "Multiplayer Camera"))
 	ACameraActor* MultiplayerCamera;
@@ -209,6 +237,9 @@ private:
 	UPROPERTY()
 	UUserWidget* ActiveWidget;
 
+	UPROPERTY(Transient)
+	TObjectPtr<AShowDownShopPreviewActor> ShopPreviewActor;
+
 	void SetActiveWidget(UUserWidget* NextWidget);
 	void BindTopNavigation(UUserWidget* Widget);
 	void SetUiOnlyInput(UUserWidget* FocusWidget);
@@ -225,6 +256,11 @@ private:
 	bool PlayViewTarget(AActor* ViewTarget, bool bCut = false);
 	void ClearGameplayCameraLook();
 	APlayerController* GetPrimaryPlayerController() const;
+	void SpawnShopPreviewActor();
+	void DestroyShopPreviewActor();
+
+	UFUNCTION()
+	void HandleShopPreviewSkinChanged(const FString& SkinId);
 
 	UFUNCTION()
 	void HandleLoginSucceeded();

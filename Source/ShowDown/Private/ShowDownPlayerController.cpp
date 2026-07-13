@@ -28,6 +28,7 @@
 #include "SDPlayerState.h"
 #include "ShowDownCameraAspect.h"
 #include "ShowDownCharacter.h"
+#include "ShowDownCharacterSkinCatalog.h"
 #include "ShowDownChatWidget.h"
 #include "ShowDownEosSubsystem.h"
 #include "ShowDownGameModeBase.h"
@@ -148,6 +149,18 @@ namespace
 	{
 		return World && World->GetNetMode() != NM_Standalone;
 	}
+
+	FString NormalizeSubmittedCharacterSkinId(const FString& SkinId)
+	{
+		FShowDownCharacterSkinDefinition Definition;
+		FString ResolvedSkinId;
+		UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
+			nullptr,
+			SkinId,
+			Definition,
+			ResolvedSkinId);
+		return ResolvedSkinId;
+	}
 }
 
 AShowDownPlayerController::AShowDownPlayerController()
@@ -188,9 +201,8 @@ void AShowDownPlayerController::BeginPlay()
 	GConfig->GetFloat(TEXT("ShowDown.UserSettings"), TEXT("MouseSensitivity"), UserMouseSensitivityMultiplier, GGameUserSettingsIni);
 	UserMouseSensitivityMultiplier = FMath::Clamp(UserMouseSensitivityMultiplier, 0.2f, 2.0f);
 
-	if (!Player)
+	if (!CanCreateLocalPlayerWidgets())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Skipping local player setup for ShowDownPlayerController without a UPlayer yet: %s"), *GetName());
 		return;
 	}
 
@@ -202,10 +214,13 @@ void AShowDownPlayerController::BeginPlay()
 	CreateCenterCrosshairWidget();
 	UpdateCenterCrosshairVisibility();
 	TryBindVoiceChatEvents();
+	SubmitLocalEquippedCharacterSkin();
 }
 
 void AShowDownPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	CancelGunShotCameraOverride();
+
 	if (AShowDownGameStateBase* PreviousGameState = VoiceBoundGameState.Get())
 	{
 		PreviousGameState->OnChatMessageReceived.RemoveDynamic(this, &AShowDownPlayerController::HandleChatMessageReceived);
@@ -246,14 +261,22 @@ void AShowDownPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason
 
 void AShowDownPlayerController::OnPossess(APawn* InPawn)
 {
+	CancelGunShotCameraOverride();
 	Super::OnPossess(InPawn);
 	InitializeFromPossessedPawn();
 	SubmitLocalMultiplayerDisplayName();
+	SubmitLocalEquippedCharacterSkin();
 }
 
 void AShowDownPlayerController::ClientEnterMultiplayerGameplay_Implementation()
 {
+	if (!CanCreateLocalPlayerWidgets())
+	{
+		return;
+	}
+
 	bGameplayChatEnabled = true;
+	SubmitLocalEquippedCharacterSkin();
 	if (UShowDownEosSubsystem* EosSubsystem = GetGameInstance()
 		? GetGameInstance()->GetSubsystem<UShowDownEosSubsystem>()
 		: nullptr)
@@ -289,6 +312,11 @@ void AShowDownPlayerController::ClientEnterMultiplayerGameplay_Implementation()
 
 void AShowDownPlayerController::ClientSetInitialCardDealInputLocked_Implementation(bool bLocked)
 {
+	if (!CanCreateLocalPlayerWidgets())
+	{
+		return;
+	}
+
 	if (!bGameplayChatEnabled)
 	{
 		bGameplayChatEnabled = true;
@@ -352,6 +380,8 @@ void AShowDownPlayerController::ClientUseMultiplayerSeatCamera_Implementation(
 	FVector InBreathingSwayLocationAmplitude,
 	float InBreathingSwayBlendInTime)
 {
+	CancelGunShotCameraOverride();
+
 	const ASDPlayerState* ShowDownPlayerState = GetPlayerState<ASDPlayerState>();
 	UE_LOG(
 		LogTemp,
@@ -517,6 +547,7 @@ bool AShowDownPlayerController::TryApplyPendingMultiplayerCharacterCamera()
 void AShowDownPlayerController::PlayerTick(float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime);
+	UpdateGunShotCameraOverride(DeltaTime);
 
 	if (bPendingMultiplayerSeatCamera)
 	{
@@ -529,6 +560,7 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 	if (IsMultiplayerGameMap(GetWorld()))
 	{
 		SubmitLocalMultiplayerDisplayName();
+		SubmitLocalEquippedCharacterSkin();
 	}
 
 	const bool bHasFixedCameraLook = FixedCameraMouseLookTarget != nullptr;
@@ -1760,6 +1792,148 @@ void AShowDownPlayerController::ClearFixedCameraMouseLook()
 	UpdateCenterCrosshairVisibility();
 }
 
+bool AShowDownPlayerController::BeginGunShotCameraOverride(
+	ACameraActor* Camera,
+	float BlendInTime,
+	float BlendExponent)
+{
+	if (!IsLocalController() || !GetLocalPlayer() || !IsValid(Camera))
+	{
+		return false;
+	}
+
+	if (bGunShotCameraOverrideActive && GunShotCameraOverrideTarget.Get() != Camera)
+	{
+		CancelGunShotCameraOverride();
+	}
+
+	if (!bGunShotCameraOverrideActive)
+	{
+		AActor* CurrentViewTarget = GetViewTarget();
+		GunShotCameraReturnViewTarget = IsValid(CurrentViewTarget) && CurrentViewTarget != Camera
+			? CurrentViewTarget
+			: GetPawn();
+	}
+
+	GunShotCameraOverrideTarget = Camera;
+	bGunShotCameraOverrideActive = true;
+	bGunShotCameraBlendingOut = false;
+	GunShotCameraBlendOutTimeRemaining = 0.0f;
+	SetViewTargetWithBlend(
+		Camera,
+		FMath::Max(0.0f, BlendInTime),
+		VTBlend_EaseInOut,
+		FMath::Max(1.0f, BlendExponent));
+	return true;
+}
+
+void AShowDownPlayerController::EndGunShotCameraOverride(
+	ACameraActor* Camera,
+	float BlendOutTime,
+	float BlendExponent)
+{
+	if (!bGunShotCameraOverrideActive
+		|| (IsValid(Camera) && GunShotCameraOverrideTarget.Get() != Camera))
+	{
+		return;
+	}
+
+	ACameraActor* ActiveCamera = GunShotCameraOverrideTarget.Get();
+	if (IsValid(ActiveCamera) && GetViewTarget() != ActiveCamera)
+	{
+		// Another presentation deliberately took the view. Do not overwrite it
+		// with the gameplay pawn while releasing this override.
+		ClearGunShotCameraOverrideState();
+		return;
+	}
+
+	AActor* ReturnViewTarget = GunShotCameraReturnViewTarget.Get();
+	if (!IsValid(ReturnViewTarget))
+	{
+		ReturnViewTarget = GetPawn();
+	}
+
+	const float SafeBlendOutTime = FMath::Max(0.0f, BlendOutTime);
+	if (IsValid(ReturnViewTarget))
+	{
+		SetViewTargetWithBlend(
+			ReturnViewTarget,
+			SafeBlendOutTime,
+			VTBlend_EaseInOut,
+			FMath::Max(1.0f, BlendExponent));
+	}
+
+	if (SafeBlendOutTime <= KINDA_SMALL_NUMBER || !IsValid(ReturnViewTarget))
+	{
+		ClearGunShotCameraOverrideState();
+		return;
+	}
+
+	bGunShotCameraBlendingOut = true;
+	GunShotCameraBlendOutTimeRemaining = SafeBlendOutTime;
+}
+
+void AShowDownPlayerController::CancelGunShotCameraOverride(ACameraActor* ExpectedCamera)
+{
+	if (!bGunShotCameraOverrideActive
+		|| (IsValid(ExpectedCamera) && GunShotCameraOverrideTarget.Get() != ExpectedCamera))
+	{
+		return;
+	}
+
+	ACameraActor* ActiveCamera = GunShotCameraOverrideTarget.Get();
+	AActor* ReturnViewTarget = GunShotCameraReturnViewTarget.Get();
+	if (!IsValid(ReturnViewTarget))
+	{
+		ReturnViewTarget = GetPawn();
+	}
+
+	AActor* CurrentViewTarget = GetViewTarget();
+	if (IsValid(ReturnViewTarget)
+		&& (CurrentViewTarget == ActiveCamera || CurrentViewTarget == ReturnViewTarget))
+	{
+		SetViewTarget(ReturnViewTarget);
+	}
+
+	ClearGunShotCameraOverrideState();
+}
+
+void AShowDownPlayerController::UpdateGunShotCameraOverride(float DeltaTime)
+{
+	if (!bGunShotCameraOverrideActive)
+	{
+		return;
+	}
+
+	if (!GunShotCameraOverrideTarget.IsValid())
+	{
+		CancelGunShotCameraOverride();
+		return;
+	}
+
+	if (!bGunShotCameraBlendingOut)
+	{
+		return;
+	}
+
+	GunShotCameraBlendOutTimeRemaining = FMath::Max(
+		0.0f,
+		GunShotCameraBlendOutTimeRemaining - FMath::Max(0.0f, DeltaTime));
+	if (GunShotCameraBlendOutTimeRemaining <= KINDA_SMALL_NUMBER)
+	{
+		ClearGunShotCameraOverrideState();
+	}
+}
+
+void AShowDownPlayerController::ClearGunShotCameraOverrideState()
+{
+	GunShotCameraOverrideTarget.Reset();
+	GunShotCameraReturnViewTarget.Reset();
+	GunShotCameraBlendOutTimeRemaining = 0.0f;
+	bGunShotCameraOverrideActive = false;
+	bGunShotCameraBlendingOut = false;
+}
+
 void AShowDownPlayerController::SetFixedCameraBreathingSway(
 	bool bEnable,
 	float Speed,
@@ -1930,6 +2104,11 @@ AShowDownCharacter* AShowDownPlayerController::FindLocalCharacterForPlayerCamera
 
 void AShowDownPlayerController::UpdateCharacterPlayerCamera(float DeltaTime)
 {
+	if (bGunShotCameraOverrideActive)
+	{
+		return;
+	}
+
 	APlayerPawn* PlayerPawn = Cast<APlayerPawn>(GetPawn());
 	UCameraComponent* PlayerCamera = PlayerPawn ? PlayerPawn->cameraComp : nullptr;
 	if (!IsLocalController() || !bUseCharacterPlayerCamera || FixedCameraMouseLookTarget || !PlayerPawn || !PlayerCamera)
@@ -2326,9 +2505,14 @@ void AShowDownPlayerController::HandleVoicePushToTalkInput()
 	}
 }
 
+bool AShowDownPlayerController::CanCreateLocalPlayerWidgets() const
+{
+	return IsLocalController() && GetLocalPlayer() != nullptr;
+}
+
 void AShowDownPlayerController::EnsureChatWidget()
 {
-	if (!bGameplayChatEnabled || ChatWidget)
+	if (!CanCreateLocalPlayerWidgets() || !bGameplayChatEnabled || ChatWidget)
 	{
 		return;
 	}
@@ -2366,7 +2550,7 @@ void AShowDownPlayerController::DisableGameplayChat()
 
 void AShowDownPlayerController::EnsureLeaveConfirmWidget()
 {
-	if (LeaveConfirmWidget)
+	if (!CanCreateLocalPlayerWidgets() || LeaveConfirmWidget)
 	{
 		return;
 	}
@@ -2422,7 +2606,7 @@ void AShowDownPlayerController::ApplyChatInputMode(bool bOpen)
 
 void AShowDownPlayerController::CreateCenterCrosshairWidget()
 {
-	if (CenterCrosshairWidget.IsValid() || !IsLocalController())
+	if (CenterCrosshairWidget.IsValid() || !CanCreateLocalPlayerWidgets())
 	{
 		return;
 	}
@@ -2680,6 +2864,47 @@ void AShowDownPlayerController::SubmitLocalMultiplayerDisplayName()
 	}
 }
 
+void AShowDownPlayerController::SubmitLocalEquippedCharacterSkin()
+{
+	if (!IsLocalController() || !IsMultiplayerGameMap(GetWorld()))
+	{
+		return;
+	}
+
+	if (const UWorld* World = GetWorld())
+	{
+		const float CurrentTime = World->GetTimeSeconds();
+		if (CurrentTime - LastEquippedCharacterSkinSubmitTime < 1.0f)
+		{
+			return;
+		}
+		LastEquippedCharacterSkinSubmitTime = CurrentTime;
+	}
+
+	FString SkinId = AShowDownCharacter::GetDefaultCharacterSkinId();
+	if (const USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
+		: nullptr)
+	{
+		const FString EquippedSkinId = SupabaseSubsystem->GetEquippedSkinId(TEXT("character"));
+		if (!EquippedSkinId.TrimStartAndEnd().IsEmpty())
+		{
+			SkinId = EquippedSkinId;
+		}
+	}
+	SkinId = NormalizeSubmittedCharacterSkinId(SkinId);
+
+	const ASDPlayerState* ShowDownPlayerState = GetPlayerState<ASDPlayerState>();
+	const bool bReplicatedStateMatches = ShowDownPlayerState
+		&& ShowDownPlayerState->GetEquippedCharacterSkinId().Equals(SkinId, ESearchCase::CaseSensitive);
+	if (!SkinId.Equals(LastSubmittedEquippedCharacterSkinId, ESearchCase::CaseSensitive)
+		|| !bReplicatedStateMatches)
+	{
+		LastSubmittedEquippedCharacterSkinId = SkinId;
+		ServerSetEquippedCharacterSkinId(SkinId);
+	}
+}
+
 AShowDownGameModeBase* AShowDownPlayerController::ResolveGameMode() const
 {
 	return GetWorld() ? GetWorld()->GetAuthGameMode<AShowDownGameModeBase>() : nullptr;
@@ -2783,6 +3008,27 @@ void AShowDownPlayerController::ServerSetMultiplayerDisplayName_Implementation(c
 	}
 }
 
+void AShowDownPlayerController::ServerSetEquippedCharacterSkinId_Implementation(const FString& SkinId)
+{
+	ASDPlayerState* ShowDownPlayerState = GetPlayerState<ASDPlayerState>();
+	if (!ShowDownPlayerState)
+	{
+		return;
+	}
+
+	const FString PreviousSkinId = ShowDownPlayerState->GetEquippedCharacterSkinId();
+	ShowDownPlayerState->SetEquippedCharacterSkinId(SkinId);
+	if (!PreviousSkinId.Equals(
+		ShowDownPlayerState->GetEquippedCharacterSkinId(),
+		ESearchCase::CaseSensitive))
+	{
+		if (AShowDownGameModeBase* GameMode = ResolveGameMode())
+		{
+			GameMode->RefreshMultiplayerLobbyPlayers();
+		}
+	}
+}
+
 void AShowDownPlayerController::ClientShowStatusMessage_Implementation(const FString& Message)
 {
 	UE_LOG(LogTemp, Log, TEXT("ShowDown status: %s"), *Message);
@@ -2822,6 +3068,11 @@ void AShowDownPlayerController::ServerUpdateCharacterHeadLookRotation_Implementa
 
 void AShowDownPlayerController::ClientShowMultiplayerRank_Implementation(const TArray<FString>& PlayerNames)
 {
+	if (!CanCreateLocalPlayerWidgets())
+	{
+		return;
+	}
+
 	bGameplayChatEnabled = false;
 	if (bPauseMenuOpen)
 	{
@@ -2888,6 +3139,7 @@ void AShowDownPlayerController::HandleMultiRankMainMenuRequested()
 }
 void AShowDownPlayerController::TogglePauseMenu()
 {
+	if (!CanCreateLocalPlayerWidgets()) return;
 	if (bPauseMenuOpen) { ResumeFromPauseMenu(); return; }
 	if (!PauseMenuWidgetClass) PauseMenuWidgetClass = LoadClass<UShowDownPauseMenuWidget>(nullptr, TEXT("/Game/UI/WBP_PauseMenu.WBP_PauseMenu_C"));
 	if (!PauseMenuWidgetClass) return;
@@ -2934,7 +3186,7 @@ void AShowDownPlayerController::ReturnToMainMenuFromPause()
 
 void AShowDownPlayerController::OpenSettingsFromPause()
 {
-	if(!PauseMenuWidget || PauseSettingsWidget)return;
+	if(!CanCreateLocalPlayerWidgets() || !PauseMenuWidget || PauseSettingsWidget)return;
 	UClass* SettingsClass=LoadClass<UShowDownSettingsWidget>(nullptr,TEXT("/Game/UI/WBP_Settings.WBP_Settings_C"));
 	PauseSettingsWidget=SettingsClass?CreateWidget<UShowDownSettingsWidget>(this,SettingsClass):nullptr;
 	if(PauseSettingsWidget)

@@ -5,6 +5,7 @@
 #include "Blueprint/UserWidget.h"
 #include "Components/Button.h"
 #include "Engine/GameInstance.h"
+#include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetSystemLibrary.h"
@@ -13,6 +14,7 @@
 #include "ShowDownGameModeBase.h"
 #include "ShowDownGameStateBase.h"
 #include "ShowDownCameraAspect.h"
+#include "ShowDownCharacterSkinCatalog.h"
 #include "ShowDownEosSubsystem.h"
 #include "ShowDownLobbyWidget.h"
 #include "ShowDownLoginWidget.h"
@@ -20,6 +22,7 @@
 #include "ShowDownMultiplayerWidget.h"
 #include "ShowDownPlayerController.h"
 #include "ShowDownRankWidget.h"
+#include "ShowDownShopPreviewActor.h"
 #include "ShowDownShopWidget.h"
 #include "ShowDownSettingsWidget.h"
 #include "ShowDownVoiceSubsystem.h"
@@ -30,6 +33,7 @@ AShowDownHubFlowManager::AShowDownHubFlowManager()
 {
 	PrimaryActorTick.bCanEverTick = false;
 	ShopWidgetClass = UShowDownShopWidget::StaticClass();
+	ShopPreviewActorClass = AShowDownShopPreviewActor::StaticClass();
 	static ConstructorHelpers::FClassFinder<UShowDownMultiplayerWidget> MultiplayerWidgetBlueprint(TEXT("/Game/UI/WBP_Multiplayer"));
 	MultiplayerWidgetClass = UShowDownMultiplayerWidget::StaticClass();
 	if (MultiplayerWidgetBlueprint.Succeeded()) MultiplayerWidgetClass = MultiplayerWidgetBlueprint.Class;
@@ -136,6 +140,7 @@ void AShowDownHubFlowManager::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	}
 
 	bPendingMultiplayerOpenAfterEosLogin = false;
+	DestroyShopPreviewActor();
 	SetActiveWidget(nullptr);
 	LoginWidget = nullptr;
 	MainMenuWidget = nullptr;
@@ -220,7 +225,7 @@ void AShowDownHubFlowManager::ShowMainMenu()
 
 void AShowDownHubFlowManager::ShowShop()
 {
-	PlayCamera(ShopCamera);
+	PlayCamera(ShopCamera ? ShopCamera : MainMenuCamera);
 
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
@@ -250,6 +255,11 @@ void AShowDownHubFlowManager::ShowShop()
 
 	ShopWidget->SetUseLegacyBackNavigation(false);
 	ShopWidget->OnBackRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleShopBackRequested);
+	ShopWidget->OnPreviewSkinChanged.AddUniqueDynamic(
+		this,
+		&AShowDownHubFlowManager::HandleShopPreviewSkinChanged);
+
+	SpawnShopPreviewActor();
 
 	SetActiveWidget(ShopWidget);
 	SetUiOnlyInput(ShopWidget);
@@ -539,6 +549,14 @@ void AShowDownHubFlowManager::QuitGame()
 
 void AShowDownHubFlowManager::SetActiveWidget(UUserWidget* NextWidget)
 {
+	if (ActiveWidget
+		&& ActiveWidget != NextWidget
+		&& Cast<UShowDownShopWidget>(ActiveWidget)
+		&& !Cast<UShowDownShopWidget>(NextWidget))
+	{
+		DestroyShopPreviewActor();
+	}
+
 	if (ActiveWidget)
 	{
 		ActiveWidget->RemoveFromParent();
@@ -654,6 +672,79 @@ void AShowDownHubFlowManager::ClearGameplayCameraLook()
 APlayerController* AShowDownHubFlowManager::GetPrimaryPlayerController() const
 {
 	return UGameplayStatics::GetPlayerController(this, 0);
+}
+
+void AShowDownHubFlowManager::SpawnShopPreviewActor()
+{
+	DestroyShopPreviewActor();
+
+	UWorld* World = GetWorld();
+	ACameraActor* PreviewCamera = ShopCamera ? ShopCamera : MainMenuCamera;
+	if (!World || !PreviewCamera)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Shop preview needs a shop or main menu camera."));
+		return;
+	}
+
+	const FVector CameraLocation = PreviewCamera->GetActorLocation();
+	const FVector PreviewLocation = CameraLocation
+		+ PreviewCamera->GetActorForwardVector() * ShopPreviewDistance
+		+ FVector::UpVector * ShopPreviewHeight;
+
+	FRotator PreviewRotation = (CameraLocation - PreviewLocation).Rotation();
+	PreviewRotation.Pitch = 0.0f;
+	PreviewRotation.Roll = 0.0f;
+	PreviewRotation.Yaw += ShopPreviewYawOffset;
+
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.Owner = this;
+	SpawnParameters.SpawnCollisionHandlingOverride =
+		ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	TSubclassOf<AShowDownShopPreviewActor> PreviewClass = ShopPreviewActorClass;
+	if (!PreviewClass)
+	{
+		PreviewClass = AShowDownShopPreviewActor::StaticClass();
+	}
+
+	ShopPreviewActor = World->SpawnActor<AShowDownShopPreviewActor>(
+		PreviewClass,
+		PreviewLocation,
+		PreviewRotation,
+		SpawnParameters);
+
+	if (!ShopPreviewActor)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Failed to spawn shop character preview."));
+		return;
+	}
+
+	ShopPreviewActor->SetFlags(RF_Transient);
+	ShopPreviewActor->SetSkinCatalog(CharacterSkinCatalog);
+	ShopPreviewActor->SetPreviewSkin(UShowDownCharacterSkinCatalog::GetDefaultSkinId());
+}
+
+void AShowDownHubFlowManager::DestroyShopPreviewActor()
+{
+	if (IsValid(ShopPreviewActor))
+	{
+		ShopPreviewActor->Destroy();
+	}
+
+	ShopPreviewActor = nullptr;
+}
+
+void AShowDownHubFlowManager::HandleShopPreviewSkinChanged(const FString& SkinId)
+{
+	if (!IsValid(ShopPreviewActor))
+	{
+		SpawnShopPreviewActor();
+	}
+
+	if (IsValid(ShopPreviewActor))
+	{
+		ShopPreviewActor->SetPreviewSkin(SkinId);
+	}
 }
 
 void AShowDownHubFlowManager::HandleLoginSucceeded()

@@ -22,6 +22,7 @@
 #include "Net/UnrealNetwork.h"
 #include "SDPlayerState.h"
 #include "ShowDownCharacterAnimInstance.h"
+#include "ShowDownCharacterSkinCatalog.h"
 #include "ShowDownGameStateBase.h"
 #include "ShowDownNameTagWidget.h"
 #include "UObject/ConstructorHelpers.h"
@@ -71,6 +72,19 @@ AShowDownCharacter::AShowDownCharacter()
 	CharacterMesh->SetRelativeLocation(FVector(0.0f, 0.0f, -96.0f));
 	CharacterMesh->SetRelativeRotation(FRotator(0.0f, -90.0f, 0.0f));
 	CharacterMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	static ConstructorHelpers::FObjectFinder<USkeletalMesh> DefaultRobotMesh(
+		TEXT("/Game/Character/Robot/robot.robot"));
+	static ConstructorHelpers::FObjectFinder<USkeletalMesh> BuiltInHoodmanMeshFinder(
+		TEXT("/Game/Character/hoodman_default_/hoodman.hoodman"));
+	static ConstructorHelpers::FObjectFinder<USkeletalMesh> BuiltInMicuMeshFinder(
+		TEXT("/Game/Character/micu/Tut_Hip_Hop_Dance__1_.Tut_Hip_Hop_Dance__1_"));
+	BuiltInRobotMesh = DefaultRobotMesh.Object;
+	BuiltInHoodmanMesh = BuiltInHoodmanMeshFinder.Object;
+	BuiltInMicuMesh = BuiltInMicuMeshFinder.Object;
+	if (BuiltInRobotMesh)
+	{
+		CharacterMesh->SetSkeletalMesh(BuiltInRobotMesh);
+	}
 
 	RevolverPresentationAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("RevolverPresentationAnchor"));
 	RevolverPresentationAnchor->SetupAttachment(CharacterMesh, TEXT("Head"));
@@ -220,6 +234,7 @@ void AShowDownCharacter::Tick(float DeltaSeconds)
 void AShowDownCharacter::PostInitializeComponents()
 {
 	Super::PostInitializeComponents();
+	ApplyCharacterSkin();
 	CacheAnimBlueprintClass();
 	CacheBaseMeshTransform();
 	PushAnimStateToAnimInstance();
@@ -230,6 +245,7 @@ void AShowDownCharacter::PostInitializeComponents()
 void AShowDownCharacter::BeginPlay()
 {
 	Super::BeginPlay();
+	ApplyCharacterSkin();
 	CacheAnimBlueprintClass();
 	CacheBaseMeshTransform();
 	PushAnimStateToAnimInstance();
@@ -252,6 +268,7 @@ void AShowDownCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
 	DOREPLIFETIME(AShowDownCharacter, ReplicatedAnimState);
+	DOREPLIFETIME(AShowDownCharacter, CharacterSkinId);
 	DOREPLIFETIME(AShowDownCharacter, CharacterRole);
 	DOREPLIFETIME(AShowDownCharacter, PlayerSlot);
 	DOREPLIFETIME(AShowDownCharacter, CharacterDisplayName);
@@ -260,6 +277,40 @@ void AShowDownCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	DOREPLIFETIME(AShowDownCharacter, ReplicatedPlayerViewRotation);
 	DOREPLIFETIME(AShowDownCharacter, bCharacterSceneActive);
 	DOREPLIFETIME(AShowDownCharacter, ReplicatedBetStatusPresentation);
+}
+
+void AShowDownCharacter::SetCharacterSkinId(const FString& NewSkinId)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("Ignoring non-authoritative skin change on %s. Submit the selection through the owning PlayerController."),
+			*GetName());
+		return;
+	}
+
+	const FString PreviousSkinId = CharacterSkinId;
+	FShowDownCharacterSkinDefinition Definition;
+	FString ResolvedSkinId;
+	UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
+		CharacterSkinCatalog,
+		NewSkinId,
+		Definition,
+		ResolvedSkinId);
+
+	CharacterSkinId = ResolvedSkinId;
+	ApplyCharacterSkin();
+	if (CharacterSkinId != PreviousSkinId)
+	{
+		ForceNetUpdate();
+	}
+}
+
+FString AShowDownCharacter::GetDefaultCharacterSkinId()
+{
+	return UShowDownCharacterSkinCatalog::GetDefaultSkinId();
 }
 
 void AShowDownCharacter::SetCharacterAnimState(EShowDownCharacterAnimState NewState)
@@ -607,6 +658,11 @@ void AShowDownCharacter::OnRep_AnimState()
 	OnCharacterAnimStateChanged(ReplicatedAnimState);
 }
 
+void AShowDownCharacter::OnRep_CharacterSkinId()
+{
+	ApplyCharacterSkin();
+}
+
 void AShowDownCharacter::OnRep_Identity()
 {
 	RefreshNameTag();
@@ -762,6 +818,83 @@ void AShowDownCharacter::ServerSetCharacterIdentity_Implementation(
 	const FString& NewDisplayName)
 {
 	SetCharacterIdentity(NewRole, NewPlayerSlot, NewDisplayName);
+}
+
+void AShowDownCharacter::ApplyCharacterSkin()
+{
+	USkeletalMeshComponent* CharacterMesh = GetMesh();
+	if (!CharacterMesh)
+	{
+		CharacterSkinId = UShowDownCharacterSkinCatalog::GetDefaultSkinId();
+		return;
+	}
+
+	FShowDownCharacterSkinDefinition Definition;
+	FString ResolvedSkinId;
+	UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
+		CharacterSkinCatalog,
+		CharacterSkinId,
+		Definition,
+		ResolvedSkinId);
+
+	USkeletalMesh* ResolvedMesh = Definition.SkeletalMesh.LoadSynchronous();
+	if (!ResolvedMesh)
+	{
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("Character skin '%s' on %s could not load. Falling back to the built-in robot."),
+			*ResolvedSkinId,
+			*GetName());
+
+		ResolvedSkinId = UShowDownCharacterSkinCatalog::GetDefaultSkinId();
+		if (UShowDownCharacterSkinCatalog::FindBuiltInSkinDefinition(ResolvedSkinId, Definition))
+		{
+			ResolvedMesh = Definition.SkeletalMesh.LoadSynchronous();
+		}
+	}
+
+	CharacterSkinId = ResolvedSkinId;
+	if (!ResolvedMesh)
+	{
+		UE_LOG(
+			LogTemp,
+			Error,
+			TEXT("Default robot character mesh could not load for %s. Keeping its current mesh."),
+			*GetName());
+		return;
+	}
+
+	const bool bMeshChanged = CharacterMesh->GetSkeletalMeshAsset() != ResolvedMesh;
+	const bool bSkinChanged = AppliedCharacterSkinId != ResolvedSkinId;
+	if (!bMeshChanged && !bSkinChanged)
+	{
+		return;
+	}
+
+	if (bRagdollActive)
+	{
+		StopRagdoll();
+	}
+
+	CacheAnimBlueprintClass();
+	if (bMeshChanged)
+	{
+		if (UAnimInstance* AnimInstance = CharacterMesh->GetAnimInstance())
+		{
+			if (ActiveActionMontage)
+			{
+				AnimInstance->Montage_Stop(ActionAnimationBlendOutTime, ActiveActionMontage);
+			}
+		}
+		ActiveActionMontage = nullptr;
+		CharacterMesh->SetSkeletalMesh(ResolvedMesh, true);
+		RestoreAnimBlueprintClass();
+		PushAnimStateToAnimInstance();
+	}
+
+	AppliedCharacterSkinId = ResolvedSkinId;
+	OnCharacterSkinChanged(ResolvedSkinId);
 }
 
 void AShowDownCharacter::ApplyCharacterAnimState(EShowDownCharacterAnimState NewState)
