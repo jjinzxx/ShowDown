@@ -78,3 +78,11 @@ Source/ShowDown/Private/SDLLMSecrets.h
 !Build/IOS/Resources/**/*.png
 !Build/Android/res/**/*.png
 !Build/*/PakBlacklist*.txt
+
+# Local voice runtime distributed through Git LFS
+!Binaries/
+Binaries/*
+!Binaries/ThirdParty/
+Binaries/ThirdParty/*
+!Binaries/ThirdParty/Whisper/
+!Binaries/ThirdParty/Whisper/**
