@@ -120,6 +120,7 @@ void ACard::BeginPlay()
 		ReplicatedMovementTarget.ArcHeight = SlotAttachArcHeight;
 		ReplicatedMovementTarget.OvershootDistance = SlotAttachOvershootDistance;
 		ReplicatedMovementTarget.bUseSettleMotion = true;
+		ReplicatedMovementTarget.SettleStrength = 1.0f;
 		ReplicatedMovementTarget.bOrientToLocalViewer = false;
 		ReplicatedMovementTarget.VisualScaleMultiplier = TargetVisualScaleMultiplier;
 		ReplicatedMovementTarget.ServerStartTime = GetWorld() && GetWorld()->GetGameState()
@@ -152,6 +153,7 @@ void ACard::BeginPlay()
 			ReplicatedMovementTarget.OvershootDistance,
 			ReplicatedMovementTarget.bUseSettleMotion,
 			ReplicatedMovementTarget.bOrientToLocalViewer,
+			ReplicatedMovementTarget.SettleStrength,
 			ReplicatedMovementTarget.ServerStartTime);
 	}
 }
@@ -320,6 +322,7 @@ void ACard::OnRep_MovementTarget()
 		ReplicatedMovementTarget.OvershootDistance,
 		ReplicatedMovementTarget.bUseSettleMotion,
 		ReplicatedMovementTarget.bOrientToLocalViewer,
+		ReplicatedMovementTarget.SettleStrength,
 		ReplicatedMovementTarget.ServerStartTime);
 	ApplySynchronizedVisualScale(
 		ReplicatedMovementTarget.VisualScaleMultiplier,
@@ -516,7 +519,8 @@ void ACard::MoveToPresentationTransform(
 	float MotionDuration,
 	float ArcHeight,
 	bool bUseSettleMotion,
-	bool bOrientToLocalViewer)
+	bool bOrientToLocalViewer,
+	float SettleStrength)
 {
 	ClearPendingSlotAttachment();
 	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
@@ -525,9 +529,10 @@ void ACard::MoveToPresentationTransform(
 	SetSelectable(false);
 	const float SafeDuration = FMath::Max(0.05f, MotionDuration);
 	const float SafeArcHeight = FMath::Max(0.0f, ArcHeight);
-	ApplyMovementTarget(NewTransform, true, SafeDuration, SafeArcHeight, 0.0f, bUseSettleMotion, bOrientToLocalViewer);
+	const float SafeSettleStrength = FMath::Clamp(SettleStrength, 0.0f, 1.0f);
+	ApplyMovementTarget(NewTransform, true, SafeDuration, SafeArcHeight, 0.0f, bUseSettleMotion, bOrientToLocalViewer, SafeSettleStrength);
 	SetTargetVisualScaleMultiplier(VisualScaleMultiplier);
-	PublishMovementTarget(NewTransform, true, SafeDuration, SafeArcHeight, 0.0f, bUseSettleMotion, bOrientToLocalViewer);
+	PublishMovementTarget(NewTransform, true, SafeDuration, SafeArcHeight, 0.0f, bUseSettleMotion, bOrientToLocalViewer, SafeSettleStrength);
 }
 
 void ACard::EnableMotionTick()
@@ -543,6 +548,7 @@ void ACard::PublishMovementTarget(
 	float OvershootDistance,
 	bool bUseSettleMotion,
 	bool bOrientToLocalViewer,
+	float SettleStrength,
 	float ServerStartTime)
 {
 	if (!HasAuthority())
@@ -557,6 +563,7 @@ void ACard::PublishMovementTarget(
 	ReplicatedMovementTarget.ArcHeight = ArcHeight >= 0.0f ? ArcHeight : SlotAttachArcHeight;
 	ReplicatedMovementTarget.OvershootDistance = OvershootDistance >= 0.0f ? OvershootDistance : SlotAttachOvershootDistance;
 	ReplicatedMovementTarget.bUseSettleMotion = bUseSettleMotion;
+	ReplicatedMovementTarget.SettleStrength = FMath::Clamp(SettleStrength, 0.0f, 1.0f);
 	ReplicatedMovementTarget.bOrientToLocalViewer = bOrientToLocalViewer;
 	ReplicatedMovementTarget.VisualScaleMultiplier = TargetVisualScaleMultiplier;
 	if (ServerStartTime >= 0.0f)
@@ -587,6 +594,7 @@ void ACard::ApplyMovementTarget(
 	float OvershootDistance,
 	bool bUseSettleMotion,
 	bool bOrientToLocalViewer,
+	float SettleStrength,
 	float ServerStartTime)
 {
 	ResetTravelMotionState();
@@ -594,6 +602,7 @@ void ACard::ApplyMovementTarget(
 	ActiveSlotAttachArcHeight = ArcHeight >= 0.0f ? ArcHeight : SlotAttachArcHeight;
 	ActiveSlotAttachOvershootDistance = OvershootDistance >= 0.0f ? OvershootDistance : SlotAttachOvershootDistance;
 	bActiveSlotAttachSettleMotion = bUseSettleMotion;
+	ActiveSlotAttachSettleStrength = FMath::Clamp(SettleStrength, 0.0f, 1.0f);
 	bActiveOrientToLocalViewer = bOrientToLocalViewer;
 	TargetLocalViewerOrientationAlpha = bActiveOrientToLocalViewer ? 1.0f : 0.0f;
 	DefaultLocation = NewTransform.GetLocation();
@@ -743,8 +752,9 @@ void ACard::UpdateSlotAttachSettle(float DeltaTime, FVector& InOutVisualWorldOff
 	const float Decay = 1.0f - Alpha;
 	const float Wave = FMath::Sin(Alpha * PI * SlotAttachSettleOscillations) * Decay;
 
-	InOutVisualWorldOffset += FVector::UpVector * SlotAttachSettleLocationAmplitude * Wave;
-	OutVisualRelativeRotation = ScaleRotator(SlotAttachSettleRotationAmplitude, Wave);
+	const float ScaledWave = Wave * ActiveSlotAttachSettleStrength;
+	InOutVisualWorldOffset += FVector::UpVector * SlotAttachSettleLocationAmplitude * ScaledWave;
+	OutVisualRelativeRotation = ScaleRotator(SlotAttachSettleRotationAmplitude, ScaledWave);
 
 	if (Alpha >= 1.0f)
 	{

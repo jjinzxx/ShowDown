@@ -39,6 +39,9 @@ struct FSDCardMovementTarget
 	bool bUseSettleMotion = true;
 
 	UPROPERTY()
+	float SettleStrength = 1.0f;
+
+	UPROPERTY()
 	bool bOrientToLocalViewer = false;
 
 	UPROPERTY()
@@ -198,7 +201,8 @@ public:
 		float MotionDuration,
 		float ArcHeight,
 		bool bUseSettleMotion = false,
-		bool bOrientToLocalViewer = false);
+		bool bOrientToLocalViewer = false,
+		float SettleStrength = 1.0f);
 
 	virtual bool CanInteract_Implementation(AActor* Interactor) const override;
 	virtual void Interact_Implementation(AActor* Interactor) override;
@@ -234,6 +238,7 @@ private:
 		float OvershootDistance = -1.0f,
 		bool bUseSettleMotion = true,
 		bool bOrientToLocalViewer = false,
+		float SettleStrength = 1.0f,
 		float ServerStartTime = -1.0f);
 	void ApplyMovementTarget(
 		const FTransform& NewTransform,
@@ -243,6 +248,7 @@ private:
 		float OvershootDistance = -1.0f,
 		bool bUseSettleMotion = true,
 		bool bOrientToLocalViewer = false,
+		float SettleStrength = 1.0f,
 		float ServerStartTime = -1.0f);
 	void AttachToPendingSlot();
 	void ClearPendingSlotAttachment();
@@ -287,6 +293,7 @@ private:
 	float ActiveSlotAttachDuration = 0.85f;
 	float ActiveSlotAttachArcHeight = 55.0f;
 	float ActiveSlotAttachOvershootDistance = 8.0f;
+	float ActiveSlotAttachSettleStrength = 1.0f;
 	float CurrentLocalViewerOrientationAlpha = 0.0f;
 	float TargetLocalViewerOrientationAlpha = 0.0f;
 	bool bActiveSlotAttachSettleMotion = true;

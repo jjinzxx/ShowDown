@@ -239,6 +239,11 @@ void ASDSelfShotGunActor::BeginPlay()
 	RestActorTransform = GetActorTransform();
 	bHasCapturedRestActorTransform = true;
 	OriginalCollisionEnabled = GunMesh->GetCollisionEnabled();
+	OriginalInteractionCollisionEnabled = InteractionBounds->GetCollisionEnabled();
+	if (bOpeningCardShowcaseStowed)
+	{
+		StageOpeningCardDrop();
+	}
 	TriggerRestRotation = TriggerPivot->GetRelativeRotation();
 	HammerRestRotation = HammerPivot->GetRelativeRotation();
 	MechanismResetStartTriggerRotation = TriggerRestRotation;
@@ -297,7 +302,7 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 
 	if (AnimState == EGunAnimState::Idle)
 	{
-		UpdateOpeningCardShowcaseStow(DeltaSeconds);
+		UpdateOpeningCardDrop(DeltaSeconds);
 		UpdateRevolverPlacementDevPreview();
 		RefreshRuntimeTickState();
 		return;
@@ -603,6 +608,7 @@ void ASDSelfShotGunActor::ApplyAmmoStatusDisplaySettings()
 	{
 		const bool bShouldShowAmmoStatus =
 			!bOpeningCardShowcaseStowed
+			&& !bOpeningCardDropActive
 			&& (StatusPhase == EShowDownPhase::Betting || StatusPhase == EShowDownPhase::Roulette);
 		AmmoStatusWidgetComponent->SetDrawSize(FVector2D(
 			FMath::Max(32.0f, AmmoStatusDrawSize.X),
@@ -668,8 +674,16 @@ void ASDSelfShotGunActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
 
 void ASDSelfShotGunActor::SetOpeningCardShowcaseStowed(bool bStowed)
 {
-	if (!HasAuthority() || bOpeningCardShowcaseStowed == bStowed)
+	if (!HasAuthority())
 	{
+		return;
+	}
+	if (bOpeningCardShowcaseStowed == bStowed)
+	{
+		if (!bStowed && bOpeningCardDropActive)
+		{
+			MulticastFinishOpeningCardDrop();
+		}
 		return;
 	}
 
@@ -680,6 +694,17 @@ void ASDSelfShotGunActor::SetOpeningCardShowcaseStowed(bool bStowed)
 
 void ASDSelfShotGunActor::OnRep_OpeningCardShowcaseStowed()
 {
+	if (bHasCapturedRestActorTransform)
+	{
+		if (bOpeningCardShowcaseStowed)
+		{
+			StageOpeningCardDrop();
+		}
+		else
+		{
+			StartOpeningCardDrop();
+		}
+	}
 	ApplyAmmoStatusDisplaySettings();
 	RefreshRuntimeTickState();
 }
@@ -794,7 +819,9 @@ bool ASDSelfShotGunActor::CanInteract_Implementation(AActor* Interactor) const
 {
 	return AnimState == EGunAnimState::Idle
 		&& HitSequenceState == EHitSequenceState::Idle
-		&& !bSelfShotCinematicCameraActive;
+		&& !bSelfShotCinematicCameraActive
+		&& !bOpeningCardShowcaseStowed
+		&& !bOpeningCardDropActive;
 }
 
 void ASDSelfShotGunActor::Interact_Implementation(AActor* Interactor)
@@ -1471,7 +1498,6 @@ void ASDSelfShotGunActor::StopTinnitusSound()
 
 bool ASDSelfShotGunActor::IsRuntimeTickRequired() const
 {
-	const float OpeningCardShowcaseTargetAlpha = bOpeningCardShowcaseStowed ? 1.0f : 0.0f;
 	const bool bPresentationActive = AnimState != EGunAnimState::Idle
 		|| HitSequenceState != EHitSequenceState::Idle
 		|| MuzzleFlashElapsedTime > 0.0f
@@ -1479,7 +1505,7 @@ bool ASDSelfShotGunActor::IsRuntimeTickRequired() const
 		|| bSelfShotCinematicCameraStartPending
 		|| bCinematicCameraShakeActive
 		|| TinnitusAudioComponent != nullptr
-		|| !FMath::IsNearlyEqual(OpeningCardShowcaseStowAlpha, OpeningCardShowcaseTargetAlpha);
+		|| bOpeningCardDropActive;
 
 #if WITH_EDITOR
 	return bPresentationActive || bEnableRevolverPlacementDevMode || bRevolverPlacementDevPreviewActive;
@@ -1493,31 +1519,117 @@ void ASDSelfShotGunActor::RefreshRuntimeTickState()
 	SetActorTickEnabled(IsRuntimeTickRequired());
 }
 
-void ASDSelfShotGunActor::UpdateOpeningCardShowcaseStow(float DeltaSeconds)
+void ASDSelfShotGunActor::StageOpeningCardDrop()
 {
 	if (!bHasCapturedRestActorTransform)
 	{
 		return;
 	}
 
-	const float TargetAlpha = bOpeningCardShowcaseStowed ? 1.0f : 0.0f;
-	const float Duration = FMath::Max(0.05f, OpeningCardShowcaseMoveDuration);
-	OpeningCardShowcaseStowAlpha = FMath::FInterpConstantTo(
-		OpeningCardShowcaseStowAlpha,
-		TargetAlpha,
-		DeltaSeconds,
-		1.0f / Duration);
+	bOpeningCardDropActive = false;
+	OpeningCardDropVelocityZ = 0.0f;
+	FTransform StagedTransform = RestActorTransform;
+	StagedTransform.AddToTranslation(FVector::UpVector * FMath::Max(0.0f, OpeningCardDropHeight));
+	SetActorTransform(StagedTransform);
+	SetActorHiddenInGame(true);
+	if (GunMesh)
+	{
+		GunMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+	if (InteractionBounds)
+	{
+		InteractionBounds->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+}
 
-	FTransform StowedTransform = RestActorTransform;
-	FVector StowedLocation = StowedTransform.GetLocation();
-	StowedLocation.Z -= FMath::Max(0.0f, OpeningCardShowcaseSinkDistance);
-	StowedTransform.SetLocation(StowedLocation);
-	const float EasedAlpha = FMath::InterpEaseInOut(
-		0.0f,
-		1.0f,
-		OpeningCardShowcaseStowAlpha,
-		2.0f);
-	SetActorTransformAlpha(RestActorTransform, StowedTransform, EasedAlpha);
+void ASDSelfShotGunActor::StartOpeningCardDrop()
+{
+	if (!bHasCapturedRestActorTransform)
+	{
+		return;
+	}
+
+	FTransform DropTransform = RestActorTransform;
+	DropTransform.AddToTranslation(FVector::UpVector * FMath::Max(0.0f, OpeningCardDropHeight));
+	SetActorTransform(DropTransform);
+	SetActorHiddenInGame(false);
+	OpeningCardDropVelocityZ = 0.0f;
+	bOpeningCardDropActive = OpeningCardDropHeight > KINDA_SMALL_NUMBER;
+	if (GunMesh)
+	{
+		GunMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+	if (InteractionBounds)
+	{
+		InteractionBounds->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+
+	if (!bOpeningCardDropActive)
+	{
+		FinishOpeningCardDrop();
+	}
+}
+
+void ASDSelfShotGunActor::UpdateOpeningCardDrop(float DeltaSeconds)
+{
+	if (!bOpeningCardDropActive || !bHasCapturedRestActorTransform)
+	{
+		return;
+	}
+
+	const float RestZ = RestActorTransform.GetLocation().Z;
+	const float Gravity = FMath::Max(1.0f, OpeningCardDropGravity);
+	const float Restitution = FMath::Clamp(OpeningCardDropRestitution, 0.0f, 0.8f);
+	const float StopSpeed = FMath::Max(1.0f, OpeningCardDropStopSpeed);
+	float RemainingTime = FMath::Clamp(DeltaSeconds, 0.0f, 0.10f);
+	while (RemainingTime > KINDA_SMALL_NUMBER && bOpeningCardDropActive)
+	{
+		const float Step = FMath::Min(RemainingTime, 1.0f / 60.0f);
+		RemainingTime -= Step;
+		OpeningCardDropVelocityZ -= Gravity * Step;
+
+		FVector Location = GetActorLocation();
+		Location.Z += OpeningCardDropVelocityZ * Step;
+		if (Location.Z <= RestZ)
+		{
+			Location.Z = RestZ;
+			const float ReboundSpeed = FMath::Abs(OpeningCardDropVelocityZ) * Restitution;
+			if (ReboundSpeed < StopSpeed)
+			{
+				SetActorLocation(Location);
+				FinishOpeningCardDrop();
+				break;
+			}
+			OpeningCardDropVelocityZ = ReboundSpeed;
+		}
+		SetActorLocation(Location);
+	}
+}
+
+void ASDSelfShotGunActor::FinishOpeningCardDrop()
+{
+	bOpeningCardDropActive = false;
+	OpeningCardDropVelocityZ = 0.0f;
+	SetActorTransform(RestActorTransform);
+	SetActorHiddenInGame(false);
+	if (GunMesh)
+	{
+		GunMesh->SetCollisionEnabled(OriginalCollisionEnabled);
+	}
+	if (InteractionBounds)
+	{
+		InteractionBounds->SetCollisionEnabled(OriginalInteractionCollisionEnabled);
+	}
+	ApplyAmmoStatusDisplaySettings();
+	RefreshRuntimeTickState();
+}
+
+void ASDSelfShotGunActor::MulticastFinishOpeningCardDrop_Implementation()
+{
+	if (bHasCapturedRestActorTransform)
+	{
+		FinishOpeningCardDrop();
+	}
 }
 
 void ASDSelfShotGunActor::SetBlackoutInstant(float Alpha, bool bHoldWhenFinished)

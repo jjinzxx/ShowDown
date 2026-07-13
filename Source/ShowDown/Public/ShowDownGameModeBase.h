@@ -369,6 +369,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.1", ClampMax = "2.0", DisplayName = "Card Move Duration"))
 	float InitialDealCardMoveDuration = 0.70f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "60.0", DisplayName = "Hand Move Arc Height"))
+	float InitialDealHandMoveArcHeight = 8.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.1", ClampMax = "2.0", DisplayName = "Hand Move Duration"))
+	float InitialDealHandMoveDuration = 0.45f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "1.0", DisplayName = "Card Bounce Strength"))
+	float InitialDealCardBounceStrength = 0.20f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "3.0", DisplayName = "Beat Delay"))
 	float InitialDealBeatDelay = 0.80f;
 
@@ -539,6 +548,8 @@ private:
 	EShowDownSide BetBulletActionSide = EShowDownSide::Player;
 	EShowDownPlayerSlot BetBulletActionSlot = EShowDownPlayerSlot::None;
 	EShowDownBetAction BetBulletAction = EShowDownBetAction::Check;
+	TMap<EShowDownSide, EShowDownBetAction> SingleLastBetActions;
+	TMap<EShowDownPlayerSlot, EShowDownBetAction> MultiplayerLastBetActions;
 	bool bHasBetBulletRouletteTarget = false;
 	bool bBetBulletRouletteTargetIsMultiplayer = false;
 	EShowDownSide BetBulletRouletteTargetSide = EShowDownSide::Player;
@@ -642,6 +653,7 @@ private:
 	void MarkSingleBetBulletRouletteTarget(EShowDownSide TargetSide, int32 BulletCount);
 	void MarkMultiplayerBetBulletRouletteTarget(ASDPlayerState* TargetPlayer, int32 BulletCount);
 	void ClearBetBulletTransientState();
+	void ClearBetBulletActionHistory();
 	FString BuildBetBulletActionText(EShowDownBetAction Action) const;
 	float PlaySinglePlayerCardRevealPresentation();
 	float PlayMultiplayerCardRevealPresentation(const TArray<ASDPlayerState*>& RevealedPlayers);
