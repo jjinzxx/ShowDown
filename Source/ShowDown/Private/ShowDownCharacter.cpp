@@ -16,6 +16,8 @@
 #include "Engine/SkeletalMesh.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
+#include "Camera/PlayerCameraManager.h"
+#include "Materials/MaterialInterface.h"
 #include "Net/UnrealNetwork.h"
 #include "SDPlayerState.h"
 #include "ShowDownCharacterAnimInstance.h"
@@ -48,7 +50,8 @@ namespace
 
 AShowDownCharacter::AShowDownCharacter()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.TickGroup = TG_PostUpdateWork;
 	bReplicates = true;
 	SetReplicateMovement(true);
 
@@ -112,6 +115,7 @@ AShowDownCharacter::AShowDownCharacter()
 	WorldLivesText->SetVisibility(false);
 
 	UFont* WorldStatusFontObject = nullptr;
+	UMaterialInterface* WorldStatusOutlinedMaterialObject = nullptr;
 	if (!IsRunningDedicatedServer())
 	{
 		static ConstructorHelpers::FObjectFinder<UFont> WorldLivesFont(
@@ -128,6 +132,13 @@ AShowDownCharacter::AShowDownCharacter()
 		{
 			WorldStatusFontObject = WorldStatusFont.Object;
 		}
+
+		static ConstructorHelpers::FObjectFinder<UMaterialInterface> WorldStatusOutlinedMaterial(
+			TEXT("/Game/UI/Materials/M_WorldTextOutlined.M_WorldTextOutlined"));
+		if (WorldStatusOutlinedMaterial.Succeeded())
+		{
+			WorldStatusOutlinedMaterialObject = WorldStatusOutlinedMaterial.Object;
+		}
 	}
 
 	BetStatusAnchorComponent = CreateDefaultSubobject<USceneComponent>(TEXT("BetStatusAnchor"));
@@ -135,7 +146,7 @@ AShowDownCharacter::AShowDownCharacter()
 	BetStatusAnchorComponent->SetRelativeLocation(BetStatusRelativeLocation);
 	BetStatusAnchorComponent->SetRelativeRotation(BetStatusRelativeRotation);
 
-	auto ConfigureWorldStatusText = [this, WorldStatusFontObject](
+	auto ConfigureWorldStatusText = [this, WorldStatusFontObject, WorldStatusOutlinedMaterialObject](
 		UTextRenderComponent* TextComponent,
 		const FColor& Color)
 	{
@@ -151,19 +162,15 @@ AShowDownCharacter::AShowDownCharacter()
 		{
 			TextComponent->SetFont(WorldStatusFontObject);
 		}
+		if (WorldStatusOutlinedMaterialObject)
+		{
+			TextComponent->SetTextMaterial(WorldStatusOutlinedMaterialObject);
+		}
 	};
-
-	BetStatusValueOutlineText = CreateDefaultSubobject<UTextRenderComponent>(TEXT("BetStatusValueOutline"));
-	ConfigureWorldStatusText(BetStatusValueOutlineText, FColor::Black);
-	BetStatusValueOutlineText->SetRelativeLocation(FVector(-0.20f, 0.0f, 0.0f));
 
 	BetStatusValueText = CreateDefaultSubobject<UTextRenderComponent>(TEXT("BetStatusValue"));
 	ConfigureWorldStatusText(BetStatusValueText, FColor(255, 220, 55, 255));
 	BetStatusValueText->SetRelativeLocation(FVector::ZeroVector);
-
-	BetStatusActionOutlineText = CreateDefaultSubobject<UTextRenderComponent>(TEXT("BetStatusActionOutline"));
-	ConfigureWorldStatusText(BetStatusActionOutlineText, FColor::Black);
-	BetStatusActionOutlineText->SetRelativeLocation(FVector(-0.20f, 0.0f, BetStatusActionVerticalOffset));
 
 	BetStatusActionText = CreateDefaultSubobject<UTextRenderComponent>(TEXT("BetStatusAction"));
 	ConfigureWorldStatusText(BetStatusActionText, FColor(40, 255, 90, 255));
@@ -175,6 +182,12 @@ AShowDownCharacter::AShowDownCharacter()
 	MovementComponent->MaxWalkSpeed = 240.0f;
 	MovementComponent->bEnablePhysicsInteraction = false;
 	MovementComponent->DisableMovement();
+}
+
+void AShowDownCharacter::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	UpdateWorldPresentationTransform();
 }
 
 void AShowDownCharacter::PostInitializeComponents()
@@ -196,6 +209,7 @@ void AShowDownCharacter::BeginPlay()
 	ApplyCharacterSceneActive();
 	RefreshNameTag();
 	RefreshWorldBetStatus();
+	UpdateWorldPresentationTransform();
 	BindToRouletteEvents();
 }
 
@@ -1367,9 +1381,10 @@ void AShowDownCharacter::RefreshWorldLives()
 	WorldLivesShadowText->SetWorldSize(HeartSize + 1.5f);
 	WorldLivesText->SetRelativeLocation(FVector::ZeroVector);
 	WorldLivesShadowText->SetRelativeLocation(FVector(-0.20f, 0.0f, 0.0f));
-	const bool bVisible = bCharacterSceneActive
-		&& CharacterRole != EShowDownCharacterRole::Unassigned
-		&& CharacterLives > 0;
+	// Overhead presentation belongs to characters the local player can see.
+	// Rendering it for the local first-person character leaves orphaned hearts/status
+	// in the middle of the screen while the local name tag is intentionally hidden.
+	const bool bVisible = ShouldShowNameTag() && CharacterLives > 0;
 	WorldLivesText->SetVisibility(bVisible, true);
 	WorldLivesText->SetHiddenInGame(!bVisible, true);
 	WorldLivesShadowText->SetVisibility(bVisible, true);
@@ -1379,9 +1394,7 @@ void AShowDownCharacter::RefreshWorldLives()
 void AShowDownCharacter::RefreshWorldBetStatus()
 {
 	if (!BetStatusAnchorComponent
-		|| !BetStatusValueOutlineText
 		|| !BetStatusValueText
-		|| !BetStatusActionOutlineText
 		|| !BetStatusActionText)
 	{
 		return;
@@ -1395,24 +1408,17 @@ void AShowDownCharacter::RefreshWorldBetStatus()
 			nullptr,
 			TEXT("/Engine/EngineFonts/RobotoDistanceField.RobotoDistanceField")))
 		{
-			BetStatusValueOutlineText->SetFont(StatusFont);
 			BetStatusValueText->SetFont(StatusFont);
-			BetStatusActionOutlineText->SetFont(StatusFont);
 			BetStatusActionText->SetFont(StatusFont);
 		}
 	}
-	BetStatusValueOutlineText->SetRelativeLocation(FVector(-0.20f, 0.0f, 0.0f));
 	BetStatusValueText->SetRelativeLocation(FVector::ZeroVector);
-	BetStatusActionOutlineText->SetRelativeLocation(FVector(-0.20f, 0.0f, BetStatusActionVerticalOffset));
 	BetStatusActionText->SetRelativeLocation(FVector(0.0f, 0.0f, BetStatusActionVerticalOffset));
 
 	const float ValueSize = FMath::Max(4.0f, BetStatusValueTextSize);
 	const float ActionSize = FMath::Max(4.0f, BetStatusActionTextSize);
-	const float OutlineSize = FMath::Clamp(BetStatusOutlineSize, 0.0f, 6.0f);
 	BetStatusValueText->SetWorldSize(ValueSize);
-	BetStatusValueOutlineText->SetWorldSize(ValueSize + OutlineSize);
 	BetStatusActionText->SetWorldSize(ActionSize);
-	BetStatusActionOutlineText->SetWorldSize(ActionSize + OutlineSize);
 
 	const FString ValueString = FString::Printf(
 		TEXT("%d/%d"),
@@ -1421,9 +1427,7 @@ void AShowDownCharacter::RefreshWorldBetStatus()
 	const FText Value = FText::FromString(ValueString);
 	const FText Action = FText::FromString(ReplicatedBetStatusPresentation.StatusText.TrimStartAndEnd());
 	BetStatusValueText->SetText(Value);
-	BetStatusValueOutlineText->SetText(Value);
 	BetStatusActionText->SetText(Action);
-	BetStatusActionOutlineText->SetText(Action);
 
 	const bool bFolded = ReplicatedBetStatusPresentation.StatusText.StartsWith(
 		TEXT("FOLD"),
@@ -1434,23 +1438,68 @@ void AShowDownCharacter::RefreshWorldBetStatus()
 			? FLinearColor::White
 			: FLinearColor(0.12f, 1.0f, 0.28f, 1.0f));
 	BetStatusValueText->SetTextRenderColor(ValueColor.ToFColor(true));
-	BetStatusValueOutlineText->SetTextRenderColor(FColor::Black);
 	BetStatusActionText->SetTextRenderColor(ReplicatedBetStatusPresentation.AccentColor.ToFColor(true));
-	BetStatusActionOutlineText->SetTextRenderColor(FColor::Black);
 
 	const bool bVisible =
-		bCharacterSceneActive
+		ShouldShowNameTag()
 		&& ReplicatedBetStatusPresentation.bVisible
 		&& !ReplicatedBetStatusPresentation.DisplayName.TrimStartAndEnd().IsEmpty();
 	const bool bActionVisible = bVisible && !ReplicatedBetStatusPresentation.StatusText.TrimStartAndEnd().IsEmpty();
 	BetStatusValueText->SetVisibility(bVisible, true);
 	BetStatusValueText->SetHiddenInGame(!bVisible, true);
-	BetStatusValueOutlineText->SetVisibility(bVisible, true);
-	BetStatusValueOutlineText->SetHiddenInGame(!bVisible, true);
 	BetStatusActionText->SetVisibility(bActionVisible, true);
 	BetStatusActionText->SetHiddenInGame(!bActionVisible, true);
-	BetStatusActionOutlineText->SetVisibility(bActionVisible, true);
-	BetStatusActionOutlineText->SetHiddenInGame(!bActionVisible, true);
+}
+
+void AShowDownCharacter::UpdateWorldPresentationTransform()
+{
+	if (!NameTagWidgetComponent || !WorldLivesAnchor || !BetStatusAnchorComponent)
+	{
+		return;
+	}
+
+	// The name tag keeps its original centered-above-character placement.
+	// Only the compact hearts/bet/action stack is camera-relative on the face's right side.
+	NameTagWidgetComponent->SetRelativeLocation(NameTagRelativeLocation);
+
+	const UWorld* World = GetWorld();
+	const APlayerController* LocalPlayerController = World ? World->GetFirstPlayerController() : nullptr;
+	const APlayerCameraManager* CameraManager = LocalPlayerController
+		? LocalPlayerController->PlayerCameraManager
+		: nullptr;
+	if (!CameraManager)
+	{
+		WorldLivesAnchor->SetRelativeLocation(WorldLivesRelativeLocation);
+		WorldLivesAnchor->SetRelativeRotation(WorldLivesRelativeRotation);
+		BetStatusAnchorComponent->SetRelativeLocation(BetStatusRelativeLocation);
+		BetStatusAnchorComponent->SetRelativeRotation(BetStatusRelativeRotation);
+		return;
+	}
+
+	const FVector CameraLocation = CameraManager->GetCameraLocation();
+	const FRotator CameraRotation = CameraManager->GetCameraRotation();
+	const FVector CameraForward = CameraRotation.Vector();
+	const FVector CameraRight = FRotationMatrix(CameraRotation).GetUnitAxis(EAxis::Y);
+	const FVector ActorLocation = GetActorLocation();
+	auto ResolveWorldLocation = [&](const FVector& RelativeLocation)
+	{
+		return ActorLocation
+			+ CameraForward * RelativeLocation.X
+			+ CameraRight * (WorldPresentationRightOffset + RelativeLocation.Y)
+			+ FVector::UpVector * RelativeLocation.Z;
+	};
+
+	const FVector LivesWorldLocation = ResolveWorldLocation(WorldLivesRelativeLocation);
+	const FVector BetStatusWorldLocation = ResolveWorldLocation(BetStatusRelativeLocation);
+	WorldLivesAnchor->SetWorldLocation(LivesWorldLocation);
+	BetStatusAnchorComponent->SetWorldLocation(BetStatusWorldLocation);
+
+	const FRotator LivesFacingRotation = (CameraLocation - LivesWorldLocation).Rotation();
+	const FRotator BetStatusFacingRotation = (CameraLocation - BetStatusWorldLocation).Rotation();
+	WorldLivesAnchor->SetWorldRotation(
+		(LivesFacingRotation.Quaternion() * WorldLivesRelativeRotation.Quaternion()).Rotator());
+	BetStatusAnchorComponent->SetWorldRotation(
+		(BetStatusFacingRotation.Quaternion() * BetStatusRelativeRotation.Quaternion()).Rotator());
 }
 
 FString AShowDownCharacter::ResolveNameTagDisplayName() const
