@@ -228,11 +228,6 @@ namespace
 
 		return Result.TrimStartAndEnd();
 	}
-
-	FString QuoteCommandLineArg(const FString& Arg)
-	{
-		return FString::Printf(TEXT("\"%s\""), *Arg.Replace(TEXT("\""), TEXT("\\\"")));
-	}
 }
 
 bool UShowDownVoiceSubsystem::IsConfigured() const
@@ -254,18 +249,13 @@ bool UShowDownVoiceSubsystem::CanUseTranscriptionBackend() const
 
 bool UShowDownVoiceSubsystem::CanUseSpeechBackend() const
 {
-	if (!bEnableOpenAIVoice)
-	{
-		return false;
-	}
-
 	switch (SpeechBackend)
 	{
-	case EShowDownSpeechBackend::LocalMeloTTS:
+	case EShowDownSpeechBackend::LocalESpeakNG:
 		return true;
 	case EShowDownSpeechBackend::OpenAI:
 	default:
-		return !ResolveApiKey().IsEmpty();
+		return bEnableOpenAIVoice && !ResolveApiKey().IsEmpty();
 	}
 }
 
@@ -286,7 +276,7 @@ float UShowDownVoiceSubsystem::GetCurrentRecordingSeconds() const
 FString UShowDownVoiceSubsystem::GetVoiceDebugSummary() const
 {
 	return FString::Printf(
-		TEXT("Voice enabled=%s configured=%s transcription_backend=%d speech_backend=%d mode=%d recording=%s stt=%s tts=%s pending_tts=%s recorded=%.2fs samples=%d STT=%s TTS=%s voice=%s speed=%.2f pitch=%.2f volume=%.2f last_text=\"%s\" last_error=\"%s\" last_recording_bytes=%d last_tts_bytes=%d"),
+		TEXT("Voice enabled=%s configured=%s transcription_backend=%d speech_backend=%d mode=%d recording=%s stt=%s tts=%s pending_tts=%s recorded=%.2fs samples=%d STT=%s TTS=%s voice=%s speed=%.2f pitch=%.2f last_text=\"%s\" last_error=\"%s\" last_recording_bytes=%d last_tts_bytes=%d"),
 		bEnableOpenAIVoice ? TEXT("true") : TEXT("false"),
 		IsConfigured() ? TEXT("true") : TEXT("false"),
 		static_cast<int32>(TranscriptionBackend),
@@ -303,7 +293,6 @@ FString UShowDownVoiceSubsystem::GetVoiceDebugSummary() const
 		*TTSVoice,
 		TTSPlaybackSpeed,
 		TTSPlaybackPitch,
-		TTSPlaybackVolume,
 		*LastTranscribedText.Left(48),
 		*LastVoiceError.Left(80),
 		LastRecordedWavData.Num(),
@@ -1043,14 +1032,16 @@ void UShowDownVoiceSubsystem::RequestSpeech(const FString& Text)
 {
 	if (!CanUseSpeechBackend())
 	{
-		LastVoiceError = TEXT("Voice speech backend is not configured.");
+		LastVoiceError = SpeechBackend == EShowDownSpeechBackend::OpenAI
+			? TEXT("OpenAI voice API key is missing.")
+			: TEXT("Local TTS is not configured.");
 		bSpeechInFlight = false;
 		PendingSpeechText.Empty();
 		bHasPendingSpeech = false;
 		return;
 	}
 
-	if (SpeechBackend == EShowDownSpeechBackend::LocalMeloTTS)
+	if (SpeechBackend == EShowDownSpeechBackend::LocalESpeakNG)
 	{
 		RequestLocalSpeech(Text);
 		return;
@@ -1141,20 +1132,21 @@ void UShowDownVoiceSubsystem::RequestSpeech(const FString& Text)
 void UShowDownVoiceSubsystem::RequestLocalSpeech(const FString& Text)
 {
 	const FString ResolvedExecutablePath = ResolveLocalVoicePath(LocalTTSExecutablePath);
-	const FString ResolvedScriptPath = ResolveLocalVoicePath(LocalTTSScriptPath);
-	const FString ResolvedCachePath = ResolveLocalVoicePath(LocalTTSCachePath);
+	const FString ResolvedDataPath = ResolveLocalVoicePath(LocalTTSDataPath);
 	if (ResolvedExecutablePath.IsEmpty() || !FPaths::FileExists(ResolvedExecutablePath))
 	{
 		LastVoiceError = FString::Printf(TEXT("Local TTS executable is missing: %s"), *ResolvedExecutablePath);
 		UE_LOG(LogTemp, Warning, TEXT("%s"), *LastVoiceError);
+		bSpeechInFlight = false;
 		RequestPendingSpeech();
 		return;
 	}
 
-	if (ResolvedScriptPath.IsEmpty() || !FPaths::FileExists(ResolvedScriptPath))
+	if (!ResolvedDataPath.IsEmpty() && !IFileManager::Get().DirectoryExists(*ResolvedDataPath))
 	{
-		LastVoiceError = FString::Printf(TEXT("Local TTS script is missing: %s"), *ResolvedScriptPath);
+		LastVoiceError = FString::Printf(TEXT("Local TTS data directory is missing: %s"), *ResolvedDataPath);
 		UE_LOG(LogTemp, Warning, TEXT("%s"), *LastVoiceError);
+		bSpeechInFlight = false;
 		RequestPendingSpeech();
 		return;
 	}
@@ -1164,6 +1156,7 @@ void UShowDownVoiceSubsystem::RequestLocalSpeech(const FString& Text)
 	{
 		LastVoiceError = FString::Printf(TEXT("Failed to create local TTS directory: %s"), *TTSDirectory);
 		UE_LOG(LogTemp, Warning, TEXT("%s"), *LastVoiceError);
+		bSpeechInFlight = false;
 		RequestPendingSpeech();
 		return;
 	}
@@ -1175,76 +1168,58 @@ void UShowDownVoiceSubsystem::RequestLocalSpeech(const FString& Text)
 	{
 		LastVoiceError = FString::Printf(TEXT("Failed to save local TTS text: %s"), *TextFilePath);
 		UE_LOG(LogTemp, Warning, TEXT("%s"), *LastVoiceError);
+		bSpeechInFlight = false;
 		RequestPendingSpeech();
 		return;
 	}
 
 	bSpeechInFlight = true;
-	BroadcastVoiceStatus(true, TEXT("로컬 음성 합성 중..."));
+	UE_LOG(LogTemp, Log, TEXT("Requesting local eSpeak NG TTS: %s"), *Text);
 
-	const float SafePlaybackPitch = FMath::Clamp(TTSPlaybackPitch, 0.5f, 2.0f);
-	const float LocalSpeechSpeed = FMath::Clamp(TTSPlaybackSpeed / SafePlaybackPitch, 0.5f, 2.0f);
-	const FString Language = LocalTTSLanguage.TrimStartAndEnd().IsEmpty() ? TEXT("kr") : LocalTTSLanguage.TrimStartAndEnd();
-	FString Args = FString::Printf(
-		TEXT("%s --text-file %s --output %s --language %s --speed %.2f"),
-		*QuoteCommandLineArg(ResolvedScriptPath),
-		*QuoteCommandLineArg(TextFilePath),
-		*QuoteCommandLineArg(WavFilePath),
-		*QuoteCommandLineArg(Language),
-		LocalSpeechSpeed);
-	if (!ResolvedCachePath.IsEmpty())
+	const FString VoiceArg = LocalTTSVoice.TrimStartAndEnd().IsEmpty()
+		? TEXT("ko")
+		: LocalTTSVoice.TrimStartAndEnd();
+	const int32 SpeechSpeed = FMath::Clamp(FMath::RoundToInt(175.0f * FMath::Clamp(TTSPlaybackSpeed, 0.5f, 2.0f)), 80, 450);
+	const int32 SpeechPitch = FMath::Clamp(FMath::RoundToInt(50.0f * FMath::Clamp(TTSPlaybackPitch, 0.5f, 2.0f)), 0, 99);
+	const FString DataPathArg = ResolvedDataPath.IsEmpty()
+		? FString()
+		: FString::Printf(TEXT("--path=\"%s\" "), *ResolvedDataPath);
+	const FString Args = FString::Printf(
+		TEXT("%s-v \"%s\" -s %d -p %d -a 180 -w \"%s\" -f \"%s\""),
+		*DataPathArg,
+		*VoiceArg,
+		SpeechSpeed,
+		SpeechPitch,
+		*WavFilePath,
+		*TextFilePath);
+
+	int32 ReturnCode = -1;
+	FString StdOut;
+	FString StdErr;
+	const bool bExecuted = FPlatformProcess::ExecProcess(*ResolvedExecutablePath, *Args, &ReturnCode, &StdOut, &StdErr);
+	bSpeechInFlight = false;
+
+	TArray<uint8> WavData;
+	const bool bLoadedWav = FFileHelper::LoadFileToArray(WavData, *WavFilePath) && WavData.Num() >= 44;
+	if (!bExecuted || ReturnCode != 0 || !bLoadedWav)
 	{
-		Args += FString::Printf(TEXT(" --cache-dir %s"), *QuoteCommandLineArg(ResolvedCachePath));
+		const FString CombinedOutput = StdOut + TEXT("\n") + StdErr;
+		LastVoiceError = FString::Printf(
+			TEXT("Local TTS failed. executed=%s code=%d wav_bytes=%d output=%s"),
+			bExecuted ? TEXT("true") : TEXT("false"),
+			ReturnCode,
+			WavData.Num(),
+			*CombinedOutput.Left(256));
+		UE_LOG(LogTemp, Warning, TEXT("%s"), *LastVoiceError);
+		RequestPendingSpeech();
+		return;
 	}
 
-	TWeakObjectPtr<UShowDownVoiceSubsystem> WeakThis(this);
-	AsyncTask(
-		ENamedThreads::AnyBackgroundThreadNormalTask,
-		[WeakThis, ResolvedExecutablePath, Args, WavFilePath]()
-		{
-			int32 ReturnCode = -1;
-			FString StdOut;
-			FString StdErr;
-			const bool bExecuted = FPlatformProcess::ExecProcess(*ResolvedExecutablePath, *Args, &ReturnCode, &StdOut, &StdErr);
-
-			TArray<uint8> WavData;
-			const bool bLoadedWav = bExecuted
-				&& ReturnCode == 0
-				&& FFileHelper::LoadFileToArray(WavData, *WavFilePath)
-				&& WavData.Num() > 44;
-			const FString CombinedOutput = StdOut + TEXT("\n") + StdErr;
-
-			AsyncTask(
-				ENamedThreads::GameThread,
-				[WeakThis, bExecuted, ReturnCode, bLoadedWav, CombinedOutput, WavData = MoveTemp(WavData)]() mutable
-				{
-					if (!WeakThis.IsValid())
-					{
-						return;
-					}
-
-					UShowDownVoiceSubsystem* VoiceSubsystem = WeakThis.Get();
-					VoiceSubsystem->bSpeechInFlight = false;
-					if (!bLoadedWav)
-					{
-						VoiceSubsystem->LastVoiceError = FString::Printf(
-							TEXT("Local TTS failed. executed=%s code=%d output=%s"),
-							bExecuted ? TEXT("true") : TEXT("false"),
-							ReturnCode,
-							*CombinedOutput.Left(256));
-						UE_LOG(LogTemp, Warning, TEXT("%s"), *VoiceSubsystem->LastVoiceError);
-						VoiceSubsystem->BroadcastVoiceStatus(false, TEXT("로컬 TTS 실패."));
-						VoiceSubsystem->RequestPendingSpeech();
-						return;
-					}
-
-					VoiceSubsystem->LastSpeechByteCount = WavData.Num();
-					VoiceSubsystem->LastVoiceError.Empty();
-					UE_LOG(LogTemp, Log, TEXT("Local voice speech received %d bytes."), VoiceSubsystem->LastSpeechByteCount);
-					VoiceSubsystem->PlaySpeechWav(WavData);
-					VoiceSubsystem->RequestPendingSpeech();
-				});
-		});
+	LastSpeechByteCount = WavData.Num();
+	LastVoiceError.Empty();
+	UE_LOG(LogTemp, Log, TEXT("Local eSpeak NG speech received %d bytes."), LastSpeechByteCount);
+	PlaySpeechWav(WavData);
+	RequestPendingSpeech();
 }
 
 void UShowDownVoiceSubsystem::RequestPendingSpeech()
@@ -1448,7 +1423,7 @@ void UShowDownVoiceSubsystem::PlaySpeechWav(const TArray<uint8>& WavData)
 		ActiveSpeechComponent = UGameplayStatics::SpawnSound2D(
 			World,
 			ActiveSpeechWave,
-			FMath::Clamp(TTSPlaybackVolume, 0.1f, 3.0f),
+			1.0f,
 			SafePlaybackPitch,
 			0.0f,
 			nullptr,

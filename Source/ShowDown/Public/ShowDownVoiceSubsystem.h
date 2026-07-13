@@ -30,7 +30,7 @@ UENUM(BlueprintType)
 enum class EShowDownSpeechBackend : uint8
 {
 	OpenAI UMETA(DisplayName = "OpenAI"),
-	LocalMeloTTS UMETA(DisplayName = "Local MeloTTS")
+	LocalESpeakNG UMETA(DisplayName = "Local eSpeak NG")
 };
 
 DECLARE_DELEGATE_TwoParams(FShowDownVoiceTextCallback, bool /*bSuccess*/, const FString& /*Text*/);
@@ -88,14 +88,6 @@ public:
 		meta = (DisplayName = "Voice Pitch", ClampMin = "0.5", ClampMax = "2.0", UIMin = "0.5", UIMax = "2.0"))
 	float TTSPlaybackPitch = 1.25f;
 
-	UPROPERTY(
-		EditAnywhere,
-		BlueprintReadWrite,
-		Config,
-		Category = "ShowDown|Voice",
-		meta = (DisplayName = "Voice Volume", ClampMin = "0.1", ClampMax = "3.0", UIMin = "0.1", UIMax = "3.0"))
-	float TTSPlaybackVolume = 1.75f;
-
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice")
 	FString TranscriptionLanguage = TEXT("ko");
 
@@ -109,13 +101,10 @@ public:
 	FString LocalTTSExecutablePath;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice|Local")
-	FString LocalTTSScriptPath;
+	FString LocalTTSDataPath;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice|Local")
-	FString LocalTTSCachePath;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice|Local")
-	FString LocalTTSLanguage = TEXT("kr");
+	FString LocalTTSVoice = TEXT("ko");
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice", meta = (ClampMin = "0.1"))
 	float MinimumRecordingSeconds = 0.25f;
