@@ -56,6 +56,12 @@ AShowDownCharacter::AShowDownCharacter()
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.TickGroup = TG_PostUpdateWork;
 	bReplicates = true;
+	// Inactive table characters are hidden and collisionless. Unreal normally
+	// drops such actors from network relevancy before their inactive state can
+	// reach joining clients, leaving the map-authored visible copy behind.
+	// There are only four fixed table characters, so always-relevant replication
+	// is cheap and keeps identity/visibility/name-tag state authoritative.
+	bAlwaysRelevant = true;
 	SetReplicateMovement(true);
 
 	GetCapsuleComponent()->InitCapsuleSize(42.0f, 96.0f);

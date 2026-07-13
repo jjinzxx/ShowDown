@@ -384,7 +384,7 @@ protected:
 	bool bVoiceTalking = false;
 
 	UPROPERTY(ReplicatedUsing = OnRep_SceneActive, BlueprintReadOnly, Category = "ShowDown|Character Visibility")
-	bool bCharacterSceneActive = true;
+	bool bCharacterSceneActive = false;
 
 	UPROPERTY(ReplicatedUsing = OnRep_BetStatusPresentation)
 	FShowDownCharacterBetStatusPresentation ReplicatedBetStatusPresentation;
