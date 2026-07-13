@@ -26,6 +26,20 @@ FSlateBrush MultiplayerFlatBlackBrush(float Alpha)
 	FSlateBrush Brush; Brush.DrawAs = ESlateBrushDrawType::Box;
 	Brush.TintColor = FSlateColor(FLinearColor(0, 0, 0, Alpha)); Brush.Margin = FMargin(0); return Brush;
 }
+FSlateBrush MultiplayerFlatBrush(const FLinearColor& Color)
+{
+	FSlateBrush Brush; Brush.DrawAs = ESlateBrushDrawType::Box;
+	Brush.TintColor = FSlateColor(Color); Brush.Margin = FMargin(0); return Brush;
+}
+FButtonStyle MultiplayerJoinButtonStyle()
+{
+	FButtonStyle Style;
+	Style.SetNormal(MultiplayerFlatBrush(FLinearColor(0.0f, 0.0f, 0.0f, 0.78f)));
+	Style.SetHovered(MultiplayerFlatBrush(FLinearColor(0.13f, 0.13f, 0.13f, 0.92f)));
+	Style.SetPressed(MultiplayerFlatBrush(FLinearColor(0.20f, 0.20f, 0.20f, 0.96f)));
+	Style.SetDisabled(MultiplayerFlatBrush(FLinearColor(0.0f, 0.0f, 0.0f, 0.36f)));
+	return Style;
+}
 const FLinearColor PanelColor(0.0f, 0.0f, 0.0f, 0.68f);
 const FLinearColor SectionColor(0.0f, 0.0f, 0.0f, 0.58f);
 const FLinearColor PrimaryButtonColor(0.0f, 0.0f, 0.0f, 0.82f);
@@ -108,7 +122,10 @@ TSharedRef<SWidget> UShowDownPublicRoomEntryWidget::RebuildWidget()
 	}
 
 	Button_Join = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), TEXT("Button_JoinPublicRoom"));
-	Button_Join->SetBackgroundColor(PrimaryButtonColor);
+	// Use fill-only brushes so the idle join button has no default Slate
+	// outline. Hover/press are still obvious through the brighter fill.
+	Button_Join->SetStyle(MultiplayerJoinButtonStyle());
+	Button_Join->SetBackgroundColor(FLinearColor::White);
 	UTextBlock* ButtonText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_JoinPublicRoom"));
 	ButtonText->SetText(FText::FromString(TEXT("로비 참가")));
 	ButtonText->SetJustification(ETextJustify::Center);

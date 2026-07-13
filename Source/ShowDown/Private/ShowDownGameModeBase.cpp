@@ -5438,13 +5438,14 @@ void AShowDownGameModeBase::RefreshNetworkPlayerSlots()
 		}
 	}
 
-	if (HasAuthority()
-		&& bMultiplayerMatchStarted
-		&& GetNetMode() != NM_Standalone
-		&& MultiplayerPlayers.Num() > 0)
+	if (HasAuthority() && GetNetMode() != NM_Standalone)
 	{
 		TArray<ASDPlayerState*> CurrentPlayers;
-		for (ASDPlayerState* Player : MultiplayerPlayers)
+		const TArray<ASDPlayerState*>& CharacterPlayers =
+			bMultiplayerMatchStarted && MultiplayerPlayers.Num() > 0
+				? MultiplayerPlayers
+				: NetworkPlayers;
+		for (ASDPlayerState* Player : CharacterPlayers)
 		{
 			CurrentPlayers.Add(Player);
 		}
@@ -7410,9 +7411,19 @@ USceneComponent* AShowDownGameModeBase::GetHandSlotForPlayerState(ASDPlayerState
 	}
 
 	const int32 PlayerIndex = MultiplayerPlayers.IndexOfByKey(Player);
-	// Multiplayer pawns are placed and rotated for their assigned seat. Their
-	// own hand component therefore remains correct for player 3/4 as well as
-	// player 1/2. Static map anchors are only a fallback for legacy layouts.
+	// Authored per-seat anchors share the same world-space table layout as the
+	// character head cameras. Prefer them when present; the replicated pawn can
+	// remain at its spawn transform while its local camera is attached to the
+	// character mesh, which otherwise sends the final hand out of view.
+	if (const ASDCardPlacementAnchor* HandAnchor = GetHandAnchorForPlayerSlot(Player->ShowDownSlot))
+	{
+		if (USceneComponent* HandSlot = HandAnchor->GetSlotComponent())
+		{
+			return HandSlot;
+		}
+	}
+
+	// Maps without authored multiplayer anchors still use the pawn-local slot.
 	for (FConstPlayerControllerIterator Iterator = GetWorld()->GetPlayerControllerIterator(); Iterator; ++Iterator)
 	{
 		const APlayerController* PlayerController = Iterator->Get();
@@ -7424,14 +7435,6 @@ USceneComponent* AShowDownGameModeBase::GetHandSlotForPlayerState(ASDPlayerState
 		if (const APlayerPawn* PlayerPawn = Cast<APlayerPawn>(PlayerController->GetPawn()))
 		{
 			return PlayerPawn->PlayerHandCard ? PlayerPawn->PlayerHandCard : PlayerPawn->GetRootComponent();
-		}
-	}
-
-	if (const ASDCardPlacementAnchor* HandAnchor = GetHandAnchorForPlayerSlot(Player->ShowDownSlot))
-	{
-		if (USceneComponent* HandSlot = HandAnchor->GetSlotComponent())
-		{
-			return HandSlot;
 		}
 	}
 
