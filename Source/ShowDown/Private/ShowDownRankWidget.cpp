@@ -5,6 +5,7 @@
 #include "Components/Button.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
+#include "Components/VerticalBoxSlot.h"
 
 void UShowDownRankWidget::NativeConstruct()
 {
@@ -143,12 +144,14 @@ void UShowDownRankWidget::PopulateLeaderboard()
 		}
 
 		Row->SetText(FText::FromString(FString::Printf(
-			TEXT("%d.  %s   %d"),
+			TEXT("%-4d        %-24s        %d"),
 			Entry.Rank,
 			*Entry.Nickname,
 			Entry.Score)));
+		Row->SetFont(FSlateFontInfo(LoadObject<UObject>(nullptr, TEXT("/Game/UI/Font/Pretendard/static/Pretendard-Regular_Font.Pretendard-Regular_Font")), 16));
+		Row->SetColorAndOpacity(FSlateColor(FLinearColor::White));
 
-		Box_Entries->AddChildToVerticalBox(Row);
+		if (UVerticalBoxSlot* RowSlot = Box_Entries->AddChildToVerticalBox(Row)) RowSlot->SetPadding(FMargin(0.0f, 5.0f));
 	}
 
 	if (SupabaseSubsystem->GetLeaderboard().Num() == 0)
@@ -158,6 +161,7 @@ void UShowDownRankWidget::PopulateLeaderboard()
 		{
 			Row->SetText(FText::FromString(TEXT("No ranking data yet.")));
 			Row->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+			Row->SetFont(FSlateFontInfo(LoadObject<UObject>(nullptr, TEXT("/Game/UI/Font/Pretendard/static/Pretendard-Regular_Font.Pretendard-Regular_Font")), 16));
 			Box_Entries->AddChildToVerticalBox(Row);
 		}
 	}

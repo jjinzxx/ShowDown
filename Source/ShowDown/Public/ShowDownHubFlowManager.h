@@ -16,6 +16,7 @@ class UShowDownMainMenuWidget;
 class UShowDownMultiplayerWidget;
 class UShowDownShopWidget;
 class UShowDownRankWidget;
+class UShowDownSettingsWidget;
 class UUserWidget;
 class AShowDownGameStateBase;
 
@@ -28,6 +29,7 @@ enum class EShowDownHubFlowScreen : uint8
 	Ranking,
 	Multiplayer,
 	Lobby,
+	Settings,
 	SinglePlayPreview
 };
 
@@ -65,6 +67,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Flow")
 	void ShowLobby();
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Flow")
+	void ShowSettings();
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Flow")
 	void ShowSinglePlayPreview();
@@ -113,6 +118,9 @@ private:
 
 	UPROPERTY(EditAnywhere, Category = "ShowDown|UI")
 	TSubclassOf<UShowDownLobbyWidget> LobbyWidgetClass;
+
+	UPROPERTY(EditAnywhere, Category = "ShowDown|UI")
+	TSubclassOf<UShowDownSettingsWidget> SettingsWidgetClass;
 
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera")
 	ACameraActor* LoginCamera;
@@ -188,10 +196,20 @@ private:
 	UShowDownLobbyWidget* LobbyWidget;
 
 	UPROPERTY()
+	UShowDownSettingsWidget* SettingsWidget;
+
+	UPROPERTY()
 	UUserWidget* ActiveWidget;
 
 	void SetActiveWidget(UUserWidget* NextWidget);
+	void BindTopNavigation(UUserWidget* Widget);
 	void SetUiOnlyInput(UUserWidget* FocusWidget);
+
+	UFUNCTION() void HandleTopNavSinglePlay();
+	UFUNCTION() void HandleTopNavMultiplayer();
+	UFUNCTION() void HandleTopNavShop();
+	UFUNCTION() void HandleTopNavRanking();
+	UFUNCTION() void HandleTopNavSettings();
 	void StartDeveloperSinglePlayPreview();
 	void ShowSinglePlayPreviewInternal(bool bAllowOnlineReward);
 	void ApplySinglePlayerVoiceSettings();
@@ -213,10 +231,10 @@ private:
 	void HandleEosLoginForMultiplayer(bool bSuccess, const FString& Message);
 
 	UFUNCTION()
-	void HandleHostMultiplayerRequested();
+	void HandleHostMultiplayerRequested(const FString& RoomName);
 
 	UFUNCTION()
-	void HandleHostPrivateMultiplayerRequested();
+	void HandleHostPrivateMultiplayerRequested(const FString& RoomName);
 
 	UFUNCTION()
 	void HandleJoinMultiplayerRequested(const FString& RoomCode);
@@ -238,6 +256,12 @@ private:
 
 	UFUNCTION()
 	void HandleLobbyStartRequested();
+
+	UFUNCTION()
+	void HandleSettingsBackRequested();
+
+	UFUNCTION()
+	void HandleSettingsQuitRequested();
 
 	UFUNCTION()
 	void HandleLobbyLeaveRequested();

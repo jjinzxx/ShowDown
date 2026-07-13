@@ -21,6 +21,8 @@ class UShowDownChatWidget;
 class UShowDownLeaveConfirmWidget;
 class UShowDownMultiRankWidget;
 class UShowDownVoiceSubsystem;
+class UShowDownPauseMenuWidget;
+class UShowDownSettingsWidget;
 
 struct FSDPrimitiveCustomDepthState
 {
@@ -167,6 +169,12 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "ShowDown|Input")
 	bool HandlesShowDownGameplayInput() const { return bHandleShowDownGameplayInput; }
 
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "ShowDown|UI")
+	bool IsGameplayChatEnabled() const { return bGameplayChatEnabled; }
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|UI")
+	void DisableGameplayChat();
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Input")
 	bool bHandleShowDownGameplayInput = true;
 
@@ -295,6 +303,12 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Multiplayer")
 	FKey LeaveMatchKey = EKeys::Escape;
+
+	UPROPERTY(EditDefaultsOnly, Category="ShowDown|Pause")
+	TSubclassOf<UShowDownPauseMenuWidget> PauseMenuWidgetClass;
+
+	UFUNCTION(BlueprintCallable, Category="ShowDown|Pause") void TogglePauseMenu();
+	UFUNCTION(BlueprintCallable, Category="ShowDown|Settings") void SetUserMouseSensitivity(float Multiplier);
 
 	UFUNCTION(Server, Reliable)
 	void ServerSubmitSelectedCard(ACard* SelectedCard);
@@ -450,6 +464,7 @@ private:
 
 	UPROPERTY()
 	UShowDownChatWidget* ChatWidget = nullptr;
+	bool bGameplayChatEnabled = false;
 
 	UPROPERTY(VisibleAnywhere, Category = "ShowDown|Input|Interactable Outline")
 	TObjectPtr<APostProcessVolume> InteractionOutlinePostProcessVolume;
@@ -462,6 +477,15 @@ private:
 
 	UPROPERTY()
 	UShowDownMultiRankWidget* MultiplayerRankWidget = nullptr;
+	UPROPERTY() UShowDownPauseMenuWidget* PauseMenuWidget = nullptr;
+	UPROPERTY() UShowDownSettingsWidget* PauseSettingsWidget = nullptr;
+	bool bPauseMenuOpen = false;
+	bool bGameplayInputBeforePause = true;
+	UFUNCTION() void ResumeFromPauseMenu();
+	UFUNCTION() void ReturnToMainMenuFromPause();
+	UFUNCTION() void OpenSettingsFromPause();
+	UFUNCTION() void ReturnToPauseFromSettings();
+	UFUNCTION() void QuitFromPauseMenu();
 
 	UPROPERTY()
 	TObjectPtr<USceneComponent> FixedCameraMouseLookTarget = nullptr;
@@ -494,6 +518,7 @@ private:
 	FRotator FixedCameraLookRotation = FRotator::ZeroRotator;
 	FVector FixedCameraBaseLocation = FVector::ZeroVector;
 	float FixedCameraLookSensitivity = 0.2f;
+	float UserMouseSensitivityMultiplier = 1.0f;
 	float FixedCameraMinPitch = -35.0f;
 	float FixedCameraMaxPitch = 35.0f;
 	float FixedCameraMinYawOffset = -45.0f;

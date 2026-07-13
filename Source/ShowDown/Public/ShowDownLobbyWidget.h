@@ -22,7 +22,7 @@ public:
 	FOnShowDownLobbyRequest OnLeaveRequested;
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Lobby")
-	void SetLobbyInfo(const FString& RoomCode, bool bIsHost);
+	void SetLobbyInfo(const FString& RoomName, const FString& RoomCode, bool bIsHost);
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Lobby")
 	void ShowStatusMessage(const FString& Message, const FLinearColor& Color);
@@ -35,26 +35,30 @@ protected:
 
 private:
 	FString CachedRoomCode;
+	FString CachedRoomName;
 	FString CachedParticipantText;
 	float ParticipantRefreshElapsed = 0.0f;
 	bool bCachedIsHost = false;
 
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
 	UTextBlock* Text_Title;
 
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
 	UTextBlock* Text_Code;
 
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
+	UTextBlock* Text_RoomName;
+
+	UPROPERTY(meta=(BindWidget))
 	UTextBlock* Text_Status;
 
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
 	UTextBlock* Text_Players;
 
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
 	UButton* Button_Start;
 
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
 	UButton* Button_Leave;
 
 	void BuildDefaultLayout();

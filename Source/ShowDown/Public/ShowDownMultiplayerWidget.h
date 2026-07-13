@@ -11,6 +11,7 @@ class UScrollBox;
 class UTextBlock;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShowDownMultiplayerRequest);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnShowDownHostRoomRequest, const FString&, RoomName);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnShowDownJoinRoomRequest, const FString&, RoomCode);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnShowDownJoinPublicRoomRequest, int32, SearchResultIndex);
 
@@ -36,6 +37,17 @@ private:
 	UPROPERTY()
 	UButton* Button_Join = nullptr;
 
+	UPROPERTY()
+	UTextBlock* Text_RoomName = nullptr;
+
+	UPROPERTY()
+	UTextBlock* Text_RoomCode = nullptr;
+
+	UPROPERTY()
+	UTextBlock* Text_PlayerCount = nullptr;
+
+	void RefreshRoomInfo();
+
 	UFUNCTION()
 	void HandleJoinClicked();
 };
@@ -47,10 +59,10 @@ class SHOWDOWN_API UShowDownMultiplayerWidget : public UUserWidget
 
 public:
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Multiplayer")
-	FOnShowDownMultiplayerRequest OnHostRequested;
+	FOnShowDownHostRoomRequest OnHostRequested;
 
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Multiplayer")
-	FOnShowDownMultiplayerRequest OnPrivateHostRequested;
+	FOnShowDownHostRoomRequest OnPrivateHostRequested;
 
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Multiplayer")
 	FOnShowDownJoinRoomRequest OnJoinRequested;
@@ -76,28 +88,31 @@ protected:
 	virtual void NativeDestruct() override;
 
 private:
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
 	UTextBlock* Text_Status;
 
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
 	UButton* Button_Host;
 
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
 	UButton* Button_PrivateHost;
 	
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
 	UButton* Button_Join;
 
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
 	UButton* Button_RefreshRooms;
 
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
 	UButton* Button_Back;
 
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
 	UEditableTextBox* EditableTextBox_RoomCode;
 
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
+	UEditableTextBox* EditableTextBox_RoomName;
+
+	UPROPERTY(meta=(BindWidget))
 	UScrollBox* ScrollBox_PublicRooms;
 
 	UPROPERTY()

@@ -1,4 +1,10 @@
 #include "ShowDownPlayerController.h"
+#include "ShowDownPauseMenuWidget.h"
+#include "ShowDownSettingsWidget.h"
+#include "ShowDownHubFlowManager.h"
+#include "Kismet/GameplayStatics.h"
+#include "Kismet/KismetSystemLibrary.h"
+#include "Misc/ConfigCacheIni.h"
 
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
@@ -146,6 +152,7 @@ namespace
 
 AShowDownPlayerController::AShowDownPlayerController()
 {
+	PrimaryActorTick.bTickEvenWhenPaused = true;
 	bShowMouseCursor = false;
 	bEnableClickEvents = false;
 	bEnableMouseOverEvents = false;
@@ -157,7 +164,7 @@ AShowDownPlayerController::AShowDownPlayerController()
 	ChatWidgetClass = UShowDownChatWidget::StaticClass();
 
 	static ConstructorHelpers::FClassFinder<UShowDownMultiRankWidget> MultiRankWidgetBlueprint(
-		TEXT("/Game/UI/WBP_MultiRank"));
+		TEXT("/Game/UI/WBP_MultiResult"));
 	if (MultiRankWidgetBlueprint.Succeeded())
 	{
 		MultiplayerRankWidgetClass = MultiRankWidgetBlueprint.Class;
@@ -166,11 +173,20 @@ AShowDownPlayerController::AShowDownPlayerController()
 	{
 		MultiplayerRankWidgetClass = UShowDownMultiRankWidget::StaticClass();
 	}
+
+	static ConstructorHelpers::FClassFinder<UShowDownPauseMenuWidget> PauseMenuWidgetBlueprint(
+		TEXT("/Game/UI/WBP_PauseMenu"));
+	if (PauseMenuWidgetBlueprint.Succeeded())
+	{
+		PauseMenuWidgetClass = PauseMenuWidgetBlueprint.Class;
+	}
 }
 
 void AShowDownPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
+	GConfig->GetFloat(TEXT("ShowDown.UserSettings"), TEXT("MouseSensitivity"), UserMouseSensitivityMultiplier, GGameUserSettingsIni);
+	UserMouseSensitivityMultiplier = FMath::Clamp(UserMouseSensitivityMultiplier, 0.2f, 2.0f);
 
 	if (!Player)
 	{
@@ -182,7 +198,6 @@ void AShowDownPlayerController::BeginPlay()
 	bEnableClickEvents = false;
 	bEnableMouseOverEvents = false;
 	InitializeFromPossessedPawn();
-	EnsureChatWidget();
 	InitializeInteractableOutlinePostProcess();
 	CreateCenterCrosshairWidget();
 	UpdateCenterCrosshairVisibility();
@@ -238,6 +253,7 @@ void AShowDownPlayerController::OnPossess(APawn* InPawn)
 
 void AShowDownPlayerController::ClientEnterMultiplayerGameplay_Implementation()
 {
+	bGameplayChatEnabled = true;
 	if (UShowDownEosSubsystem* EosSubsystem = GetGameInstance()
 		? GetGameInstance()->GetSubsystem<UShowDownEosSubsystem>()
 		: nullptr)
@@ -273,6 +289,11 @@ void AShowDownPlayerController::ClientEnterMultiplayerGameplay_Implementation()
 
 void AShowDownPlayerController::ClientSetInitialCardDealInputLocked_Implementation(bool bLocked)
 {
+	if (!bGameplayChatEnabled)
+	{
+		bGameplayChatEnabled = true;
+		EnsureChatWidget();
+	}
 	bInitialCardDealInputLocked = bLocked;
 	if (bLocked)
 	{
@@ -533,6 +554,15 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 		UpdateCharacterPlayerCamera(DeltaTime);
 	}
 
+	if (WasInputKeyJustPressed(LeaveMatchKey)
+		&& (bHandleShowDownGameplayInput || bPauseMenuOpen)
+		&& !bChatOpen
+		&& (!LeaveConfirmWidget || LeaveConfirmWidget->GetVisibility() != ESlateVisibility::Visible))
+	{
+		TogglePauseMenu();
+		return;
+	}
+
 	if (!bHandleShowDownGameplayInput)
 	{
 		CancelPressedBetActionButton();
@@ -582,13 +612,6 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 	}
 
 	HandleVoicePushToTalkInput();
-
-	if (WasInputKeyJustPressed(LeaveMatchKey))
-	{
-		CancelPressedBetActionButton();
-		RequestLeaveMultiplayerMatch();
-		return;
-	}
 
 	if (bEnablePrimaryClickTrace)
 	{
@@ -1821,10 +1844,10 @@ void AShowDownPlayerController::ApplyPawnCameraInput(float YawInput, float Pitch
 
 	const float PitchSign = bInvertPawnCameraMouseY ? 1.0f : -1.0f;
 	const float NewPitch = FMath::Clamp(
-		CurrentPitch + PitchInput * LookSensitivity * PitchSign,
+		CurrentPitch + PitchInput * LookSensitivity * UserMouseSensitivityMultiplier * PitchSign,
 		PawnCameraBaseRotation.Pitch + MinPitch,
 		PawnCameraBaseRotation.Pitch + MaxPitch);
-	const float NewYawOffset = FMath::Clamp(CurrentYawOffset + YawInput * LookSensitivity, MinYaw, MaxYaw);
+	const float NewYawOffset = FMath::Clamp(CurrentYawOffset + YawInput * LookSensitivity * UserMouseSensitivityMultiplier, MinYaw, MaxYaw);
 	const float NewYaw = PawnCameraBaseRotation.Yaw + NewYawOffset;
 
 	SetControlRotation(FRotator(NewPitch, NewYaw, 0.0f));
@@ -2017,7 +2040,7 @@ void AShowDownPlayerController::UpdateFixedCameraMouseLook(float DeltaTime)
 	GetInputMouseDelta(MouseDeltaX, MouseDeltaY);
 	if (!FMath::IsNearlyZero(MouseDeltaX) || !FMath::IsNearlyZero(MouseDeltaY))
 	{
-		FixedCameraLookRotation.Yaw += MouseDeltaX * FixedCameraLookSensitivity;
+		FixedCameraLookRotation.Yaw += MouseDeltaX * FixedCameraLookSensitivity * UserMouseSensitivityMultiplier;
 
 		const float RelativeYaw = FRotator::NormalizeAxis(FixedCameraLookRotation.Yaw - FixedCameraBaseRotation.Yaw);
 		const float ClampedRelativeYaw = FMath::Clamp(RelativeYaw, FixedCameraMinYawOffset, FixedCameraMaxYawOffset);
@@ -2026,7 +2049,7 @@ void AShowDownPlayerController::UpdateFixedCameraMouseLook(float DeltaTime)
 		const float PitchInputSign = bFixedCameraInvertMouseY ? 1.0f : -1.0f;
 		const float CurrentPitch = FRotator::NormalizeAxis(FixedCameraLookRotation.Pitch);
 		FixedCameraLookRotation.Pitch = FMath::Clamp(
-			CurrentPitch + MouseDeltaY * FixedCameraLookSensitivity * PitchInputSign,
+			CurrentPitch + MouseDeltaY * FixedCameraLookSensitivity * UserMouseSensitivityMultiplier * PitchInputSign,
 			FixedCameraMinPitch,
 			FixedCameraMaxPitch);
 		FixedCameraLookRotation.Roll = 0.0f;
@@ -2305,7 +2328,7 @@ void AShowDownPlayerController::HandleVoicePushToTalkInput()
 
 void AShowDownPlayerController::EnsureChatWidget()
 {
-	if (ChatWidget)
+	if (!bGameplayChatEnabled || ChatWidget)
 	{
 		return;
 	}
@@ -2328,6 +2351,17 @@ void AShowDownPlayerController::EnsureChatWidget()
 	ChatWidget->AddToViewport();
 	ChatWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
 	ChatWidget->SetChatInputOpen(false);
+}
+
+void AShowDownPlayerController::DisableGameplayChat()
+{
+	bGameplayChatEnabled = false;
+	bChatOpen = false;
+	if (ChatWidget)
+	{
+		ChatWidget->RemoveFromParent();
+		ChatWidget = nullptr;
+	}
 }
 
 void AShowDownPlayerController::EnsureLeaveConfirmWidget()
@@ -2788,6 +2822,11 @@ void AShowDownPlayerController::ServerUpdateCharacterHeadLookRotation_Implementa
 
 void AShowDownPlayerController::ClientShowMultiplayerRank_Implementation(const TArray<FString>& PlayerNames)
 {
+	bGameplayChatEnabled = false;
+	if (bPauseMenuOpen)
+	{
+		ResumeFromPauseMenu();
+	}
 	RemoveCenterCrosshairWidget();
 	if (ChatWidget)
 	{
@@ -2821,6 +2860,7 @@ void AShowDownPlayerController::ClientShowMultiplayerRank_Implementation(const T
 	MultiplayerRankWidget->OnMainMenuRequested.AddDynamic(this, &AShowDownPlayerController::HandleMultiRankMainMenuRequested);
 	MultiplayerRankWidget->SetRanking(PlayerNames);
 	MultiplayerRankWidget->AddToViewport(100);
+	MultiplayerRankWidget->SetIsFocusable(true);
 
 	FInputModeUIOnly InputMode;
 	InputMode.SetWidgetToFocus(MultiplayerRankWidget->TakeWidget());
@@ -2846,3 +2886,72 @@ void AShowDownPlayerController::HandleMultiRankMainMenuRequested()
 {
 	ConfirmLeaveMultiplayerMatch();
 }
+void AShowDownPlayerController::TogglePauseMenu()
+{
+	if (bPauseMenuOpen) { ResumeFromPauseMenu(); return; }
+	if (!PauseMenuWidgetClass) PauseMenuWidgetClass = LoadClass<UShowDownPauseMenuWidget>(nullptr, TEXT("/Game/UI/WBP_PauseMenu.WBP_PauseMenu_C"));
+	if (!PauseMenuWidgetClass) return;
+	PauseMenuWidget = CreateWidget<UShowDownPauseMenuWidget>(this, PauseMenuWidgetClass);
+	if (!PauseMenuWidget) return;
+	PauseMenuWidget->OnResume.AddUniqueDynamic(this,&AShowDownPlayerController::ResumeFromPauseMenu);
+	PauseMenuWidget->OnMainMenu.AddUniqueDynamic(this,&AShowDownPlayerController::ReturnToMainMenuFromPause);
+	PauseMenuWidget->OnSettings.AddUniqueDynamic(this,&AShowDownPlayerController::OpenSettingsFromPause);
+	PauseMenuWidget->OnQuit.AddUniqueDynamic(this,&AShowDownPlayerController::QuitFromPauseMenu);
+	PauseMenuWidget->AddToViewport(100);
+	PauseMenuWidget->SetIsFocusable(true);
+	bPauseMenuOpen=true; bGameplayInputBeforePause=bHandleShowDownGameplayInput; bHandleShowDownGameplayInput=false;
+	bShowMouseCursor=true; FInputModeUIOnly Mode; Mode.SetWidgetToFocus(PauseMenuWidget->TakeWidget()); SetInputMode(Mode);
+	if (GetWorld() && GetWorld()->GetNetMode()==NM_Standalone) UGameplayStatics::SetGamePaused(this,true);
+}
+
+void AShowDownPlayerController::SetUserMouseSensitivity(float Multiplier)
+{
+	UserMouseSensitivityMultiplier = FMath::Clamp(Multiplier, 0.2f, 2.0f);
+}
+
+void AShowDownPlayerController::ResumeFromPauseMenu()
+{
+	if(PauseSettingsWidget){PauseSettingsWidget->RemoveFromParent();PauseSettingsWidget=nullptr;}
+	if(PauseMenuWidget){PauseMenuWidget->RemoveFromParent();PauseMenuWidget=nullptr;}
+	if(GetWorld()&&GetWorld()->GetNetMode()==NM_Standalone) UGameplayStatics::SetGamePaused(this,false);
+	bPauseMenuOpen=false;bHandleShowDownGameplayInput=bGameplayInputBeforePause;bShowMouseCursor=false;SetInputMode(FInputModeGameOnly());
+}
+
+void AShowDownPlayerController::ReturnToMainMenuFromPause()
+{
+	if(GetWorld()&&GetWorld()->GetNetMode()!=NM_Standalone){ResumeFromPauseMenu();RequestLeaveMultiplayerMatch();return;}
+	ResumeFromPauseMenu();
+	DisableGameplayChat();
+	TArray<AActor*> Managers; UGameplayStatics::GetAllActorsOfClass(this,AShowDownHubFlowManager::StaticClass(),Managers);
+	if(Managers.Num()>0) CastChecked<AShowDownHubFlowManager>(Managers[0])->ShowMainMenu();
+}
+
+void AShowDownPlayerController::OpenSettingsFromPause()
+{
+	if(!PauseMenuWidget || PauseSettingsWidget)return;
+	UClass* SettingsClass=LoadClass<UShowDownSettingsWidget>(nullptr,TEXT("/Game/UI/WBP_Settings.WBP_Settings_C"));
+	PauseSettingsWidget=SettingsClass?CreateWidget<UShowDownSettingsWidget>(this,SettingsClass):nullptr;
+	if(PauseSettingsWidget)
+	{
+		PauseMenuWidget->SetVisibility(ESlateVisibility::Collapsed);
+		PauseSettingsWidget->OnBackRequested.AddUniqueDynamic(this,&AShowDownPlayerController::ReturnToPauseFromSettings);
+		PauseSettingsWidget->OnQuitRequested.AddUniqueDynamic(this,&AShowDownPlayerController::QuitFromPauseMenu);
+		PauseSettingsWidget->AddToViewport(101);
+		PauseSettingsWidget->SetIsFocusable(true);
+		FInputModeUIOnly Mode;
+		Mode.SetWidgetToFocus(PauseSettingsWidget->TakeWidget());
+		SetInputMode(Mode);
+	}
+}
+void AShowDownPlayerController::ReturnToPauseFromSettings()
+{
+	if(PauseSettingsWidget){PauseSettingsWidget->RemoveFromParent();PauseSettingsWidget=nullptr;}
+	if(PauseMenuWidget)
+	{
+		PauseMenuWidget->SetVisibility(ESlateVisibility::Visible);
+		FInputModeUIOnly Mode;
+		Mode.SetWidgetToFocus(PauseMenuWidget->TakeWidget());
+		SetInputMode(Mode);
+	}
+}
+void AShowDownPlayerController::QuitFromPauseMenu(){UKismetSystemLibrary::QuitGame(this,this,EQuitPreference::Quit,false);}

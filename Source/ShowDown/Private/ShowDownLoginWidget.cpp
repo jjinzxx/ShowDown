@@ -4,8 +4,16 @@
 #include "Components/Button.h"
 #include "Components/EditableTextBox.h"
 #include "Components/TextBlock.h"
+#include "Components/Border.h"
+#include "Components/CanvasPanel.h"
+#include "Components/CanvasPanelSlot.h"
+#include "Components/HorizontalBox.h"
+#include "Components/HorizontalBoxSlot.h"
+#include "Components/VerticalBox.h"
+#include "Components/VerticalBoxSlot.h"
 #include "Engine/GameInstance.h"
 #include "ShowDownMainMenuWidget.h"
+#include "Blueprint/WidgetTree.h"
 
 void UShowDownLoginWidget::SetUseLegacyNavigation(bool bInUseLegacyNavigation)
 {
@@ -39,6 +47,107 @@ void UShowDownLoginWidget::NativeConstruct()
 		Text_Status->SetText(FText::FromString(TEXT("Ready")));
 		Text_Status->SetColorAndOpacity(FSlateColor(FLinearColor::White));
 	}
+}
+
+void UShowDownLoginWidget::BuildFigmaLayout()
+{
+	if (!WidgetTree)
+	{
+		return;
+	}
+
+	const FLinearColor Ink(0.92f, 0.95f, 0.96f, 1.0f);
+	const FLinearColor MutedInk(0.70f, 0.75f, 0.77f, 1.0f);
+	const FLinearColor PanelColor(0.015f, 0.025f, 0.03f, 0.78f);
+	const FLinearColor FieldColor(0.08f, 0.10f, 0.11f, 0.92f);
+	const FLinearColor Accent(0.12f, 0.68f, 0.78f, 1.0f);
+
+	UCanvasPanel* Root = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("FigmaLoginRoot"));
+	WidgetTree->RootWidget = Root;
+
+	UBorder* Panel = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("LoginGlassPanel"));
+	Panel->SetBrushColor(PanelColor);
+	Panel->SetPadding(FMargin(34.0f, 30.0f));
+	UCanvasPanelSlot* PanelSlot = Root->AddChildToCanvas(Panel);
+	PanelSlot->SetAnchors(FAnchors(0.18f, 0.50f));
+	PanelSlot->SetAlignment(FVector2D(0.5f, 0.5f));
+	PanelSlot->SetSize(FVector2D(500.0f, 430.0f));
+
+	UVerticalBox* Stack = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("LoginStack"));
+	Panel->SetContent(Stack);
+
+	UBorder* BrandPlate = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("BrandPlate"));
+	BrandPlate->SetBrushColor(FLinearColor(0.01f, 0.02f, 0.025f, 0.55f));
+	UTextBlock* Brand = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_Brand"));
+	Brand->SetText(FText::FromString(TEXT("SHOWDOWN")));
+	Brand->SetColorAndOpacity(FSlateColor(Ink));
+	Brand->SetJustification(ETextJustify::Center);
+	FSlateFontInfo BrandFont = Brand->GetFont();
+	BrandFont.Size = 38;
+	Brand->SetFont(BrandFont);
+	BrandPlate->SetContent(Brand);
+	UVerticalBoxSlot* BrandSlot = Stack->AddChildToVerticalBox(BrandPlate);
+	BrandSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 28.0f));
+	BrandSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+
+	auto AddInputRow = [&](const TCHAR* LabelText, const TCHAR* WidgetName, bool bPassword) -> UEditableTextBox*
+	{
+		UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>();
+		UTextBlock* Label = WidgetTree->ConstructWidget<UTextBlock>();
+		Label->SetText(FText::FromString(LabelText));
+		Label->SetColorAndOpacity(FSlateColor(MutedInk));
+		FSlateFontInfo LabelFont = Label->GetFont();
+		LabelFont.Size = 17;
+		Label->SetFont(LabelFont);
+		UHorizontalBoxSlot* LabelSlot = Row->AddChildToHorizontalBox(Label);
+		LabelSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		LabelSlot->SetHorizontalAlignment(HAlign_Right);
+		LabelSlot->SetVerticalAlignment(VAlign_Center);
+		LabelSlot->SetPadding(FMargin(0.0f, 0.0f, 14.0f, 0.0f));
+
+		UBorder* FieldBackground = WidgetTree->ConstructWidget<UBorder>();
+		FieldBackground->SetBrushColor(FieldColor);
+		FieldBackground->SetPadding(FMargin(10.0f, 4.0f));
+		UEditableTextBox* Field = WidgetTree->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass(), WidgetName);
+		Field->SetHintText(FText::FromString(bPassword ? TEXT("Password") : TEXT("ID")));
+		Field->SetIsPassword(bPassword);
+		Field->SetForegroundColor(Ink);
+		Field->SetMinDesiredWidth(300.0f);
+		FieldBackground->SetContent(Field);
+		UHorizontalBoxSlot* FieldSlot = Row->AddChildToHorizontalBox(FieldBackground);
+		FieldSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		FieldSlot->SetVerticalAlignment(VAlign_Fill);
+
+		UVerticalBoxSlot* RowSlot = Stack->AddChildToVerticalBox(Row);
+		RowSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 12.0f));
+		RowSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
+		return Field;
+	};
+
+	EditableTextBox_Id = AddInputRow(TEXT("ID"), TEXT("EditableTextBox_Id"), false);
+	EditableTextBox_Password = AddInputRow(TEXT("Password"), TEXT("EditableTextBox_Password"), true);
+
+	Button_Login = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), TEXT("Button_Login"));
+	Button_Login->SetBackgroundColor(Accent);
+	UTextBlock* LoginLabel = WidgetTree->ConstructWidget<UTextBlock>();
+	LoginLabel->SetText(FText::FromString(TEXT("LOGIN")));
+	LoginLabel->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+	LoginLabel->SetJustification(ETextJustify::Center);
+	FSlateFontInfo LoginFont = LoginLabel->GetFont();
+	LoginFont.Size = 16;
+	LoginLabel->SetFont(LoginFont);
+	Button_Login->AddChild(LoginLabel);
+	UVerticalBoxSlot* ButtonSlot = Stack->AddChildToVerticalBox(Button_Login);
+	ButtonSlot->SetPadding(FMargin(130.0f, 8.0f, 0.0f, 0.0f));
+	ButtonSlot->SetHorizontalAlignment(HAlign_Fill);
+	ButtonSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
+
+	Text_Status = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_Status"));
+	Text_Status->SetColorAndOpacity(FSlateColor(MutedInk));
+	Text_Status->SetJustification(ETextJustify::Center);
+	UVerticalBoxSlot* StatusSlot = Stack->AddChildToVerticalBox(Text_Status);
+	StatusSlot->SetPadding(FMargin(0.0f, 14.0f, 0.0f, 0.0f));
+	StatusSlot->SetHorizontalAlignment(HAlign_Fill);
 }
 
 void UShowDownLoginWidget::NativeDestruct()

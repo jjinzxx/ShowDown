@@ -373,17 +373,17 @@ void UShowDownEosSubsystem::HostSession(FName MapName)
 	}
 }
 
-void UShowDownEosSubsystem::HostLobby(FName LobbyMapName, FName GameMapName)
+void UShowDownEosSubsystem::HostLobby(FName LobbyMapName, FName GameMapName, const FString& RoomName)
 {
-	HostLobbyWithVisibility(LobbyMapName, GameMapName, true);
+	HostLobbyWithVisibility(LobbyMapName, GameMapName, true, RoomName);
 }
 
-void UShowDownEosSubsystem::HostPrivateLobby(FName LobbyMapName, FName GameMapName)
+void UShowDownEosSubsystem::HostPrivateLobby(FName LobbyMapName, FName GameMapName, const FString& RoomName)
 {
-	HostLobbyWithVisibility(LobbyMapName, GameMapName, false);
+	HostLobbyWithVisibility(LobbyMapName, GameMapName, false, RoomName);
 }
 
-void UShowDownEosSubsystem::HostLobbyWithVisibility(FName LobbyMapName, FName GameMapName, bool bPublicRoom)
+void UShowDownEosSubsystem::HostLobbyWithVisibility(FName LobbyMapName, FName GameMapName, bool bPublicRoom, const FString& RequestedRoomName)
 {
 	if (!IsEosLoggedIn())
 	{
@@ -410,6 +410,7 @@ void UShowDownEosSubsystem::HostLobbyWithVisibility(FName LobbyMapName, FName Ga
 		PendingHostMapName = LobbyMapName.IsNone() ? FName(TEXT("L_MultiplayerLobby")) : LobbyMapName;
 		PendingGameMapName = GameMapName.IsNone() ? FName(TEXT("L_MultiplayerGame")) : GameMapName;
 		bPendingLobbyIsPublic = bPublicRoom;
+		PendingHostRoomName = RequestedRoomName;
 		PendingJoinCode.Empty();
 		LobbyCode.Empty();
 		bLobbyHost = false;
@@ -440,7 +441,8 @@ void UShowDownEosSubsystem::HostLobbyWithVisibility(FName LobbyMapName, FName Ga
 	USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
 		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
 		: nullptr;
-	const FString RoomName = MakeDefaultRoomName(SupabaseSubsystem, LobbyCode);
+	const FString RoomName = RequestedRoomName.TrimStartAndEnd().IsEmpty() ? MakeDefaultRoomName(SupabaseSubsystem, LobbyCode) : RequestedRoomName.TrimStartAndEnd();
+	LobbyRoomName = RoomName;
 	PendingJoinCode.Empty();
 	bLobbyHost = true;
 	bInMultiplayerLobby = true;
@@ -508,6 +510,10 @@ void UShowDownEosSubsystem::JoinLobbyByCode(const FString& RoomCode)
 		OnSessionResult.Broadcast(false, TEXT("Enter a room code."));
 		return;
 	}
+
+	// A code join may follow a previous lobby in the same session. Clear the
+	// displayed name until the matching search result supplies the real value.
+	LobbyRoomName.Empty();
 
 	const IOnlineSessionPtr SessionInterface = GetSessionInterface();
 	if (!SessionInterface.IsValid())
@@ -643,6 +649,7 @@ void UShowDownEosSubsystem::JoinPublicLobbyByIndex(int32 SearchResultIndex)
 
 	FString RoomCodeToJoin;
 	PublicLobbySearchResults[SearchResultIndex].Session.SessionSettings.Get(ShowDownRoomCodeKey, RoomCodeToJoin);
+	PublicLobbySearchResults[SearchResultIndex].Session.SessionSettings.Get(ShowDownRoomNameKey, LobbyRoomName);
 	if (RoomCodeToJoin.IsEmpty())
 	{
 		OnSessionResult.Broadcast(false, TEXT("선택한 공개방의 방 코드가 비어 있습니다."));
@@ -1166,6 +1173,9 @@ void UShowDownEosSubsystem::HandleFindSessionsComplete(bool bWasSuccessful)
 				SessionSearch->SearchResults[Index].Session.SessionSettings.Get(ShowDownRoomCodeKey, FoundCode);
 				if (FoundCode.Equals(PendingJoinCode, ESearchCase::IgnoreCase))
 				{
+					SessionSearch->SearchResults[Index].Session.SessionSettings.Get(
+						ShowDownRoomNameKey,
+						LobbyRoomName);
 					MatchIndex = Index;
 					break;
 				}
@@ -1406,7 +1416,7 @@ void UShowDownEosSubsystem::HandleDestroySessionComplete(FName SessionName, bool
 			return;
 		}
 
-		HostLobbyWithVisibility(LobbyMapName, GameMapName, bPendingLobbyIsPublic);
+		HostLobbyWithVisibility(LobbyMapName, GameMapName, bPendingLobbyIsPublic, PendingHostRoomName);
 		return;
 	}
 

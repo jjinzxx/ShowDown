@@ -12,6 +12,14 @@
 #include "Components/VerticalBoxSlot.h"
 #include "Styling/CoreStyle.h"
 
+namespace
+{
+UObject* PretendardRegularFont()
+{
+	return LoadObject<UObject>(nullptr, TEXT("/Game/UI/Font/Pretendard/static/Pretendard-Regular_Font.Pretendard-Regular_Font"));
+}
+}
+
 void UShowDownMultiRankWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
@@ -107,7 +115,7 @@ void UShowDownMultiRankWidget::BuildDefaultLayout()
 	Text_Title->SetText(FText::FromString(TEXT("결과 발표")));
 	Text_Title->SetColorAndOpacity(FSlateColor(FLinearColor::White));
 	Text_Title->SetJustification(ETextJustify::Center);
-	Text_Title->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), 52));
+	Text_Title->SetFont(FSlateFontInfo(PretendardRegularFont(), 52));
 	if (UVerticalBoxSlot* TitleSlot = RootBox->AddChildToVerticalBox(Text_Title))
 	{
 		TitleSlot->SetPadding(FMargin(0.0f, 58.0f, 0.0f, 68.0f));
@@ -128,7 +136,7 @@ void UShowDownMultiRankWidget::BuildDefaultLayout()
 	Text_RestartStatus->SetText(FText::GetEmpty());
 	Text_RestartStatus->SetColorAndOpacity(FSlateColor(FLinearColor(0.0f, 1.0f, 0.18f, 1.0f)));
 	Text_RestartStatus->SetJustification(ETextJustify::Center);
-	Text_RestartStatus->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), 22));
+	Text_RestartStatus->SetFont(FSlateFontInfo(PretendardRegularFont(), 22));
 	if (UVerticalBoxSlot* StatusSlot = RootBox->AddChildToVerticalBox(Text_RestartStatus))
 	{
 		StatusSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 18.0f));
@@ -175,9 +183,7 @@ void UShowDownMultiRankWidget::RefreshRanking()
 
 	for (int32 Index = 0; Index < CachedPlayerNames.Num(); ++Index)
 	{
-		const FString RankLabel = Index == 0
-			? TEXT("승자")
-			: FString::Printf(TEXT("%d등"), Index + 1);
+		const FString RankLabel = FString::Printf(TEXT("%d등"), Index + 1);
 		const FString PlayerName = CachedPlayerNames[Index].IsEmpty() ? TEXT("Unknown") : CachedPlayerNames[Index];
 
 		UHorizontalBox* RankRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
@@ -186,10 +192,10 @@ void UShowDownMultiRankWidget::RefreshRanking()
 		RankLabelText->SetText(FText::FromString(RankLabel));
 		RankLabelText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
 		RankLabelText->SetJustification(ETextJustify::Right);
-		RankLabelText->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), Index == 0 ? 44 : 38));
+		RankLabelText->SetFont(FSlateFontInfo(PretendardRegularFont(), 28));
 		if (UHorizontalBoxSlot* LabelSlot = RankRow->AddChildToHorizontalBox(RankLabelText))
 		{
-			LabelSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+			LabelSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
 			LabelSlot->SetHorizontalAlignment(HAlign_Fill);
 			LabelSlot->SetVerticalAlignment(VAlign_Center);
 		}
@@ -198,10 +204,10 @@ void UShowDownMultiRankWidget::RefreshRanking()
 		PlayerNameText->SetText(FText::FromString(PlayerName));
 		PlayerNameText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
 		PlayerNameText->SetJustification(ETextJustify::Left);
-		PlayerNameText->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), Index == 0 ? 44 : 38));
+		PlayerNameText->SetFont(FSlateFontInfo(PretendardRegularFont(), 28));
 		if (UHorizontalBoxSlot* NameSlot = RankRow->AddChildToHorizontalBox(PlayerNameText))
 		{
-			NameSlot->SetPadding(FMargin(72.0f, 0.0f, 0.0f, 0.0f));
+			NameSlot->SetPadding(FMargin(42.0f, 0.0f, 0.0f, 0.0f));
 			NameSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 			NameSlot->SetHorizontalAlignment(HAlign_Fill);
 			NameSlot->SetVerticalAlignment(VAlign_Center);
@@ -209,7 +215,7 @@ void UShowDownMultiRankWidget::RefreshRanking()
 
 		if (UVerticalBoxSlot* RankSlot = VerticalBox_RankList->AddChildToVerticalBox(RankRow))
 		{
-			RankSlot->SetPadding(FMargin(0.0f, 6.0f, 0.0f, 16.0f));
+			RankSlot->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 10.0f));
 			RankSlot->SetHorizontalAlignment(HAlign_Fill);
 		}
 	}
@@ -236,7 +242,7 @@ UButton* UShowDownMultiRankWidget::CreateMenuButton(const FName& WidgetName, con
 	ButtonText->SetText(FText::FromString(LabelText));
 	ButtonText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
 	ButtonText->SetJustification(ETextJustify::Center);
-	ButtonText->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), 30));
+	ButtonText->SetFont(FSlateFontInfo(PretendardRegularFont(), 30));
 	Button->SetContent(ButtonText);
 
 	return Button;

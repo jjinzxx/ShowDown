@@ -86,10 +86,10 @@ public:
 	void FindAndJoinFirstSession();
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|EOS")
-	void HostLobby(FName LobbyMapName = TEXT("L_MultiplayerLobby"), FName GameMapName = TEXT("L_MultiplayerGame"));
+	void HostLobby(FName LobbyMapName = TEXT("L_MultiplayerLobby"), FName GameMapName = TEXT("L_MultiplayerGame"), const FString& RoomName = TEXT(""));
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|EOS")
-	void HostPrivateLobby(FName LobbyMapName = TEXT("L_MultiplayerLobby"), FName GameMapName = TEXT("L_MultiplayerGame"));
+	void HostPrivateLobby(FName LobbyMapName = TEXT("L_MultiplayerLobby"), FName GameMapName = TEXT("L_MultiplayerGame"), const FString& RoomName = TEXT(""));
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|EOS")
 	void JoinLobbyByCode(const FString& RoomCode);
@@ -124,6 +124,7 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|EOS")
 	FString GetLobbyCode() const;
+	FString GetLobbyRoomName() const { return LobbyRoomName; }
 
 	int32 GetExpectedLobbyPlayerCount() const { return ExpectedLobbyPlayerCount; }
 
@@ -158,9 +159,11 @@ private:
 	TArray<FOnlineSessionSearchResult> PublicLobbySearchResults;
 	FTimerHandle LobbyStartPollTimerHandle;
 	FName PendingHostMapName = TEXT("L_MultiplayerLobby");
+	FString PendingHostRoomName;
 	FName PendingGameMapName = TEXT("L_MultiplayerGame");
 	FString PendingJoinCode;
 	FString LobbyCode;
+	FString LobbyRoomName;
 	int32 ExpectedLobbyPlayerCount = 4;
 	ESessionFlow PendingSessionFlow = ESessionFlow::None;
 	bool bLobbyStartPollInFlight = false;
@@ -187,7 +190,7 @@ private:
 	void TravelHostedGame();
 	void CompleteLobbyLeave(bool bSessionDestroyed);
 	bool TravelToSearchResult(const FOnlineSessionSearchResult& SearchResult, const FString& StatusMessage);
-	void HostLobbyWithVisibility(FName LobbyMapName, FName GameMapName, bool bPublicRoom);
+	void HostLobbyWithVisibility(FName LobbyMapName, FName GameMapName, bool bPublicRoom, const FString& RoomName);
 	void ClearOnlineDelegateHandles();
 	void ClearTransientSearchState(bool bClearPublicRooms);
 	void UnbindVoiceChat();

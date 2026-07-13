@@ -18,6 +18,7 @@
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
 #include "Layout/Clipping.h"
+#include "Misc/ConfigCacheIni.h"
 #include "PlayerPawn.h"
 #include "ShowDownPlayerController.h"
 #include "ShowDownGameStateBase.h"
@@ -116,7 +117,7 @@ void UShowDownChatWidget::AppendChatLine(const FString& Speaker, const FString& 
 		ChatHistory += TEXT("\n");
 	}
 
-	ChatHistory += FString::Printf(TEXT("%s: %s"), *Speaker, *TrimmedMessage);
+	ChatHistory += FString::Printf(TEXT("%s: %s"), *ResolveDisplaySpeakerName(Speaker), *TrimmedMessage);
 	if (Text_ChatHistory)
 	{
 		Text_ChatHistory->SetText(FText::FromString(ChatHistory));
@@ -563,7 +564,14 @@ FString UShowDownChatWidget::ResolveDisplaySpeakerName(const FString& Speaker) c
 	}
 	if (TrimmedSpeaker.Equals(TEXT("Collector"), ESearchCase::IgnoreCase))
 	{
-		return TEXT("김윤아");
+		FString OpponentDisplayName = TEXT("상대");
+		GConfig->GetString(
+			TEXT("ShowDown.UserSettings"),
+			TEXT("CharacterName"),
+			OpponentDisplayName,
+			GGameUserSettingsIni);
+		OpponentDisplayName = OpponentDisplayName.TrimStartAndEnd();
+		return OpponentDisplayName.IsEmpty() ? TEXT("상대") : OpponentDisplayName.Left(32);
 	}
 
 	return TrimmedSpeaker.IsEmpty() ? TEXT("Player") : TrimmedSpeaker.Left(32);

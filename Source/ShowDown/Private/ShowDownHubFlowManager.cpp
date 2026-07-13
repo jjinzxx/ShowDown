@@ -3,6 +3,7 @@
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Blueprint/UserWidget.h"
+#include "Components/Button.h"
 #include "Engine/GameInstance.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
@@ -20,15 +21,24 @@
 #include "ShowDownPlayerController.h"
 #include "ShowDownRankWidget.h"
 #include "ShowDownShopWidget.h"
+#include "ShowDownSettingsWidget.h"
 #include "ShowDownVoiceSubsystem.h"
 #include "SupabaseSubsystem.h"
+#include "UObject/ConstructorHelpers.h"
 
 AShowDownHubFlowManager::AShowDownHubFlowManager()
 {
 	PrimaryActorTick.bCanEverTick = false;
 	ShopWidgetClass = UShowDownShopWidget::StaticClass();
+	static ConstructorHelpers::FClassFinder<UShowDownMultiplayerWidget> MultiplayerWidgetBlueprint(TEXT("/Game/UI/WBP_Multiplayer"));
 	MultiplayerWidgetClass = UShowDownMultiplayerWidget::StaticClass();
+	if (MultiplayerWidgetBlueprint.Succeeded()) MultiplayerWidgetClass = MultiplayerWidgetBlueprint.Class;
+	static ConstructorHelpers::FClassFinder<UShowDownLobbyWidget> LobbyWidgetBlueprint(TEXT("/Game/UI/WBP_Lobby"));
 	LobbyWidgetClass = UShowDownLobbyWidget::StaticClass();
+	if (LobbyWidgetBlueprint.Succeeded()) LobbyWidgetClass = LobbyWidgetBlueprint.Class;
+	static ConstructorHelpers::FClassFinder<UShowDownSettingsWidget> SettingsWidgetBlueprint(TEXT("/Game/UI/WBP_Settings"));
+	SettingsWidgetClass = UShowDownSettingsWidget::StaticClass();
+	if (SettingsWidgetBlueprint.Succeeded()) SettingsWidgetClass = SettingsWidgetBlueprint.Class;
 }
 
 void AShowDownHubFlowManager::BeginPlay()
@@ -133,12 +143,17 @@ void AShowDownHubFlowManager::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	RankWidget = nullptr;
 	MultiplayerWidget = nullptr;
 	LobbyWidget = nullptr;
+	SettingsWidget = nullptr;
 
 	Super::EndPlay(EndPlayReason);
 }
 
 void AShowDownHubFlowManager::ShowLogin()
 {
+	if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(GetPrimaryPlayerController()))
+	{
+		PlayerController->DisableGameplayChat();
+	}
 	PlayCamera(LoginCamera);
 
 	if (!LoginWidgetClass)
@@ -168,6 +183,10 @@ void AShowDownHubFlowManager::ShowLogin()
 
 void AShowDownHubFlowManager::ShowMainMenu()
 {
+	if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(GetPrimaryPlayerController()))
+	{
+		PlayerController->DisableGameplayChat();
+	}
 	PlayCamera(MainMenuCamera);
 
 	if (!MainMenuWidgetClass)
@@ -332,7 +351,7 @@ void AShowDownHubFlowManager::ShowLobby()
 	{
 		if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
 		{
-			LobbyWidget->SetLobbyInfo(EosSubsystem->GetLobbyCode(), EosSubsystem->IsLobbyHost());
+			LobbyWidget->SetLobbyInfo(EosSubsystem->GetLobbyRoomName(), EosSubsystem->GetLobbyCode(), EosSubsystem->IsLobbyHost());
 			EosSubsystem->OnSessionResult.RemoveDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
 			EosSubsystem->OnSessionResult.AddDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
 			EosSubsystem->OnPublicRoomsUpdated.RemoveDynamic(this, &AShowDownHubFlowManager::HandlePublicRoomsUpdated);
@@ -353,6 +372,20 @@ void AShowDownHubFlowManager::ShowLobby()
 	SetActiveWidget(LobbyWidget);
 	SetUiOnlyInput(LobbyWidget);
 	OnScreenChanged.Broadcast(EShowDownHubFlowScreen::Lobby);
+}
+
+void AShowDownHubFlowManager::ShowSettings()
+{
+	PlayCamera(MainMenuCamera);
+	TSubclassOf<UShowDownSettingsWidget> WidgetClass = SettingsWidgetClass;
+	if (!WidgetClass) WidgetClass = UShowDownSettingsWidget::StaticClass();
+	SettingsWidget = CreateWidget<UShowDownSettingsWidget>(GetPrimaryPlayerController(), WidgetClass);
+	if (!SettingsWidget) return;
+	SettingsWidget->OnBackRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleSettingsBackRequested);
+	SettingsWidget->OnQuitRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleSettingsQuitRequested);
+	SetActiveWidget(SettingsWidget);
+	SetUiOnlyInput(SettingsWidget);
+	OnScreenChanged.Broadcast(EShowDownHubFlowScreen::Settings);
 }
 
 void AShowDownHubFlowManager::ShowSinglePlayPreview()
@@ -507,8 +540,36 @@ void AShowDownHubFlowManager::SetActiveWidget(UUserWidget* NextWidget)
 	if (ActiveWidget)
 	{
 		ActiveWidget->AddToViewport();
+		BindTopNavigation(ActiveWidget);
 	}
 }
+
+void AShowDownHubFlowManager::BindTopNavigation(UUserWidget* Widget)
+{
+	// Lobby navigation is intentionally handled by its leave flow so the EOS
+	// session is closed cleanly before another hub screen is opened.
+	if (!Widget || Cast<UShowDownLobbyWidget>(Widget)) return;
+	auto Bind = [Widget](const TCHAR* Name, UObject* Object, FName FunctionName)
+	{
+		if (UButton* Button = Cast<UButton>(Widget->GetWidgetFromName(Name)))
+		{
+			FScriptDelegate Delegate;
+			Delegate.BindUFunction(Object, FunctionName);
+			Button->OnClicked.AddUnique(Delegate);
+		}
+	};
+	Bind(TEXT("Nav_0"), this, GET_FUNCTION_NAME_CHECKED(AShowDownHubFlowManager, HandleTopNavSinglePlay));
+	Bind(TEXT("Nav_1"), this, GET_FUNCTION_NAME_CHECKED(AShowDownHubFlowManager, HandleTopNavMultiplayer));
+	Bind(TEXT("Nav_2"), this, GET_FUNCTION_NAME_CHECKED(AShowDownHubFlowManager, HandleTopNavShop));
+	Bind(TEXT("Nav_3"), this, GET_FUNCTION_NAME_CHECKED(AShowDownHubFlowManager, HandleTopNavRanking));
+	Bind(TEXT("Nav_4"), this, GET_FUNCTION_NAME_CHECKED(AShowDownHubFlowManager, HandleTopNavSettings));
+}
+
+void AShowDownHubFlowManager::HandleTopNavSinglePlay() { HandleSinglePlayRequested(); }
+void AShowDownHubFlowManager::HandleTopNavMultiplayer() { ShowMultiplayerMenu(); }
+void AShowDownHubFlowManager::HandleTopNavShop() { ShowShop(); }
+void AShowDownHubFlowManager::HandleTopNavRanking() { ShowRanking(); }
+void AShowDownHubFlowManager::HandleTopNavSettings() { ShowSettings(); }
 
 void AShowDownHubFlowManager::SetUiOnlyInput(UUserWidget* FocusWidget)
 {
@@ -527,6 +588,7 @@ void AShowDownHubFlowManager::SetUiOnlyInput(UUserWidget* FocusWidget)
 
 		if (FocusWidget)
 		{
+			FocusWidget->SetIsFocusable(true);
 			InputMode.SetWidgetToFocus(FocusWidget->TakeWidget());
 		}
 
@@ -674,7 +736,7 @@ void AShowDownHubFlowManager::HandleEosLoginForMultiplayer(bool bSuccess, const 
 	}
 }
 
-void AShowDownHubFlowManager::HandleHostMultiplayerRequested()
+void AShowDownHubFlowManager::HandleHostMultiplayerRequested(const FString& RoomName)
 {
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
@@ -682,7 +744,7 @@ void AShowDownHubFlowManager::HandleHostMultiplayerRequested()
 		{
 			EosSubsystem->OnSessionResult.RemoveDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
 			EosSubsystem->OnSessionResult.AddDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
-			EosSubsystem->HostLobby(MultiplayerLobbyLevelName, MultiplayerLevelName);
+			EosSubsystem->HostLobby(MultiplayerLobbyLevelName, MultiplayerLevelName, RoomName);
 			return;
 		}
 	}
@@ -693,7 +755,7 @@ void AShowDownHubFlowManager::HandleHostMultiplayerRequested()
 	}
 }
 
-void AShowDownHubFlowManager::HandleHostPrivateMultiplayerRequested()
+void AShowDownHubFlowManager::HandleHostPrivateMultiplayerRequested(const FString& RoomName)
 {
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
@@ -701,7 +763,7 @@ void AShowDownHubFlowManager::HandleHostPrivateMultiplayerRequested()
 		{
 			EosSubsystem->OnSessionResult.RemoveDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
 			EosSubsystem->OnSessionResult.AddDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
-			EosSubsystem->HostPrivateLobby(MultiplayerLobbyLevelName, MultiplayerLevelName);
+			EosSubsystem->HostPrivateLobby(MultiplayerLobbyLevelName, MultiplayerLevelName, RoomName);
 			return;
 		}
 	}
@@ -871,6 +933,16 @@ void AShowDownHubFlowManager::HandleRankingRequested()
 }
 
 void AShowDownHubFlowManager::HandleQuitRequested()
+{
+	ShowSettings();
+}
+
+void AShowDownHubFlowManager::HandleSettingsBackRequested()
+{
+	ShowMainMenu();
+}
+
+void AShowDownHubFlowManager::HandleSettingsQuitRequested()
 {
 	QuitGame();
 }

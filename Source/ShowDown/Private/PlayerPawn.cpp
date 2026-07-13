@@ -787,6 +787,13 @@ void APlayerPawn::EnsureChatWidget()
 	}
 
 	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (const AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(PC))
+	{
+		if (!ShowDownController->IsGameplayChatEnabled())
+		{
+			return;
+		}
+	}
 	ChatWidgetClass = UShowDownChatWidget::StaticClass();
 	if (!PC || !ChatWidgetClass)
 	{

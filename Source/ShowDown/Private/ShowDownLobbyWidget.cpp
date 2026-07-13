@@ -13,6 +13,15 @@
 
 namespace
 {
+UObject* PretendardRegularFont()
+{
+	return LoadObject<UObject>(nullptr, TEXT("/Game/UI/Font/Pretendard/static/Pretendard-Regular_Font.Pretendard-Regular_Font"));
+}
+FSlateBrush FlatBlackBrush(float Alpha)
+{
+	FSlateBrush Brush; Brush.DrawAs = ESlateBrushDrawType::Box;
+	Brush.TintColor = FSlateColor(FLinearColor(0, 0, 0, Alpha)); Brush.Margin = FMargin(0); return Brush;
+}
 int32 GetLobbyExpectedPlayerCount(const UGameInstance* GameInstance)
 {
 	return 4;
@@ -69,8 +78,9 @@ void UShowDownLobbyWidget::NativeTick(const FGeometry& MyGeometry, float InDelta
 	}
 }
 
-void UShowDownLobbyWidget::SetLobbyInfo(const FString& RoomCode, bool bIsHost)
+void UShowDownLobbyWidget::SetLobbyInfo(const FString& RoomName, const FString& RoomCode, bool bIsHost)
 {
+	CachedRoomName = RoomName;
 	CachedRoomCode = RoomCode;
 	bCachedIsHost = bIsHost;
 	ParticipantRefreshElapsed = 0.0f;
@@ -93,13 +103,16 @@ void UShowDownLobbyWidget::BuildDefaultLayout()
 		return;
 	}
 
-	if (WidgetTree->RootWidget && Text_Title && Text_Code && Text_Status && Text_Players && Button_Start && Button_Leave)
+	// Preserve the layout authored in WBP_Lobby. The C++ tree below is only a
+	// fallback for direct construction of the native widget class.
+	if (WidgetTree->RootWidget)
 	{
 		return;
 	}
 
 	Text_Title = nullptr;
 	Text_Code = nullptr;
+	Text_RoomName = nullptr;
 	Text_Status = nullptr;
 	Text_Players = nullptr;
 	Button_Start = nullptr;
@@ -109,7 +122,7 @@ void UShowDownLobbyWidget::BuildDefaultLayout()
 	WidgetTree->RootWidget = CanvasRoot;
 
 	UBorder* PanelBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("PanelBorder"));
-	PanelBorder->SetBrushColor(FLinearColor(0.02f, 0.02f, 0.02f, 0.9f));
+	PanelBorder->SetBrushColor(FLinearColor(0.0f, 0.0f, 0.0f, 0.68f));
 	PanelBorder->SetPadding(FMargin(28.0f));
 
 	UVerticalBox* RootBox = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("RootBox"));
@@ -120,14 +133,14 @@ void UShowDownLobbyWidget::BuildDefaultLayout()
 		PanelSlot->SetAnchors(FAnchors(0.5f, 0.5f));
 		PanelSlot->SetAlignment(FVector2D(0.5f, 0.5f));
 		PanelSlot->SetAutoSize(false);
-		PanelSlot->SetSize(FVector2D(460.0f, 420.0f));
+		PanelSlot->SetSize(FVector2D(620.0f, 560.0f));
 		PanelSlot->SetPosition(FVector2D::ZeroVector);
 	}
 
 	Text_Title = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_Title"));
 	Text_Title->SetColorAndOpacity(FSlateColor(FLinearColor::White));
 	Text_Title->SetJustification(ETextJustify::Center);
-	Text_Title->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), 28));
+	Text_Title->SetFont(FSlateFontInfo(PretendardRegularFont(), 28));
 
 	if (UVerticalBoxSlot* TitleSlot = RootBox->AddChildToVerticalBox(Text_Title))
 	{
@@ -137,17 +150,23 @@ void UShowDownLobbyWidget::BuildDefaultLayout()
 	Text_Code = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_Code"));
 	Text_Code->SetColorAndOpacity(FSlateColor(FLinearColor::Yellow));
 	Text_Code->SetJustification(ETextJustify::Center);
-	Text_Code->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), 24));
+	Text_Code->SetFont(FSlateFontInfo(PretendardRegularFont(), 24));
 
 	if (UVerticalBoxSlot* CodeSlot = RootBox->AddChildToVerticalBox(Text_Code))
 	{
 		CodeSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 18.0f));
 	}
 
+	Text_RoomName = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_RoomName"));
+	Text_RoomName->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+	Text_RoomName->SetJustification(ETextJustify::Center);
+	Text_RoomName->SetFont(FSlateFontInfo(PretendardRegularFont(), 20));
+	if (UVerticalBoxSlot* NameSlot = RootBox->AddChildToVerticalBox(Text_RoomName)) NameSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 12.0f));
+
 	Text_Players = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_Players"));
 	Text_Players->SetColorAndOpacity(FSlateColor(FLinearColor::White));
 	Text_Players->SetAutoWrapText(true);
-	Text_Players->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), 16));
+	Text_Players->SetFont(FSlateFontInfo(PretendardRegularFont(), 16));
 	if (UVerticalBoxSlot* PlayersSlot = RootBox->AddChildToVerticalBox(Text_Players))
 	{
 		PlayersSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 14.0f));
@@ -168,7 +187,7 @@ void UShowDownLobbyWidget::BuildDefaultLayout()
 	Text_Status = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_Status"));
 	Text_Status->SetJustification(ETextJustify::Center);
 	Text_Status->SetAutoWrapText(true);
-	Text_Status->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), 16));
+	Text_Status->SetFont(FSlateFontInfo(PretendardRegularFont(), 16));
 
 	if (UVerticalBoxSlot* StatusSlot = RootBox->AddChildToVerticalBox(Text_Status))
 	{
@@ -179,11 +198,12 @@ void UShowDownLobbyWidget::BuildDefaultLayout()
 UButton* UShowDownLobbyWidget::CreateMenuButton(const FString& Label)
 {
 	UButton* Button = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
+	FButtonStyle Style; Style.SetNormal(FlatBlackBrush(0.72f)).SetHovered(FlatBlackBrush(0.78f)).SetPressed(FlatBlackBrush(0.84f)).SetDisabled(FlatBlackBrush(0.36f)); Button->SetStyle(Style);
 	UTextBlock* ButtonText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 	ButtonText->SetText(FText::FromString(Label));
 	ButtonText->SetJustification(ETextJustify::Center);
 	ButtonText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
-	ButtonText->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), 18));
+	ButtonText->SetFont(FSlateFontInfo(PretendardRegularFont(), 18));
 	Button->SetContent(ButtonText);
 	return Button;
 }
@@ -192,12 +212,16 @@ void UShowDownLobbyWidget::RefreshLobbyText()
 {
 	if (Text_Title)
 	{
-		Text_Title->SetText(FText::FromString(bCachedIsHost ? TEXT("Room Created") : TEXT("Waiting Room")));
+		Text_Title->SetText(FText::FromString(bCachedIsHost ? TEXT("ROOM CREATED") : TEXT("WAITING ROOM")));
 	}
 
 	if (Text_Code)
 	{
 		Text_Code->SetText(FText::FromString(FString::Printf(TEXT("Code: %s"), *CachedRoomCode)));
+	}
+	if (Text_RoomName)
+	{
+		Text_RoomName->SetText(FText::FromString(CachedRoomName.IsEmpty() ? TEXT("이름 없음") : CachedRoomName));
 	}
 
 	if (Button_Start)

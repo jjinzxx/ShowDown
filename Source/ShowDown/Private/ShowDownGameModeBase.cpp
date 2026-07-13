@@ -37,6 +37,7 @@
 #include "EngineUtils.h"
 #include "Engine/GameInstance.h"
 #include "GameFramework/PlayerState.h"
+#include "Misc/ConfigCacheIni.h"
 
 namespace
 {
@@ -2568,10 +2569,14 @@ void AShowDownGameModeBase::ConfigureSinglePlayerCharacters()
 
 	if (OpponentCharacter)
 	{
+		FString OpponentDisplayName = TEXT("상대");
+		GConfig->GetString(TEXT("ShowDown.UserSettings"), TEXT("CharacterName"), OpponentDisplayName, GGameUserSettingsIni);
+		OpponentDisplayName = OpponentDisplayName.TrimStartAndEnd();
+		if (OpponentDisplayName.IsEmpty()) OpponentDisplayName = TEXT("상대");
 		OpponentCharacter->SetCharacterIdentity(
 			EShowDownCharacterRole::Opponent,
 			EShowDownPlayerSlot::None,
-			TEXT("김윤아"));
+			OpponentDisplayName);
 		OpponentCharacter->SetCharacterSceneActive(true);
 	}
 
