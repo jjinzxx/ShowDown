@@ -578,11 +578,16 @@ float ASDSelfShotGunActor::GetPresentationFinishDelay(bool bLiveRound) const
 	float FinishDelay = ResolveDelay + GunMotionAfterResolve;
 	if (bLiveRound && bUseSelfShotCinematicCamera)
 	{
+		const float CameraExitDuration = bUseEliminationTableOverview
+			? FMath::Max(
+				FMath::Max(0.0f, CinematicCameraBlendOutTime),
+				FMath::Max(0.0f, EliminationOverviewMoveTime))
+			: FMath::Max(0.0f, CinematicCameraBlendOutTime);
 		FinishDelay = FMath::Max(
 			FinishDelay,
 			ResolveDelay
 				+ FMath::Max(0.0f, CinematicCameraHoldTime)
-				+ FMath::Max(0.0f, CinematicCameraBlendOutTime));
+				+ CameraExitDuration);
 	}
 
 	if (bLiveRound && bEnableHitSequence)
@@ -595,6 +600,7 @@ float ASDSelfShotGunActor::GetPresentationFinishDelay(bool bLiveRound) const
 			+ FMath::Max(0.0f, RecoveryHitShakeBlendOutTime);
 		const float HitSequenceDuration =
 			FMath::Max(0.0f, InitialHitEffectDuration)
+			+ FMath::Max(0.0f, HitBlackoutDelay)
 			+ FMath::Max(0.0f, HitBlackoutDuration)
 			+ FMath::Max(RecoveryEffectDuration, RecoveryShakeDuration);
 		FinishDelay = FMath::Max(FinishDelay, ResolveDelay + HitSequenceDuration);
@@ -606,6 +612,14 @@ float ASDSelfShotGunActor::GetPresentationFinishDelay(bool bLiveRound) const
 bool ASDSelfShotGunActor::ShouldUseGunShotCamera(bool bLiveRound, bool bTargetsLocalPlayer)
 {
 	return bLiveRound && bTargetsLocalPlayer;
+}
+
+bool ASDSelfShotGunActor::ShouldUseEliminationTableOverview(
+	bool bLiveRound,
+	bool bTargetsLocalPlayer,
+	int32 RemainingLives)
+{
+	return ShouldUseGunShotCamera(bLiveRound, bTargetsLocalPlayer) && RemainingLives <= 0;
 }
 
 bool ASDSelfShotGunActor::IsGunShotTargetLocalPlayer(
@@ -632,6 +646,35 @@ FTransform ASDSelfShotGunActor::BuildSeatRelativeGunShotCameraTransform(
 	Result.SetRotation((TargetCharacterTransform.GetRotation() * RelativeRotation).GetNormalized());
 	Result.SetScale3D(PlayerOneCameraTransform.GetScale3D());
 	return Result;
+}
+
+FTransform ASDSelfShotGunActor::BuildEliminationTableOverviewTransform(
+	const FVector& TableCenter,
+	const FTransform& TargetCharacterTransform,
+	float BackDistance,
+	float Height,
+	float LookAtHeight)
+{
+	const FVector SeatLocation = TargetCharacterTransform.GetLocation();
+	FVector DirectionToTable = TableCenter - SeatLocation;
+	DirectionToTable.Z = 0.0f;
+	if (!DirectionToTable.Normalize())
+	{
+		DirectionToTable = TargetCharacterTransform.GetUnitAxis(EAxis::X).GetSafeNormal2D();
+	}
+	if (DirectionToTable.IsNearlyZero())
+	{
+		DirectionToTable = FVector::ForwardVector;
+	}
+
+	const FVector CameraLocation = SeatLocation
+		- DirectionToTable * FMath::Max(0.0f, BackDistance)
+		+ FVector::UpVector * Height;
+	const FVector LookAtLocation = TableCenter + FVector::UpVector * LookAtHeight;
+	return FTransform(
+		(LookAtLocation - CameraLocation).Rotation(),
+		CameraLocation,
+		FVector::OneVector);
 }
 
 void ASDSelfShotGunActor::SetTableStatus(
@@ -1116,6 +1159,7 @@ void ASDSelfShotGunActor::StartSelfShotCinematicCamera()
 	CancelSelfShotCinematicCamera();
 	CinematicCameraElapsedTime = 0.0f;
 	CinematicCameraBlendOutElapsedTime = 0.0f;
+	EliminationOverviewElapsedTime = 0.0f;
 
 	if (!bUseSelfShotCinematicCamera
 		|| !bCurrentShotTargetsLocalPlayer
@@ -1157,6 +1201,34 @@ void ASDSelfShotGunActor::UpdateSelfShotCinematicCamera(float DeltaSeconds)
 	{
 		return;
 	}
+	if (bEliminationTableOverviewActive)
+	{
+		EliminationOverviewElapsedTime += FMath::Max(0.0f, DeltaSeconds);
+		const float SafeMoveTime = FMath::Max(0.0f, EliminationOverviewMoveTime);
+		const float Alpha = SafeMoveTime > KINDA_SMALL_NUMBER
+			? FMath::Clamp(EliminationOverviewElapsedTime / SafeMoveTime, 0.0f, 1.0f)
+			: 1.0f;
+		const float EasedAlpha = FMath::InterpEaseInOut(
+			0.0f,
+			1.0f,
+			Alpha,
+			FMath::Max(1.0f, CinematicCameraBlendExponent));
+		FTransform BlendedTransform;
+		BlendedTransform.Blend(
+			EliminationOverviewStartTransform,
+			EliminationOverviewTargetTransform,
+			EasedAlpha);
+		if (ActiveSelfShotCinematicCamera)
+		{
+			ActiveSelfShotCinematicCamera->SetActorTransform(BlendedTransform);
+		}
+
+		if (Alpha >= 1.0f)
+		{
+			FinishEliminationTableOverview();
+		}
+		return;
+	}
 	if (bSelfShotCinematicCameraBlendOutActive)
 	{
 		CinematicCameraBlendOutElapsedTime += FMath::Max(0.0f, DeltaSeconds);
@@ -1189,6 +1261,10 @@ void ASDSelfShotGunActor::UpdateSelfShotCinematicCamera(float DeltaSeconds)
 		ActiveSelfShotCinematicCamera->SetActorTransform(CinematicCameraShakeBaseTransform);
 		bCinematicCameraShakeActive = false;
 	}
+	if (TryStartEliminationTableOverview())
+	{
+		return;
+	}
 	if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(
 		UGameplayStatics::GetPlayerController(this, 0)))
 	{
@@ -1210,6 +1286,72 @@ void ASDSelfShotGunActor::UpdateSelfShotCinematicCamera(float DeltaSeconds)
 	}
 }
 
+bool ASDSelfShotGunActor::TryStartEliminationTableOverview()
+{
+	AShowDownCharacter* TargetCharacter = ResolveCurrentGunShotCameraTarget();
+	if (!bUseEliminationTableOverview
+		|| !IsValid(ActiveSelfShotCinematicCamera)
+		|| !IsValid(TargetCharacter)
+		|| !ShouldUseEliminationTableOverview(
+			true,
+			bCurrentShotTargetsLocalPlayer,
+			TargetCharacter->GetCharacterLives()))
+	{
+		return false;
+	}
+
+	EliminationOverviewStartTransform = ActiveSelfShotCinematicCamera->GetActorTransform();
+	EliminationOverviewTargetTransform = BuildEliminationTableOverviewTransform(TargetCharacter);
+	EliminationOverviewElapsedTime = 0.0f;
+	bSelfShotCinematicCameraHoldStarted = false;
+	bSelfShotCinematicCameraBlendOutActive = false;
+	bEliminationTableOverviewActive = true;
+
+	if (EliminationOverviewMoveTime <= KINDA_SMALL_NUMBER)
+	{
+		ActiveSelfShotCinematicCamera->SetActorTransform(EliminationOverviewTargetTransform);
+		FinishEliminationTableOverview();
+	}
+	return true;
+}
+
+void ASDSelfShotGunActor::FinishEliminationTableOverview()
+{
+	ACameraActor* SpectatorCamera = ActiveSelfShotCinematicCamera;
+	if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(
+		UGameplayStatics::GetPlayerController(this, 0)))
+	{
+		PlayerController->ReleaseGunShotCameraOverrideForElimination(SpectatorCamera);
+	}
+
+	bEliminationTableOverviewActive = false;
+	EliminationOverviewElapsedTime = 0.0f;
+	bSelfShotCinematicCameraActive = false;
+	bSelfShotCinematicCameraStartPending = false;
+	bSelfShotCinematicCameraHoldStarted = false;
+	bSelfShotCinematicCameraBlendOutActive = false;
+	ActiveSelfShotCinematicCamera = nullptr;
+	BroadcastPresentationFinishedIfIdle();
+}
+
+FTransform ASDSelfShotGunActor::BuildEliminationTableOverviewTransform(
+	const AShowDownCharacter* TargetCharacter) const
+{
+	if (!IsValid(TargetCharacter))
+	{
+		return ActiveSelfShotCinematicCamera
+			? ActiveSelfShotCinematicCamera->GetActorTransform()
+			: FTransform::Identity;
+	}
+
+	return BuildEliminationTableOverviewTransform(
+		GetActorLocation(),
+		TargetCharacter->GetActorTransform(),
+		EliminationOverviewBackDistance,
+		EliminationOverviewHeight,
+		EliminationOverviewLookAtHeight);
+}
+
 void ASDSelfShotGunActor::CancelSelfShotCinematicCamera()
 {
 	if (bCinematicCameraShakeActive && ActiveSelfShotCinematicCamera)
@@ -1228,7 +1370,9 @@ void ASDSelfShotGunActor::CancelSelfShotCinematicCamera()
 	bSelfShotCinematicCameraStartPending = false;
 	bSelfShotCinematicCameraHoldStarted = false;
 	bSelfShotCinematicCameraBlendOutActive = false;
+	bEliminationTableOverviewActive = false;
 	CinematicCameraBlendOutElapsedTime = 0.0f;
+	EliminationOverviewElapsedTime = 0.0f;
 	ActiveSelfShotCinematicCamera = nullptr;
 }
 
@@ -1502,7 +1646,7 @@ void ASDSelfShotGunActor::StartHitSequence()
 	HitSequenceElapsedTime = 0.0f;
 	if (InitialHitEffectDuration <= KINDA_SMALL_NUMBER)
 	{
-		EnterHitSequenceBlackout();
+		EnterHitSequencePreBlackoutHold();
 	}
 }
 
@@ -1519,6 +1663,12 @@ void ASDSelfShotGunActor::UpdateHitSequence(float DeltaSeconds)
 	{
 	case EHitSequenceState::InitialHit:
 		if (HitSequenceElapsedTime >= InitialHitEffectDuration)
+		{
+			EnterHitSequencePreBlackoutHold();
+		}
+		break;
+	case EHitSequenceState::PreBlackoutHold:
+		if (HitSequenceElapsedTime >= HitBlackoutDelay)
 		{
 			EnterHitSequenceBlackout();
 		}
@@ -1562,6 +1712,18 @@ void ASDSelfShotGunActor::UpdateHitSequence(float DeltaSeconds)
 	default:
 		break;
 	}
+}
+
+void ASDSelfShotGunActor::EnterHitSequencePreBlackoutHold()
+{
+	if (HitBlackoutDelay <= KINDA_SMALL_NUMBER)
+	{
+		EnterHitSequenceBlackout();
+		return;
+	}
+
+	HitSequenceState = EHitSequenceState::PreBlackoutHold;
+	HitSequenceElapsedTime = 0.0f;
 }
 
 void ASDSelfShotGunActor::EnterHitSequenceBlackout()

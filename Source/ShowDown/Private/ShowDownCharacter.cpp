@@ -8,6 +8,7 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/SpotLightComponent.h"
 #include "Components/TextRenderComponent.h"
 #include "Components/WidgetComponent.h"
 #include "Engine/Engine.h"
@@ -17,6 +18,7 @@
 #include "Engine/World.h"
 #include "Engine/SkeletalMesh.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/GameStateBase.h"
 #include "GameFramework/PlayerController.h"
 #include "Materials/MaterialInterface.h"
 #include "Net/UnrealNetwork.h"
@@ -206,6 +208,20 @@ AShowDownCharacter::AShowDownCharacter()
 	ConfigureWorldStatusText(BetStatusActionText, FColor(40, 255, 90, 255));
 	BetStatusActionText->SetRelativeLocation(FVector(0.0f, 0.0f, -12.0f));
 
+	// A component-only reset effect works for every skin and every authored seat.
+	// It follows the character capsule, so no per-slot Blueprint setup is needed.
+	HitResetPulseLight = CreateDefaultSubobject<USpotLightComponent>(TEXT("HitResetPulseLight"));
+	HitResetPulseLight->SetupAttachment(GetCapsuleComponent());
+	HitResetPulseLight->SetRelativeLocation(FVector(0.0f, 0.0f, 220.0f));
+	HitResetPulseLight->SetRelativeRotation(FRotator(-90.0f, 0.0f, 0.0f));
+	HitResetPulseLight->SetInnerConeAngle(22.0f);
+	HitResetPulseLight->SetOuterConeAngle(42.0f);
+	HitResetPulseLight->SetAttenuationRadius(HitResetPulseRadius);
+	HitResetPulseLight->SetLightColor(HitResetPulseColor);
+	HitResetPulseLight->SetIntensity(0.0f);
+	HitResetPulseLight->SetCastShadows(false);
+	HitResetPulseLight->SetVisibility(false);
+
 	UCharacterMovementComponent* MovementComponent = GetCharacterMovement();
 	MovementComponent->bOrientRotationToMovement = true;
 	MovementComponent->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
@@ -217,6 +233,8 @@ AShowDownCharacter::AShowDownCharacter()
 void AShowDownCharacter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	UpdateHitRecoveryPresentation();
+	UpdateWorldLifeLostPulse(DeltaSeconds);
 
 	const EShowDownPlayerSlot LocalPlayerSlot = GetLocalPlayerSlot();
 	if (LastPresentationLocalPlayerSlot != LocalPlayerSlot)
@@ -234,6 +252,10 @@ void AShowDownCharacter::Tick(float DeltaSeconds)
 void AShowDownCharacter::PostInitializeComponents()
 {
 	Super::PostInitializeComponents();
+	if (WorldLivesText)
+	{
+		WorldLivesBaseRelativeScale = WorldLivesText->GetRelativeScale3D();
+	}
 	ApplyCharacterSkin();
 	CacheAnimBlueprintClass();
 	CacheBaseMeshTransform();
@@ -259,7 +281,7 @@ void AShowDownCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	UnbindFromRouletteEvents();
 	GetWorldTimerManager().ClearTimer(AnimStateResetTimerHandle);
-	GetWorldTimerManager().ClearTimer(HitRagdollRecoverTimerHandle);
+	SetHitResetPulseStrength(0.0f);
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -277,6 +299,7 @@ void AShowDownCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	DOREPLIFETIME(AShowDownCharacter, ReplicatedPlayerViewRotation);
 	DOREPLIFETIME(AShowDownCharacter, bCharacterSceneActive);
 	DOREPLIFETIME(AShowDownCharacter, ReplicatedBetStatusPresentation);
+	DOREPLIFETIME(AShowDownCharacter, HitRecoveryPresentationState);
 }
 
 void AShowDownCharacter::SetCharacterSkinId(const FString& NewSkinId)
@@ -361,7 +384,10 @@ void AShowDownCharacter::PlayShootAnimation(float Duration)
 
 void AShowDownCharacter::PlayHitAnimation(float Duration)
 {
-	PlayCharacterActionAnim(EShowDownCharacterAnimState::Hit, Duration, false);
+	// Hit recovery has one authoritative clock; the optional legacy animation
+	// duration is intentionally ignored so it cannot reintroduce a second timer.
+	(void)Duration;
+	StartHitRecoveryPresentation(CharacterLives <= 0);
 }
 
 void AShowDownCharacter::PlaySelectCardAnimation(float Duration)
@@ -400,14 +426,106 @@ FTransform AShowDownCharacter::GetRevolverPresentationTransform() const
 
 void AShowDownCharacter::StartHitRagdoll()
 {
+	StartHitRecoveryPresentation(CharacterLives <= 0);
+}
+
+void AShowDownCharacter::StartHitRecoveryPresentation(bool bFinalElimination)
+{
 	if (!HasAuthority())
 	{
-		ServerPlayCharacterActionAnim(EShowDownCharacterAnimState::Hit, -1.0f, false);
+		// Result presentation is server-authored. Map-placed characters are not
+		// client-owned, so clients wait for HitRecoveryPresentationState instead
+		// of issuing an RPC that would be dropped for lack of an owning connection.
+		return;
+	}
+
+	// Duplicate result notifications must not restart the fall. A later result
+	// may, however, upgrade the same hit to a final elimination after lives have
+	// reached zero.
+	if (HitRecoveryPresentationState.bActive)
+	{
+		if (bFinalElimination && !HitRecoveryPresentationState.bFinalElimination)
+		{
+			HitRecoveryPresentationState.bFinalElimination = true;
+			ForceNetUpdate();
+		}
 		return;
 	}
 
 	GetWorldTimerManager().ClearTimer(AnimStateResetTimerHandle);
+	bPendingSceneDeactivateAfterHitRecovery = false;
+	HitRecoveryPresentationState.Sequence = HitRecoveryPresentationState.Sequence == MAX_int32
+		? 1
+		: HitRecoveryPresentationState.Sequence + 1;
+	HitRecoveryPresentationState.ServerStartTimeSeconds = GetSynchronizedServerTimeSeconds();
+	HitRecoveryPresentationState.bActive = true;
+	HitRecoveryPresentationState.bFinalElimination = bFinalElimination;
+	BeginLocalHitRecoveryPresentation();
 	ApplyCharacterAnimState(EShowDownCharacterAnimState::Hit);
+	if (!bRagdollActive)
+	{
+		StartActionVisual(EShowDownCharacterAnimState::Hit);
+	}
+	ForceNetUpdate();
+}
+
+void AShowDownCharacter::CancelHitRecoveryPresentation(bool bRevealCharacter)
+{
+	if (!HasAuthority())
+	{
+		// Cancellation follows the same authority rule as presentation start.
+		return;
+	}
+
+	HitRecoveryPresentationState.Sequence = HitRecoveryPresentationState.Sequence == MAX_int32
+		? 1
+		: HitRecoveryPresentationState.Sequence + 1;
+	HitRecoveryPresentationState.ServerStartTimeSeconds = GetSynchronizedServerTimeSeconds();
+	HitRecoveryPresentationState.bActive = false;
+	// Preserve the requested terminal visibility in the replicated state. This
+	// keeps Cancel(false) from being concealed only on the authority while remote
+	// clients interpret the inactive presentation as a surviving character.
+	HitRecoveryPresentationState.bFinalElimination = !bRevealCharacter;
+	bPendingSceneDeactivateAfterHitRecovery = false;
+	bHitRecoveryRagdollReset = true;
+	bHitRecoverySurvivorRevealed = bRevealCharacter;
+	LocalHitRecoverySequence = HitRecoveryPresentationState.Sequence;
+	SetHitResetPulseStrength(0.0f);
+	SetHitRecoveryVisualConcealed(!bRevealCharacter);
+	ApplyCharacterAnimState(EShowDownCharacterAnimState::Idle);
+	StopActionVisuals();
+	ForceNetUpdate();
+}
+
+float AShowDownCharacter::GetHitRecoveryPresentationDuration() const
+{
+	return CalculateHitRecoveryPresentationDuration(
+		HitDownedHoldDuration,
+		HitResetPulseDuration,
+		HitRecoveryRevealDuration);
+}
+
+float AShowDownCharacter::CalculateHitRecoveryPresentationDuration(
+	float DownedHoldDuration,
+	float ResetPulseDuration,
+	float RecoveryRevealDuration)
+{
+	return FMath::Max(0.0f, DownedHoldDuration)
+		+ FMath::Max(0.1f, ResetPulseDuration)
+		+ FMath::Max(0.0f, RecoveryRevealDuration);
+}
+
+float AShowDownCharacter::GetHitRecoveryPresentationRemainingTime() const
+{
+	if (!HitRecoveryPresentationState.bActive)
+	{
+		return 0.0f;
+	}
+
+	const float Elapsed = FMath::Max(
+		0.0f,
+		GetSynchronizedServerTimeSeconds() - HitRecoveryPresentationState.ServerStartTimeSeconds);
+	return FMath::Max(0.0f, GetHitRecoveryPresentationDuration() - Elapsed);
 }
 
 void AShowDownCharacter::ResetCharacterAnimState()
@@ -494,14 +612,46 @@ void AShowDownCharacter::SetCharacterDisplayName(const FString& NewDisplayName)
 void AShowDownCharacter::SetCharacterLives(int32 NewLives)
 {
 	const int32 ClampedLives = FMath::Max(0, NewLives);
+	const int32 PreviousLives = CharacterLives;
+	const bool bShouldClearElimination = ClampedLives > 0
+		&& HitRecoveryPresentationState.bFinalElimination;
 	if (CharacterLives == ClampedLives)
 	{
+		if (bShouldClearElimination)
+		{
+			if (HasAuthority())
+			{
+				CancelHitRecoveryPresentation(true);
+			}
+			else
+			{
+				SetHitRecoveryVisualConcealed(false);
+			}
+		}
 		RefreshNameTag();
 		return;
 	}
 
 	CharacterLives = ClampedLives;
-	RefreshNameTag();
+	if (HasAuthority()
+		&& HitRecoveryPresentationState.bActive
+		&& CharacterLives <= 0
+		&& !HitRecoveryPresentationState.bFinalElimination)
+	{
+		HitRecoveryPresentationState.bFinalElimination = true;
+	}
+	else if (bShouldClearElimination)
+	{
+		if (HasAuthority())
+		{
+			CancelHitRecoveryPresentation(true);
+		}
+		else
+		{
+			SetHitRecoveryVisualConcealed(false);
+		}
+	}
+	HandleCharacterLivesChanged(PreviousLives);
 	if (HasAuthority())
 	{
 		ForceNetUpdate();
@@ -623,6 +773,31 @@ bool AShowDownCharacter::IsOpponentCharacterForLocalPlayer() const
 
 void AShowDownCharacter::SetCharacterSceneActive(bool bNewActive)
 {
+	if (!bNewActive
+		&& HasAuthority()
+		&& HitRecoveryPresentationState.bActive
+		&& HitRecoveryPresentationState.bFinalElimination)
+	{
+		// Let every viewer see the common pulse/conceal peak before GameMode turns
+		// the eliminated seat off. The pending request is honored at presentation end.
+		bPendingSceneDeactivateAfterHitRecovery = true;
+		return;
+	}
+
+	if (bNewActive
+		&& CharacterLives > 0
+		&& HitRecoveryPresentationState.bFinalElimination)
+	{
+		if (HasAuthority())
+		{
+			CancelHitRecoveryPresentation(true);
+		}
+		else
+		{
+			SetHitRecoveryVisualConcealed(false);
+		}
+	}
+
 	if (bCharacterSceneActive == bNewActive)
 	{
 		ApplyCharacterSceneActive();
@@ -634,7 +809,6 @@ void AShowDownCharacter::SetCharacterSceneActive(bool bNewActive)
 	if (!bCharacterSceneActive)
 	{
 		GetWorldTimerManager().ClearTimer(AnimStateResetTimerHandle);
-		GetWorldTimerManager().ClearTimer(HitRagdollRecoverTimerHandle);
 		ReplicatedAnimState = EShowDownCharacterAnimState::Idle;
 	}
 
@@ -669,9 +843,9 @@ void AShowDownCharacter::OnRep_Identity()
 	OnCharacterIdentityChanged();
 }
 
-void AShowDownCharacter::OnRep_CharacterLives()
+void AShowDownCharacter::OnRep_CharacterLives(int32 PreviousLives)
 {
-	RefreshNameTag();
+	HandleCharacterLivesChanged(PreviousLives);
 }
 
 void AShowDownCharacter::OnRep_ViewRotation()
@@ -688,6 +862,28 @@ void AShowDownCharacter::OnRep_SceneActive()
 void AShowDownCharacter::OnRep_BetStatusPresentation()
 {
 	RefreshWorldBetStatus();
+}
+
+void AShowDownCharacter::OnRep_HitRecoveryPresentationState()
+{
+	if (HitRecoveryPresentationState.bActive)
+	{
+		// A non-final hit can be upgraded to a final elimination without starting
+		// a new sequence. Preserve the current conceal/ragdoll phase in that case.
+		if (LocalHitRecoverySequence != HitRecoveryPresentationState.Sequence)
+		{
+			BeginLocalHitRecoveryPresentation();
+		}
+		UpdateHitRecoveryPresentation();
+		return;
+	}
+
+	LocalHitRecoverySequence = HitRecoveryPresentationState.Sequence;
+	bHitRecoveryRagdollReset = true;
+	bHitRecoverySurvivorRevealed = !HitRecoveryPresentationState.bFinalElimination;
+	SetHitResetPulseStrength(0.0f);
+	StopActionVisuals();
+	SetHitRecoveryVisualConcealed(HitRecoveryPresentationState.bFinalElimination);
 }
 
 void AShowDownCharacter::ServerSetCharacterAnimState_Implementation(EShowDownCharacterAnimState NewState)
@@ -725,7 +921,9 @@ void AShowDownCharacter::HandleRouletteResult(EShowDownSide Target, bool bHit)
 		return;
 	}
 
-	PlayHitAnimation();
+	// The single-player result arrives immediately before its life-change event,
+	// so one remaining life means this impact is the final elimination.
+	StartHitRecoveryPresentation(CharacterLives <= 1);
 }
 
 void AShowDownCharacter::HandleLifeChanged(EShowDownSide Target, int32 Life)
@@ -766,7 +964,7 @@ void AShowDownCharacter::HandleMultiplayerRouletteResult(
 		return;
 	}
 
-	PlayHitAnimation();
+	StartHitRecoveryPresentation(RemainingLives <= 0);
 }
 
 void AShowDownCharacter::HandleCardSelected(EShowDownSide Side)
@@ -1235,6 +1433,253 @@ void AShowDownCharacter::StopRagdoll()
 	bRagdollActive = false;
 }
 
+void AShowDownCharacter::BeginLocalHitRecoveryPresentation()
+{
+	LocalHitRecoverySequence = HitRecoveryPresentationState.Sequence;
+	bHitRecoveryRagdollReset = false;
+	bHitRecoverySurvivorRevealed = false;
+	SetHitResetPulseStrength(0.0f);
+	SetHitRecoveryVisualConcealed(false);
+}
+
+void AShowDownCharacter::UpdateHitRecoveryPresentation()
+{
+	if (!HitRecoveryPresentationState.bActive)
+	{
+		return;
+	}
+
+	if (LocalHitRecoverySequence != HitRecoveryPresentationState.Sequence)
+	{
+		BeginLocalHitRecoveryPresentation();
+	}
+
+	const float DownedHold = FMath::Max(0.0f, HitDownedHoldDuration);
+	const float PulseDuration = FMath::Max(0.1f, HitResetPulseDuration);
+	const float PulseStartTime = DownedHold;
+	const float ConcealTime = PulseStartTime + PulseDuration * 0.5f;
+	const float RevealTime = PulseStartTime + PulseDuration * 0.85f;
+	const float PulseEndTime = PulseStartTime + PulseDuration;
+	const float Elapsed = FMath::Max(
+		0.0f,
+		GetSynchronizedServerTimeSeconds() - HitRecoveryPresentationState.ServerStartTimeSeconds);
+
+	if (Elapsed >= PulseStartTime && Elapsed < PulseEndTime)
+	{
+		const float PulseAlpha = FMath::Clamp((Elapsed - PulseStartTime) / PulseDuration, 0.0f, 1.0f);
+		SetHitResetPulseStrength(FMath::Sin(PI * PulseAlpha));
+	}
+	else
+	{
+		SetHitResetPulseStrength(0.0f);
+	}
+
+	if (!bHitRecoveryStatusConcealed
+		&& Elapsed >= FMath::Min(DownedHold, FMath::Max(0.05f, WorldLifeLostPulseDuration)))
+	{
+		// Show the old heart count long enough for one clear pop, then remove
+		// floating status from above a body that has fallen away from its seat.
+		SetHitRecoveryStatusConcealed(true);
+	}
+
+	if (!bHitRecoveryRagdollReset && Elapsed >= ConcealTime)
+	{
+		// Physics is returned to the authored seat transform only while the common
+		// light peak hides the mesh. Observers never see the old five-second snap.
+		SetHitRecoveryVisualConcealed(true);
+		bHitRecoveryRagdollReset = true;
+		if (HasAuthority())
+		{
+			ApplyCharacterAnimState(EShowDownCharacterAnimState::Idle);
+		}
+		else
+		{
+			StopActionVisuals();
+		}
+	}
+
+	if (HitRecoveryPresentationState.bFinalElimination)
+	{
+		if (bHitRecoveryRagdollReset && bHitRecoverySurvivorRevealed)
+		{
+			bHitRecoverySurvivorRevealed = false;
+			SetHitRecoveryVisualConcealed(true);
+		}
+	}
+	else if (bHitRecoveryRagdollReset
+		&& !bHitRecoverySurvivorRevealed
+		&& Elapsed >= RevealTime)
+	{
+		bHitRecoverySurvivorRevealed = true;
+		SetHitRecoveryVisualConcealed(false);
+	}
+
+	if (HasAuthority() && Elapsed >= GetHitRecoveryPresentationDuration())
+	{
+		CompleteHitRecoveryPresentationAuthority();
+	}
+}
+
+void AShowDownCharacter::CompleteHitRecoveryPresentationAuthority()
+{
+	if (!HasAuthority() || !HitRecoveryPresentationState.bActive)
+	{
+		return;
+	}
+
+	const bool bFinalElimination = HitRecoveryPresentationState.bFinalElimination;
+	const bool bDeactivateScene = bPendingSceneDeactivateAfterHitRecovery;
+	HitRecoveryPresentationState.bActive = false;
+	bPendingSceneDeactivateAfterHitRecovery = false;
+	bHitRecoveryRagdollReset = true;
+	bHitRecoverySurvivorRevealed = !bFinalElimination;
+	SetHitResetPulseStrength(0.0f);
+	SetHitRecoveryVisualConcealed(bFinalElimination);
+	ApplyCharacterAnimState(EShowDownCharacterAnimState::Idle);
+	StopActionVisuals();
+	ForceNetUpdate();
+
+	if (bDeactivateScene)
+	{
+		SetCharacterSceneActive(false);
+	}
+}
+
+void AShowDownCharacter::SetHitRecoveryVisualConcealed(bool bConcealed)
+{
+	bHitRecoveryVisualConcealed = bConcealed;
+	SetHitRecoveryStatusConcealed(bConcealed);
+	const bool bShowMesh = bCharacterSceneActive && !bHitRecoveryVisualConcealed;
+	if (USkeletalMeshComponent* CharacterMesh = GetMesh())
+	{
+		CharacterMesh->SetHiddenInGame(!bShowMesh, true);
+		CharacterMesh->SetVisibility(bShowMesh, true);
+	}
+
+	// Status visibility is refreshed by SetHitRecoveryStatusConcealed.
+}
+
+void AShowDownCharacter::SetHitRecoveryStatusConcealed(bool bConcealed)
+{
+	if (bHitRecoveryStatusConcealed == bConcealed && bNameTagVisibilityInitialized)
+	{
+		return;
+	}
+
+	bHitRecoveryStatusConcealed = bConcealed;
+	bNameTagVisibilityInitialized = false;
+	RefreshNameTag();
+	RefreshWorldBetStatus();
+}
+
+void AShowDownCharacter::SetHitResetPulseStrength(float Strength)
+{
+	if (!HitResetPulseLight || IsRunningDedicatedServer())
+	{
+		return;
+	}
+
+	const float ClampedStrength = FMath::Clamp(Strength, 0.0f, 1.0f);
+	const bool bVisible = bCharacterSceneActive
+		&& HitRecoveryPresentationState.bActive
+		&& ClampedStrength > KINDA_SMALL_NUMBER;
+	HitResetPulseLight->SetLightColor(HitResetPulseColor);
+	HitResetPulseLight->SetAttenuationRadius(FMath::Max(50.0f, HitResetPulseRadius));
+	HitResetPulseLight->SetIntensity(FMath::Max(0.0f, HitResetPulsePeakIntensity) * ClampedStrength);
+	HitResetPulseLight->SetVisibility(bVisible, true);
+	HitResetPulseLight->SetHiddenInGame(!bVisible, true);
+}
+
+float AShowDownCharacter::GetSynchronizedServerTimeSeconds() const
+{
+	const UWorld* World = GetWorld();
+	if (!World)
+	{
+		return 0.0f;
+	}
+
+	if (const AGameStateBase* GameState = World->GetGameState())
+	{
+		return GameState->GetServerWorldTimeSeconds();
+	}
+
+	return World->GetTimeSeconds();
+}
+
+void AShowDownCharacter::StartWorldLifeLostPulse(int32 PreviousLives)
+{
+	if (IsRunningDedicatedServer())
+	{
+		return;
+	}
+
+	if (bWorldLifeLostPulseActive && WorldLifeLostDisplayedLives == FMath::Max(0, PreviousLives))
+	{
+		return;
+	}
+
+	WorldLifeLostDisplayedLives = FMath::Max(0, PreviousLives);
+	WorldLifeLostPulseElapsedTime = 0.0f;
+	bWorldLifeLostPulseActive = WorldLifeLostDisplayedLives > 0;
+	ResetWorldLifeLostPulseVisual();
+}
+
+void AShowDownCharacter::UpdateWorldLifeLostPulse(float DeltaSeconds)
+{
+	if (!bWorldLifeLostPulseActive || !WorldLivesText || IsRunningDedicatedServer())
+	{
+		return;
+	}
+
+	WorldLifeLostPulseElapsedTime += FMath::Max(0.0f, DeltaSeconds);
+	const float SafeDuration = FMath::Max(0.05f, WorldLifeLostPulseDuration);
+	const float Alpha = FMath::Clamp(WorldLifeLostPulseElapsedTime / SafeDuration, 0.0f, 1.0f);
+	const float Pulse = FMath::Sin(PI * Alpha);
+	WorldLivesText->SetRelativeScale3D(
+		WorldLivesBaseRelativeScale * (1.0f + FMath::Max(0.0f, WorldLifeLostPulseScale) * Pulse));
+	WorldLivesText->SetTextRenderColor(FLinearColor::LerpUsingHSV(
+		FLinearColor(1.0f, 0.92f, 0.92f, 1.0f),
+		FLinearColor(245.0f / 255.0f, 24.0f / 255.0f, 48.0f / 255.0f, 1.0f),
+		Alpha).ToFColor(true));
+
+	if (Alpha < 1.0f)
+	{
+		return;
+	}
+
+	bWorldLifeLostPulseActive = false;
+	WorldLifeLostDisplayedLives = INDEX_NONE;
+	ResetWorldLifeLostPulseVisual();
+	RefreshWorldLives();
+}
+
+void AShowDownCharacter::ResetWorldLifeLostPulseVisual()
+{
+	if (!WorldLivesText)
+	{
+		return;
+	}
+
+	WorldLivesText->SetRelativeScale3D(WorldLivesBaseRelativeScale);
+	WorldLivesText->SetTextRenderColor(FColor(245, 24, 48, 255));
+}
+
+void AShowDownCharacter::HandleCharacterLivesChanged(int32 PreviousLives)
+{
+	if (CharacterLives < PreviousLives)
+	{
+		StartWorldLifeLostPulse(PreviousLives);
+	}
+	else if (CharacterLives > PreviousLives)
+	{
+		bWorldLifeLostPulseActive = false;
+		WorldLifeLostDisplayedLives = INDEX_NONE;
+		ResetWorldLifeLostPulseVisual();
+	}
+
+	RefreshNameTag();
+}
+
 void AShowDownCharacter::CacheAnimBlueprintClass()
 {
 	if (!GetMesh() || CachedAnimBlueprintClass)
@@ -1265,6 +1710,14 @@ void AShowDownCharacter::StartActionVisual(EShowDownCharacterAnimState State)
 
 	if (State == EShowDownCharacterAnimState::Idle)
 	{
+		// Replicated Idle can arrive a frame before this client's synchronized
+		// presentation tick reaches the conceal peak. Hide first so the ragdoll-to-
+		// authored-pose reset is never exposed by packet or frame ordering.
+		if (HitRecoveryPresentationState.bActive && !bHitRecoveryRagdollReset)
+		{
+			SetHitRecoveryVisualConcealed(true);
+			bHitRecoveryRagdollReset = true;
+		}
 		StopActionVisuals();
 		return;
 	}
@@ -1302,16 +1755,6 @@ void AShowDownCharacter::StartActionVisual(EShowDownCharacterAnimState State)
 		}
 
 		bRagdollActive = true;
-		if (HasAuthority() && HitRagdollRecoverDelay > 0.0f)
-		{
-			GetWorldTimerManager().ClearTimer(HitRagdollRecoverTimerHandle);
-			GetWorldTimerManager().SetTimer(
-				HitRagdollRecoverTimerHandle,
-				this,
-				&AShowDownCharacter::ResetCharacterAnimState,
-				HitRagdollRecoverDelay,
-				false);
-		}
 		return;
 	}
 
@@ -1336,8 +1779,6 @@ void AShowDownCharacter::CacheBaseMeshTransform()
 
 void AShowDownCharacter::StopActionVisuals()
 {
-	GetWorldTimerManager().ClearTimer(HitRagdollRecoverTimerHandle);
-
 	if (GetMesh())
 	{
 		if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
@@ -1447,8 +1888,9 @@ void AShowDownCharacter::ApplyCharacterSceneActive()
 
 	if (USkeletalMeshComponent* CharacterMesh = GetMesh())
 	{
-		CharacterMesh->SetHiddenInGame(!bActive, true);
-		CharacterMesh->SetVisibility(bActive, true);
+		const bool bShowMesh = bActive && !bHitRecoveryVisualConcealed;
+		CharacterMesh->SetHiddenInGame(!bShowMesh, true);
+		CharacterMesh->SetVisibility(bShowMesh, true);
 
 		if (!bActive)
 		{
@@ -1465,6 +1907,10 @@ void AShowDownCharacter::ApplyCharacterSceneActive()
 	if (UCharacterMovementComponent* MovementComponent = GetCharacterMovement())
 	{
 		MovementComponent->DisableMovement();
+	}
+	if (!bActive)
+	{
+		SetHitResetPulseStrength(0.0f);
 	}
 
 	RefreshNameTag();
@@ -1631,8 +2077,11 @@ void AShowDownCharacter::RefreshWorldLives()
 			WorldLivesShadowText->SetTextMaterial(OpaqueTextMaterial);
 		}
 	}
+	const int32 DisplayedLives = bWorldLifeLostPulseActive
+		? FMath::Max(CharacterLives, WorldLifeLostDisplayedLives)
+		: CharacterLives;
 	FString Hearts;
-	for (int32 LifeIndex = 0; LifeIndex < CharacterLives; ++LifeIndex)
+	for (int32 LifeIndex = 0; LifeIndex < DisplayedLives; ++LifeIndex)
 	{
 		Hearts.AppendChar(static_cast<TCHAR>(0x2665));
 	}
@@ -1648,7 +2097,7 @@ void AShowDownCharacter::RefreshWorldLives()
 	// Overhead presentation belongs to characters the local player can see.
 	// Rendering it for the local first-person character leaves orphaned hearts/status
 	// in the middle of the screen while the local name tag is intentionally hidden.
-	const bool bVisible = ShouldShowNameTag() && CharacterLives > 0;
+	const bool bVisible = ShouldShowNameTag() && DisplayedLives > 0;
 	WorldLivesText->SetVisibility(bVisible, true);
 	WorldLivesText->SetHiddenInGame(!bVisible, true);
 	// The old enlarged duplicate produced a soft/doubled silhouette. The opaque
@@ -1811,7 +2260,7 @@ bool AShowDownCharacter::IsNameTagTurnActive() const
 
 bool AShowDownCharacter::ShouldShowNameTag() const
 {
-	if (!bCharacterSceneActive)
+	if (!bCharacterSceneActive || bHitRecoveryVisualConcealed || bHitRecoveryStatusConcealed)
 	{
 		return false;
 	}

@@ -99,6 +99,10 @@ public:
 	// Pure helpers kept public so the multiplayer gate and seat-relative camera
 	// math can be covered without creating a PIE world.
 	static bool ShouldUseGunShotCamera(bool bLiveRound, bool bTargetsLocalPlayer);
+	static bool ShouldUseEliminationTableOverview(
+		bool bLiveRound,
+		bool bTargetsLocalPlayer,
+		int32 RemainingLives);
 	static bool IsGunShotTargetLocalPlayer(
 		EShowDownPlayerSlot TargetSlot,
 		EShowDownPlayerSlot LocalPlayerSlot);
@@ -106,6 +110,12 @@ public:
 		const FTransform& PlayerOneCameraTransform,
 		const FTransform& PlayerOneCharacterTransform,
 		const FTransform& TargetCharacterTransform);
+	static FTransform BuildEliminationTableOverviewTransform(
+		const FVector& TableCenter,
+		const FTransform& TargetCharacterTransform,
+		float BackDistance,
+		float Height,
+		float LookAtHeight);
 
 	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Status")
 	void SetTableStatus(int32 LiveRounds, int32 RemainingChambers, EShowDownPhase Phase, EShowDownPlayerSlot TurnSlot);
@@ -361,6 +371,21 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera", meta = (ClampMin = "1.0"))
 	float CinematicCameraBlendExponent = 2.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera|Elimination", meta = (DisplayName = "Use Elimination Table Overview"))
+	bool bUseEliminationTableOverview = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera|Elimination", meta = (ClampMin = "0.0", DisplayName = "Overview Move Time"))
+	float EliminationOverviewMoveTime = 0.55f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera|Elimination", meta = (ClampMin = "0.0", DisplayName = "Overview Back Distance"))
+	float EliminationOverviewBackDistance = 90.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera|Elimination", meta = (DisplayName = "Overview Height"))
+	float EliminationOverviewHeight = 135.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera|Elimination", meta = (DisplayName = "Overview Look At Height"))
+	float EliminationOverviewLookAtHeight = 28.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Shot Result")
 	ESDSelfShotRoundMode ShotResultMode = ESDSelfShotRoundMode::AlwaysLive;
 
@@ -475,6 +500,11 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Hit Sequence|Blackout", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float HitBlackoutAmount = 1.0f;
 
+	// Lets the victim and observers see the body settle before the blackout masks
+	// the shared seat-reset pulse at its peak.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Hit Sequence|Blackout", meta = (ClampMin = "0.0"))
+	float HitBlackoutDelay = 0.82f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Hit Sequence|Blackout", meta = (ClampMin = "0.0"))
 	float HitBlackoutDuration = 0.45f;
 
@@ -528,6 +558,7 @@ private:
 	{
 		Idle,
 		InitialHit,
+		PreBlackoutHold,
 		Blackout,
 		RecoveryHold,
 		RecoveryBlendOut
@@ -547,6 +578,9 @@ private:
 	void StartSelfShotCinematicCamera();
 	void ActivateSelfShotCinematicCamera();
 	void UpdateSelfShotCinematicCamera(float DeltaSeconds);
+	bool TryStartEliminationTableOverview();
+	void FinishEliminationTableOverview();
+	FTransform BuildEliminationTableOverviewTransform(const AShowDownCharacter* TargetCharacter) const;
 	void CancelSelfShotCinematicCamera();
 	bool PrepareLocalGunShotCamera();
 	ACameraActor* GetOrCreateLocalGunShotCamera();
@@ -584,6 +618,7 @@ private:
 	static FRotator LerpRotation(const FRotator& From, const FRotator& To, float Alpha);
 	void StartHitSequence();
 	void UpdateHitSequence(float DeltaSeconds);
+	void EnterHitSequencePreBlackoutHold();
 	void EnterHitSequenceBlackout();
 	void EnterHitSequenceRecovery();
 	void FinishHitSequence();
@@ -636,6 +671,7 @@ private:
 	float HeldGunJitterElapsedTime = 0.0f;
 	float CinematicCameraElapsedTime = 0.0f;
 	float CinematicCameraBlendOutElapsedTime = 0.0f;
+	float EliminationOverviewElapsedTime = 0.0f;
 	float CinematicCameraShakeElapsedTime = 0.0f;
 	float CinematicCameraShakeHoldDuration = 0.0f;
 	float CinematicCameraShakeBlendOutTime = 0.0f;
@@ -649,6 +685,7 @@ private:
 	bool bSelfShotCinematicCameraStartPending = false;
 	bool bSelfShotCinematicCameraHoldStarted = false;
 	bool bSelfShotCinematicCameraBlendOutActive = false;
+	bool bEliminationTableOverviewActive = false;
 	bool bPresentationFinishPending = false;
 	bool bHasCapturedRestActorTransform = false;
 	bool bOpeningCardDropActive = false;
@@ -672,5 +709,7 @@ private:
 	FVector CinematicCameraShakeLocationAmplitude = FVector::ZeroVector;
 	FTransform CinematicCameraShakeBaseTransform;
 	FTransform GunShotCameraReferenceTransform;
+	FTransform EliminationOverviewStartTransform;
+	FTransform EliminationOverviewTargetTransform;
 	FSDArtToneSettings HitSequenceBaseSettings;
 };

@@ -1801,6 +1801,7 @@ bool AShowDownPlayerController::BeginGunShotCameraOverride(
 	{
 		return false;
 	}
+	ClearEliminatedSpectatorViewState();
 
 	if (bGunShotCameraOverrideActive && GunShotCameraOverrideTarget.Get() != Camera)
 	{
@@ -1873,6 +1874,32 @@ void AShowDownPlayerController::EndGunShotCameraOverride(
 	GunShotCameraBlendOutTimeRemaining = SafeBlendOutTime;
 }
 
+void AShowDownPlayerController::ReleaseGunShotCameraOverrideForElimination(ACameraActor* Camera)
+{
+	if (!bGunShotCameraOverrideActive
+		|| !IsValid(Camera)
+		|| GunShotCameraOverrideTarget.Get() != Camera)
+	{
+		return;
+	}
+
+	// A result/ranking presentation may have deliberately taken the view while
+	// this shot was finishing. Never steal it back just to establish the fallback
+	// spectator view.
+	if (GetViewTarget() != Camera)
+	{
+		ClearGunShotCameraOverrideState();
+		return;
+	}
+
+	// The transient camera is owned by the gun actor and remains valid after the
+	// override bookkeeping is cleared. Keep it as the view target until a rematch
+	// restores this player's lives and normal character-camera maintenance resumes.
+	EliminatedSpectatorCameraTarget = Camera;
+	bEliminatedSpectatorViewActive = true;
+	ClearGunShotCameraOverrideState();
+}
+
 void AShowDownPlayerController::CancelGunShotCameraOverride(ACameraActor* ExpectedCamera)
 {
 	if (!bGunShotCameraOverrideActive
@@ -1932,6 +1959,12 @@ void AShowDownPlayerController::ClearGunShotCameraOverrideState()
 	GunShotCameraBlendOutTimeRemaining = 0.0f;
 	bGunShotCameraOverrideActive = false;
 	bGunShotCameraBlendingOut = false;
+}
+
+void AShowDownPlayerController::ClearEliminatedSpectatorViewState()
+{
+	EliminatedSpectatorCameraTarget.Reset();
+	bEliminatedSpectatorViewActive = false;
 }
 
 void AShowDownPlayerController::SetFixedCameraBreathingSway(
@@ -2109,6 +2142,25 @@ void AShowDownPlayerController::UpdateCharacterPlayerCamera(float DeltaTime)
 		return;
 	}
 
+	if (bEliminatedSpectatorViewActive)
+	{
+		if (!EliminatedSpectatorCameraTarget.IsValid())
+		{
+			ClearEliminatedSpectatorViewState();
+		}
+		else
+		{
+			const bool bLivesRestored = IsValid(LocalPlayerCameraCharacterTarget)
+				&& LocalPlayerCameraCharacterTarget->GetCharacterLives() > 0
+				&& LocalPlayerCameraCharacterTarget->IsCharacterSceneActive();
+			if (!bLivesRestored)
+			{
+				return;
+			}
+			ClearEliminatedSpectatorViewState();
+		}
+	}
+
 	APlayerPawn* PlayerPawn = Cast<APlayerPawn>(GetPawn());
 	UCameraComponent* PlayerCamera = PlayerPawn ? PlayerPawn->cameraComp : nullptr;
 	if (!IsLocalController() || !bUseCharacterPlayerCamera || FixedCameraMouseLookTarget || !PlayerPawn || !PlayerCamera)
@@ -2129,6 +2181,15 @@ void AShowDownPlayerController::UpdateCharacterPlayerCamera(float DeltaTime)
 	}
 
 	if (!IsValid(LocalPlayerCameraCharacterTarget) || !LocalPlayerCameraCharacterTarget->GetMesh())
+	{
+		return;
+	}
+
+	// Final elimination deliberately leaves this controller on a detached
+	// table-overview camera. Do not snap back to the hidden character. Restoring
+	// lives for a rematch automatically allows the normal setup below to run.
+	if (LocalPlayerCameraCharacterTarget->GetCharacterLives() <= 0
+		|| !LocalPlayerCameraCharacterTarget->IsCharacterSceneActive())
 	{
 		return;
 	}

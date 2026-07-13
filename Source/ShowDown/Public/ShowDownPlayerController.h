@@ -161,6 +161,9 @@ public:
 	// from replacing the cinematic view on the next tick.
 	bool BeginGunShotCameraOverride(ACameraActor* Camera, float BlendInTime, float BlendExponent);
 	void EndGunShotCameraOverride(ACameraActor* Camera, float BlendOutTime, float BlendExponent);
+	// Final-elimination shots leave the local player on the independent gun-shot
+	// camera instead of returning to a character that is about to be hidden.
+	void ReleaseGunShotCameraOverrideForElimination(ACameraActor* Camera);
 	void CancelGunShotCameraOverride(ACameraActor* ExpectedCamera = nullptr);
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Camera")
@@ -422,6 +425,7 @@ private:
 	void UpdateCharacterPlayerCamera(float DeltaTime);
 	void UpdateGunShotCameraOverride(float DeltaTime);
 	void ClearGunShotCameraOverrideState();
+	void ClearEliminatedSpectatorViewState();
 	void UpdateFixedCameraMouseLook(float DeltaTime);
 	void SubmitCharacterHeadLookRotation(const FRotator& LookRotation, float DeltaTime);
 	void RestoreFixedCameraBaseTransform();
@@ -509,9 +513,11 @@ private:
 
 	TWeakObjectPtr<ACameraActor> GunShotCameraOverrideTarget;
 	TWeakObjectPtr<AActor> GunShotCameraReturnViewTarget;
+	TWeakObjectPtr<ACameraActor> EliminatedSpectatorCameraTarget;
 	float GunShotCameraBlendOutTimeRemaining = 0.0f;
 	bool bGunShotCameraOverrideActive = false;
 	bool bGunShotCameraBlendingOut = false;
+	bool bEliminatedSpectatorViewActive = false;
 
 	TSharedPtr<SWidget> CenterCrosshairWidget;
 	TArray<FSDPrimitiveCustomDepthState> FocusedPrimitiveStates;

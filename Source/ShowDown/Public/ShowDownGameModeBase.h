@@ -201,6 +201,13 @@ public:
 	void SetMultiplayerVoiceTalking(AController* RequestingController, bool bIsTalking);
 	void NotifyInitialCardDealCameraReady(AController* ReadyController);
 
+	// Shared by the multiplayer queue and automation tests: recovery starts only
+	// when the gun resolves, so its duration is added after ResultDelay.
+	static float CalculateRoulettePresentationFinishDelay(
+		float ResultDelay,
+		float GunPresentationDelay,
+		float HitRecoveryDuration);
+
 	void RequestMultiplayerRestartFromController(AController* RequestingController);
 
 	// 게임 종료 후 허브(메인메뉴)로 돌아갈 때 게임판을 정리합니다.
@@ -456,6 +463,7 @@ private:
 	int32 PendingFoldLoadCount = 1;
 	FTimerHandle CardPlacementDelayHandle;
 	FTimerHandle CollectorActionPresentationTimerHandle;
+	FTimerHandle SelfShotHitRecoveryWaitTimerHandle;
 	TFunction<void()> CardPlacementDelayContinuation;
 	TFunction<void()> CollectorActionPresentationContinuation;
 	TFunction<void()> SelfShotGunResultContinuation;

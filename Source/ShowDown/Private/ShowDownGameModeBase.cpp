@@ -2532,15 +2532,32 @@ void AShowDownGameModeBase::PlaySelfShotGunPresentationThen(
 {
 	auto ResolveWithoutGun = [this, TargetSide, bLiveRound, &ResultContinuation, &PresentationContinuation]() mutable
 	{
-		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+		if (bSelfShotGunPresentationInProgress)
 		{
-			ShowDownGameState->OnRouletteResult.Broadcast(TargetSide, bLiveRound);
+			if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+			{
+				ShowDownGameState->OnRouletteResult.Broadcast(TargetSide, bLiveRound);
+			}
+			if (ResultContinuation)
+			{
+				ResultContinuation();
+			}
+			PlayCollectorActionPresentationThen(MoveTemp(PresentationContinuation));
+			return;
 		}
-		if (ResultContinuation)
+
+		bSelfShotGunPresentationInProgress = true;
+		ActiveSelfShotGunActor = nullptr;
+		SelfShotGunResultContinuation = MoveTemp(ResultContinuation);
+		SelfShotGunPresentationContinuation = [this, Continuation = MoveTemp(PresentationContinuation)]() mutable
 		{
-			ResultContinuation();
-		}
-		PlayCollectorActionPresentationThen(MoveTemp(PresentationContinuation));
+			PlayCollectorActionPresentationThen(MoveTemp(Continuation));
+		};
+		bPendingSelfShotRouletteResult = true;
+		bPendingSelfShotLiveRound = bLiveRound;
+		PendingSelfShotTargetSide = TargetSide;
+		ResolvePendingSelfShotGunResult();
+		FinishSelfShotGunPresentation();
 	};
 
 	if (GetNetMode() != NM_Standalone)
@@ -2569,6 +2586,7 @@ void AShowDownGameModeBase::PlaySelfShotGunPresentationThen(
 		bLiveRound ? TEXT("Live") : TEXT("Empty"));
 
 	bSelfShotGunPresentationInProgress = true;
+	GetWorldTimerManager().ClearTimer(SelfShotHitRecoveryWaitTimerHandle);
 	ActiveSelfShotGunActor = GunActor;
 	SelfShotGunResultContinuation = MoveTemp(ResultContinuation);
 	SelfShotGunPresentationContinuation = MoveTemp(PresentationContinuation);
@@ -2691,6 +2709,28 @@ void AShowDownGameModeBase::HandleSelfShotGunShotResolved()
 
 void AShowDownGameModeBase::FinishSelfShotGunPresentation()
 {
+	// Resolve an interrupted gun first so the character recovery sequence exists
+	// before deciding whether the round may continue.
+	ResolvePendingSelfShotGunResult();
+	if (bPendingSelfShotLiveRound)
+	{
+		if (AShowDownCharacter* TargetCharacter = FindSingleRouletteCharacter(PendingSelfShotTargetSide))
+		{
+			const float RemainingRecoveryTime = TargetCharacter->GetHitRecoveryPresentationRemainingTime();
+			if (RemainingRecoveryTime > KINDA_SMALL_NUMBER)
+			{
+				GetWorldTimerManager().SetTimer(
+					SelfShotHitRecoveryWaitTimerHandle,
+					this,
+					&AShowDownGameModeBase::FinishSelfShotGunPresentation,
+					RemainingRecoveryTime + 0.01f,
+					false);
+				return;
+			}
+		}
+	}
+	GetWorldTimerManager().ClearTimer(SelfShotHitRecoveryWaitTimerHandle);
+
 	if (ActiveSelfShotGunActor)
 	{
 		ActiveSelfShotGunActor->OnGunPresentationFinished.RemoveDynamic(
@@ -2704,9 +2744,9 @@ void AShowDownGameModeBase::FinishSelfShotGunPresentation()
 			&AShowDownGameModeBase::HandleSelfShotGunShotResolved);
 	}
 
-	ResolvePendingSelfShotGunResult();
 	bSelfShotGunPresentationInProgress = false;
 	ActiveSelfShotGunActor = nullptr;
+	bPendingSelfShotLiveRound = false;
 
 	TFunction<void()> Continuation = MoveTemp(SelfShotGunPresentationContinuation);
 	SelfShotGunPresentationContinuation = TFunction<void()>();
@@ -3343,6 +3383,17 @@ float AShowDownGameModeBase::ResolveMultiplayerRoulettePresentationDelay(bool bL
 	return GunActor
 		? GunActor->GetPresentationFinishDelay(bLiveRound)
 		: ResolveMultiplayerRouletteResultDelay();
+}
+
+float AShowDownGameModeBase::CalculateRoulettePresentationFinishDelay(
+	float ResultDelay,
+	float GunPresentationDelay,
+	float HitRecoveryDuration)
+{
+	const float SafeResultDelay = FMath::Max(0.0f, ResultDelay);
+	return FMath::Max(
+		FMath::Max(0.0f, GunPresentationDelay),
+		SafeResultDelay + FMath::Max(0.0f, HitRecoveryDuration));
 }
 
 void AShowDownGameModeBase::CollectorGiveCardToPlayer()
@@ -7554,7 +7605,17 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 		const float MaxPresentationDelay = FMath::Max(
 			ResolveMultiplayerRoulettePresentationDelay(false),
 			ResolveMultiplayerRoulettePresentationDelay(true));
-		const float ReservedFinishDelay = FMath::Max(ResultDelay, MaxPresentationDelay);
+		float MaxCharacterRecoveryDuration = 0.0f;
+		if (const AShowDownCharacter* TargetCharacter = FindActiveCharacterForPlayerSlot(
+			GetWorld(),
+			TargetPlayer->ShowDownSlot))
+		{
+			MaxCharacterRecoveryDuration = TargetCharacter->GetHitRecoveryPresentationDuration();
+		}
+		const float ReservedFinishDelay = CalculateRoulettePresentationFinishDelay(
+			ResultDelay,
+			MaxPresentationDelay,
+			MaxCharacterRecoveryDuration);
 		const TWeakObjectPtr<ASDPlayerState> WeakQueuedTarget(TargetPlayer);
 		FTimerDelegate StartDelegate;
 		StartDelegate.BindWeakLambda(this, [this, WeakQueuedTarget]()
@@ -7603,7 +7664,18 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 	const EShowDownPlayerSlot TargetSlot = TargetPlayer->ShowDownSlot;
 	const FString TargetName = TargetPlayer->GetPlayerName();
 	const float ResultDelay = FMath::Max(0.0f, ResolveMultiplayerRouletteResultDelay());
-	const float FinishDelay = FMath::Max(ResultDelay, ResolveMultiplayerRoulettePresentationDelay(bHit));
+	float CharacterRecoveryDuration = 0.0f;
+	if (bHit)
+	{
+		if (const AShowDownCharacter* TargetCharacter = FindActiveCharacterForPlayerSlot(GetWorld(), TargetSlot))
+		{
+			CharacterRecoveryDuration = TargetCharacter->GetHitRecoveryPresentationDuration();
+		}
+	}
+	const float FinishDelay = CalculateRoulettePresentationFinishDelay(
+		ResultDelay,
+		ResolveMultiplayerRoulettePresentationDelay(bHit),
+		CharacterRecoveryDuration);
 	const TWeakObjectPtr<ASDPlayerState> WeakTargetPlayer(TargetPlayer);
 
 	auto BroadcastResult = [this, WeakTargetPlayer, TargetSlot, TargetName, ClampedBulletCount, bHit, LiveRoundsAfterShot, ChambersAfterShot]()

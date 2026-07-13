@@ -8,7 +8,9 @@
 #include "Presentation/SDSelfShotGunActor.h"
 #include "RoundResolver.h"
 #include "RouletteSystem.h"
+#include "ShowDownCharacter.h"
 #include "ShowDownCharacterSkinCatalog.h"
+#include "ShowDownGameModeBase.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FShowDownBettingSystemTest,
@@ -320,6 +322,18 @@ bool FShowDownGunShotCameraTest::RunTest(const FString& Parameters)
 	TestFalse(
 		TEXT("An empty chamber never enables the target camera"),
 		ASDSelfShotGunActor::ShouldUseGunShotCamera(false, true));
+	TestTrue(
+		TEXT("A final live hit keeps only the victim on the table overview"),
+		ASDSelfShotGunActor::ShouldUseEliminationTableOverview(true, true, 0));
+	TestFalse(
+		TEXT("A surviving victim still returns to first person"),
+		ASDSelfShotGunActor::ShouldUseEliminationTableOverview(true, true, 1));
+	TestFalse(
+		TEXT("An observer never enters the eliminated player's overview"),
+		ASDSelfShotGunActor::ShouldUseEliminationTableOverview(true, false, 0));
+	TestFalse(
+		TEXT("An empty chamber never enters elimination overview"),
+		ASDSelfShotGunActor::ShouldUseEliminationTableOverview(false, true, 0));
 
 	const TArray<EShowDownPlayerSlot> PlayerSlots = {
 		EShowDownPlayerSlot::Player1,
@@ -383,6 +397,67 @@ bool FShowDownGunShotCameraTest::RunTest(const FString& Parameters)
 		TEXT("Player 3 receives the same character-relative camera rotation"),
 		PlayerThreeResult.GetRotation().AngularDistance(ExpectedPlayerThreeRotation) < 0.001f);
 
+	const FVector TableCenter(40.0f, -25.0f, 10.0f);
+	const float SeatDistance = 300.0f;
+	const float OverviewBackDistance = 90.0f;
+	const float OverviewHeight = 135.0f;
+	const float OverviewLookAtHeight = 28.0f;
+	const FVector SeatOffsets[] = {
+		FVector(-SeatDistance, 0.0f, 0.0f),
+		FVector(SeatDistance, 0.0f, 0.0f),
+		FVector(0.0f, SeatDistance, 0.0f),
+		FVector(0.0f, -SeatDistance, 0.0f)
+	};
+	for (int32 SeatIndex = 0; SeatIndex < UE_ARRAY_COUNT(SeatOffsets); ++SeatIndex)
+	{
+		const FVector SeatLocation = TableCenter + SeatOffsets[SeatIndex];
+		const FVector DirectionToTable = (TableCenter - SeatLocation).GetSafeNormal2D();
+		const FTransform Overview = ASDSelfShotGunActor::BuildEliminationTableOverviewTransform(
+			TableCenter,
+			FTransform(FRotator::ZeroRotator, SeatLocation),
+			OverviewBackDistance,
+			OverviewHeight,
+			OverviewLookAtHeight);
+		const FVector ExpectedLocation = SeatLocation
+			- DirectionToTable * OverviewBackDistance
+			+ FVector::UpVector * OverviewHeight;
+		TestTrue(
+			*FString::Printf(TEXT("Seat %d overview stays behind and above its eliminated player"), SeatIndex + 1),
+			Overview.GetLocation().Equals(ExpectedLocation, 0.01f));
+
+		const FVector ExpectedLookDirection = (
+			TableCenter + FVector::UpVector * OverviewLookAtHeight - ExpectedLocation).GetSafeNormal();
+		TestTrue(
+			*FString::Printf(TEXT("Seat %d overview looks back toward the shared table"), SeatIndex + 1),
+			FVector::DotProduct(Overview.GetUnitAxis(EAxis::X), ExpectedLookDirection) > 0.999f);
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownHitRecoveryTimingTest,
+	"ShowDown.Core.HitRecoveryTiming",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownHitRecoveryTimingTest::RunTest(const FString& Parameters)
+{
+	TestEqual(
+		TEXT("Default recovery keeps the body down, masks reset, and settles before play resumes"),
+		AShowDownCharacter::CalculateHitRecoveryPresentationDuration(1.0f, 0.5f, 0.55f),
+		2.05f);
+	TestEqual(
+		TEXT("Invalid negative timing cannot remove the minimum conceal pulse"),
+		AShowDownCharacter::CalculateHitRecoveryPresentationDuration(-1.0f, -1.0f, -1.0f),
+		0.1f);
+	TestEqual(
+		TEXT("Queued multiplayer shots wait for recovery measured from the impact"),
+		AShowDownGameModeBase::CalculateRoulettePresentationFinishDelay(1.45f, 3.0f, 2.05f),
+		3.5f);
+	TestEqual(
+		TEXT("A longer gun camera still owns the presentation finish"),
+		AShowDownGameModeBase::CalculateRoulettePresentationFinishDelay(1.0f, 4.0f, 2.0f),
+		4.0f);
 	return true;
 }
 

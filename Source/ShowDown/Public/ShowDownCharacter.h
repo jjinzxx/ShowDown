@@ -15,6 +15,7 @@ class USceneComponent;
 class UShowDownCharacterAnimInstance;
 class UShowDownCharacterSkinCatalog;
 class USkeletalMesh;
+class USpotLightComponent;
 class UTextRenderComponent;
 class UWidgetComponent;
 
@@ -43,6 +44,29 @@ struct FShowDownCharacterBetStatusPresentation
 
 	UPROPERTY()
 	FLinearColor AccentColor = FLinearColor(1.0f, 0.72f, 0.18f, 1.0f);
+};
+
+/**
+ * One server-authored hit presentation. Clients derive its visual phase from
+ * the replicated server start time instead of running independent recovery
+ * timers, so a late packet cannot leave one seat snapped upright early.
+ */
+USTRUCT()
+struct FShowDownHitRecoveryPresentationState
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	int32 Sequence = 0;
+
+	UPROPERTY()
+	float ServerStartTimeSeconds = 0.0f;
+
+	UPROPERTY()
+	bool bActive = false;
+
+	UPROPERTY()
+	bool bFinalElimination = false;
 };
 
 UCLASS(Blueprintable)
@@ -79,6 +103,28 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Character Physics")
 	void StartHitRagdoll();
+
+	/** Starts the synchronized downed -> reset-pulse -> recovery presentation. */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Hit Recovery")
+	void StartHitRecoveryPresentation(bool bFinalElimination);
+
+	/** Clears an interrupted presentation, for example when a new match resets the table. */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Hit Recovery")
+	void CancelHitRecoveryPresentation(bool bRevealCharacter = true);
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Hit Recovery")
+	bool IsHitRecoveryPresentationActive() const { return HitRecoveryPresentationState.bActive; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Hit Recovery")
+	float GetHitRecoveryPresentationDuration() const;
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Hit Recovery")
+	float GetHitRecoveryPresentationRemainingTime() const;
+
+	static float CalculateHitRecoveryPresentationDuration(
+		float DownedHoldDuration,
+		float ResetPulseDuration,
+		float RecoveryRevealDuration);
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Character Animation")
 	void ResetCharacterAnimState();
@@ -224,7 +270,7 @@ protected:
 	void OnRep_Identity();
 
 	UFUNCTION()
-	void OnRep_CharacterLives();
+	void OnRep_CharacterLives(int32 PreviousLives);
 
 	UFUNCTION()
 	void OnRep_ViewRotation();
@@ -234,6 +280,9 @@ protected:
 
 	UFUNCTION()
 	void OnRep_BetStatusPresentation();
+
+	UFUNCTION()
+	void OnRep_HitRecoveryPresentationState();
 
 	UFUNCTION(Server, Reliable)
 	void ServerSetCharacterAnimState(EShowDownCharacterAnimState NewState);
@@ -316,6 +365,12 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Lives", meta = (ClampMin = "4.0"))
 	float WorldLivesTextSize = 16.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|World Lives", meta = (ClampMin = "0.05", ClampMax = "1.0"))
+	float WorldLifeLostPulseDuration = 0.28f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|World Lives", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float WorldLifeLostPulseScale = 0.35f;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|World Bet Status")
 	TObjectPtr<USceneComponent> BetStatusAnchorComponent;
 
@@ -388,8 +443,26 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Physics")
 	FVector RagdollHitLocalImpulseDirection = FVector(0.0f, -1.0f, 0.25f);
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Physics", meta = (ClampMin = "0.0"))
-	float HitRagdollRecoverDelay = 5.0f;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery")
+	TObjectPtr<USpotLightComponent> HitResetPulseLight;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery", meta = (ClampMin = "0.0", UIMin = "0.0", UIMax = "3.0"))
+	float HitDownedHoldDuration = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery", meta = (ClampMin = "0.1", UIMin = "0.1", UIMax = "2.0"))
+	float HitResetPulseDuration = 0.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery", meta = (ClampMin = "0.0", UIMin = "0.0", UIMax = "2.0"))
+	float HitRecoveryRevealDuration = 0.55f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery")
+	FLinearColor HitResetPulseColor = FLinearColor(0.32f, 0.85f, 1.0f, 1.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery", meta = (ClampMin = "0.0", UIMin = "0.0", UIMax = "200000.0"))
+	float HitResetPulsePeakIntensity = 80000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery", meta = (ClampMin = "50.0", UIMin = "50.0", UIMax = "600.0"))
+	float HitResetPulseRadius = 320.0f;
 
 	UPROPERTY(ReplicatedUsing = OnRep_Identity, EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Identity")
 	EShowDownCharacterRole CharacterRole = EShowDownCharacterRole::Unassigned;
@@ -412,6 +485,9 @@ protected:
 	UPROPERTY(ReplicatedUsing = OnRep_BetStatusPresentation)
 	FShowDownCharacterBetStatusPresentation ReplicatedBetStatusPresentation;
 
+	UPROPERTY(ReplicatedUsing = OnRep_HitRecoveryPresentationState)
+	FShowDownHitRecoveryPresentationState HitRecoveryPresentationState;
+
 private:
 	void ApplyCharacterSkin();
 	void ApplyCharacterAnimState(EShowDownCharacterAnimState NewState);
@@ -430,6 +506,17 @@ private:
 	FName ResolveRagdollHitBoneName() const;
 	FVector GetRagdollHitImpulseDirection() const;
 	void StopRagdoll();
+	void BeginLocalHitRecoveryPresentation();
+	void UpdateHitRecoveryPresentation();
+	void CompleteHitRecoveryPresentationAuthority();
+	void SetHitRecoveryVisualConcealed(bool bConcealed);
+	void SetHitRecoveryStatusConcealed(bool bConcealed);
+	void SetHitResetPulseStrength(float Strength);
+	float GetSynchronizedServerTimeSeconds() const;
+	void StartWorldLifeLostPulse(int32 PreviousLives);
+	void UpdateWorldLifeLostPulse(float DeltaSeconds);
+	void ResetWorldLifeLostPulseVisual();
+	void HandleCharacterLivesChanged(int32 PreviousLives);
 	void CacheAnimBlueprintClass();
 	void RestoreAnimBlueprintClass();
 	void StartActionVisual(EShowDownCharacterAnimState State);
@@ -456,7 +543,6 @@ private:
 	bool bLastNameTagVisible = false;
 
 	FTimerHandle AnimStateResetTimerHandle;
-	FTimerHandle HitRagdollRecoverTimerHandle;
 	UPROPERTY(Transient)
 	TSubclassOf<UAnimInstance> CachedAnimBlueprintClass;
 	UPROPERTY(Transient)
@@ -472,5 +558,15 @@ private:
 	FVector BaseMeshRelativeLocation = FVector::ZeroVector;
 	FRotator BaseMeshRelativeRotation = FRotator::ZeroRotator;
 	FString AppliedCharacterSkinId;
+	int32 LocalHitRecoverySequence = INDEX_NONE;
+	bool bHitRecoveryVisualConcealed = false;
+	bool bHitRecoveryStatusConcealed = false;
+	bool bHitRecoveryRagdollReset = false;
+	bool bHitRecoverySurvivorRevealed = false;
+	bool bPendingSceneDeactivateAfterHitRecovery = false;
+	bool bWorldLifeLostPulseActive = false;
+	int32 WorldLifeLostDisplayedLives = INDEX_NONE;
+	float WorldLifeLostPulseElapsedTime = 0.0f;
+	FVector WorldLivesBaseRelativeScale = FVector::OneVector;
 	bool bRagdollActive = false;
 };
