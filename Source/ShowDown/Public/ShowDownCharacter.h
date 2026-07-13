@@ -417,6 +417,7 @@ private:
 	void ApplyPresentationCollisionSettings();
 	void RefreshNameTag();
 	void SyncNameTagVisibility();
+	void BindNameTagToLocalPlayer();
 	void ApplyNameTagWidgetContent();
 	void RefreshWorldLives();
 	void RefreshWorldBetStatus();

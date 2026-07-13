@@ -12,6 +12,8 @@
 #include "Components/WidgetComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/Font.h"
+#include "Engine/GameInstance.h"
+#include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "Engine/SkeletalMesh.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -1352,6 +1354,7 @@ void AShowDownCharacter::RefreshNameTag()
 
 	// Location is authored on the component. Do not overwrite it here: designers
 	// must be able to move the name tag in the Blueprint/component editor.
+	BindNameTagToLocalPlayer();
 	NameTagWidgetComponent->SetWidgetSpace(EWidgetSpace::Screen);
 	NameTagWidgetComponent->SetInitialSharedLayerName(NameTagSharedLayerName);
 	NameTagWidgetComponent->SetInitialLayerZOrder(NameTagLayerZOrder);
@@ -1376,6 +1379,8 @@ void AShowDownCharacter::SyncNameTagVisibility()
 	{
 		return;
 	}
+
+	BindNameTagToLocalPlayer();
 
 	const bool bVisible = ShouldShowNameTag();
 	const bool bVisibleWidgetMissing = bVisible
@@ -1419,6 +1424,27 @@ void AShowDownCharacter::SyncNameTagVisibility()
 		}
 		NameTagWidgetComponent->SetComponentTickEnabled(true);
 		NameTagWidgetComponent->RequestRenderUpdate();
+	}
+}
+
+void AShowDownCharacter::BindNameTagToLocalPlayer()
+{
+	if (!NameTagWidgetComponent || IsRunningDedicatedServer())
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	UGameInstance* GameInstance = World ? World->GetGameInstance() : nullptr;
+	ULocalPlayer* LocalPlayer = GameInstance ? GameInstance->GetFirstGamePlayer() : nullptr;
+	if (LocalPlayer)
+	{
+		// Screen-space widget components fall back to the first local player when
+		// OwnerPlayer is null. During multiplayer travel that fallback can happen
+		// before the local PlayerController is attached, leaving bAddedToScreen
+		// associated with a stale game layer. Explicit ownership removes the stale
+		// registration once and lets the component add itself to the ready layer.
+		NameTagWidgetComponent->SetOwnerPlayer(LocalPlayer);
 	}
 }
 
