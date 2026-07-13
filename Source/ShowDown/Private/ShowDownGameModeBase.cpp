@@ -22,6 +22,7 @@
 #include "LevelSequencePlayer.h"
 #include "MovieSceneSequencePlaybackSettings.h"
 #include "PlayerPawn.h"
+#include "Presentation/SDCardRevealLayout.h"
 #include "Presentation/SDBetActionPanelActor.h"
 #include "Presentation/SDSelfShotGunActor.h"
 #include "SDPlayerSeat.h"
@@ -5027,6 +5028,68 @@ FTransform AShowDownGameModeBase::BuildCardRevealPresentationTransform(
 	}
 
 	const FVector TableCenter = ResolveSingleTableCenter(GetWorld());
+	EShowDownPlayerSlot RevealSlot = EShowDownPlayerSlot::None;
+	for (ASDPlayerState* Player : MultiplayerPlayers)
+	{
+		if (IsValid(Player) && Player->ForeheadCard == Card)
+		{
+			RevealSlot = Player->ShowDownSlot;
+			break;
+		}
+	}
+	if (RevealSlot == EShowDownPlayerSlot::None)
+	{
+		for (ASDPlayerState* FoldedPlayer : MultiplayerFoldedPlayers)
+		{
+			if (IsValid(FoldedPlayer) && FoldedPlayer->ForeheadCard == Card)
+			{
+				RevealSlot = FoldedPlayer->ShowDownSlot;
+				break;
+			}
+		}
+	}
+	if (RevealSlot == EShowDownPlayerSlot::None)
+	{
+		// Before the first reveal, HiddenFromSlot is the recipient. It is cleared
+		// by MoveToRevealTransform, so persistent PlayerState ownership above wins.
+		RevealSlot = Card->HiddenFromSlot;
+	}
+	if (RevealSlot != EShowDownPlayerSlot::None)
+	{
+		FVector SeatLocation = FVector::ZeroVector;
+		bool bHasSeatLocation = false;
+		if (const AShowDownCharacter* Character = FindActiveCharacterForPlayerSlot(GetWorld(), RevealSlot))
+		{
+			SeatLocation = Character->GetActorLocation();
+			bHasSeatLocation = true;
+		}
+		else if (const ASDCardPlacementAnchor* ForeheadAnchor = GetForeheadAnchorForPlayerSlot(RevealSlot))
+		{
+			const USceneComponent* ForeheadSlot = ForeheadAnchor->GetSlotComponent();
+			SeatLocation = ForeheadSlot
+				? ForeheadSlot->GetComponentLocation()
+				: ForeheadAnchor->GetActorLocation();
+			bHasSeatLocation = true;
+		}
+
+		FTransform RadialRevealTransform;
+		if (bHasSeatLocation
+			&& ShowDownCardRevealLayout::TryBuildRadialTransform(
+				TableCenter,
+				SeatLocation,
+				CardRevealSideSpacing,
+				CardRevealTableYaw,
+				CardRevealHeightOffset,
+				CardRevealRotationOffset,
+				Card->GetActorScale3D(),
+				RadialRevealTransform))
+		{
+			return RadialRevealTransform;
+		}
+	}
+
+	// Single-player cards have no network player slot. Keep their authored linear
+	// layout while multiplayer cards use CardRevealSideSpacing as a center radius.
 	const FRotator TableRotation(0.0f, CardRevealTableYaw, 0.0f);
 	const FVector ForwardDirection = FRotationMatrix(TableRotation).GetUnitAxis(EAxis::X);
 	const float CenteredIndex =

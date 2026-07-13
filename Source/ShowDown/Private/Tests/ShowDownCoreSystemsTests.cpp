@@ -4,6 +4,7 @@
 #include "CardSystem.h"
 #include "CollectorAISystem.h"
 #include "Misc/AutomationTest.h"
+#include "Presentation/SDCardRevealLayout.h"
 #include "RoundResolver.h"
 #include "RouletteSystem.h"
 
@@ -143,6 +144,75 @@ bool FShowDownCardSystemTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("A failed deal clears the output"), DealtCards.Num(), 0);
 	CardSystem->ResetDeck(-1);
 	TestEqual(TEXT("Negative deck copies clamp to an empty deck"), CardSystem->GetRemainingCardCount(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownCardRevealLayoutTest,
+	"ShowDown.Core.CardRevealLayout",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownCardRevealLayoutTest::RunTest(const FString& Parameters)
+{
+	const FVector TableCenter(100.0f, 200.0f, 20.0f);
+	const float CenterDistance = 50.0f;
+	const float HeightOffset = -6.0f;
+	const FRotator RotationOffset(-90.0f, 0.0f, 0.0f);
+	const FVector Scale(1.12f);
+
+	struct FSeatCase
+	{
+		const TCHAR* Label;
+		FVector SeatLocation;
+		FVector ExpectedLocation;
+		float ExpectedYaw;
+	};
+
+	const FSeatCase SeatCases[] = {
+		{ TEXT("Player 1"), TableCenter + FVector(-100.0f, 0.0f, 0.0f), TableCenter + FVector(-50.0f, 0.0f, HeightOffset), 180.0f },
+		{ TEXT("Player 2"), TableCenter + FVector(100.0f, 0.0f, 0.0f), TableCenter + FVector(50.0f, 0.0f, HeightOffset), 0.0f },
+		{ TEXT("Player 3"), TableCenter + FVector(0.0f, 100.0f, 0.0f), TableCenter + FVector(0.0f, 50.0f, HeightOffset), 90.0f },
+		{ TEXT("Player 4"), TableCenter + FVector(0.0f, -100.0f, 0.0f), TableCenter + FVector(0.0f, -50.0f, HeightOffset), -90.0f },
+	};
+
+	for (const FSeatCase& SeatCase : SeatCases)
+	{
+		FTransform Transform;
+		TestTrue(
+			*FString::Printf(TEXT("%s radial transform resolves"), SeatCase.Label),
+			ShowDownCardRevealLayout::TryBuildRadialTransform(
+				TableCenter,
+				SeatCase.SeatLocation,
+				CenterDistance,
+				0.0f,
+				HeightOffset,
+				RotationOffset,
+				Scale,
+				Transform));
+		TestTrue(
+			*FString::Printf(TEXT("%s stays at the shared center distance"), SeatCase.Label),
+			Transform.GetLocation().Equals(SeatCase.ExpectedLocation, KINDA_SMALL_NUMBER));
+
+		const FQuat ExpectedRotation =
+			(FRotator(0.0f, SeatCase.ExpectedYaw, 0.0f).Quaternion()
+				* RotationOffset.Quaternion()).GetNormalized();
+		TestTrue(
+			*FString::Printf(TEXT("%s reveal card rotates with its seat"), SeatCase.Label),
+			Transform.GetRotation().Equals(ExpectedRotation, KINDA_SMALL_NUMBER));
+	}
+
+	FTransform InvalidTransform;
+	TestFalse(
+		TEXT("A seat at the table center cannot define a radial reveal direction"),
+		ShowDownCardRevealLayout::TryBuildRadialTransform(
+			TableCenter,
+			TableCenter,
+			CenterDistance,
+			0.0f,
+			HeightOffset,
+			RotationOffset,
+			Scale,
+			InvalidTransform));
 	return true;
 }
 

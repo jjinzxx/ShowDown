@@ -27,6 +27,10 @@
 namespace
 {
 	constexpr float ActionAnimationFallbackReturnDelay = 1.0f;
+	const FName NameTagSharedLayerName(TEXT("ShowDownCharacterNameTags"));
+	constexpr int32 NameTagLayerZOrder = 50;
+	const FVector AuthoredSinglePlayerNameTagOffset(0.0f, 0.0f, 92.0f);
+	const FVector LegacyRaisedNameTagOffset(0.0f, 0.0f, 112.0f);
 
 	FString GetAnimStateDebugName(EShowDownCharacterAnimState State)
 	{
@@ -77,9 +81,14 @@ AShowDownCharacter::AShowDownCharacter()
 	NameTagWidgetComponent->SetRelativeLocation(NameTagLocalOffset);
 	NameTagWidgetComponent->SetWidgetClass(UShowDownNameTagWidget::StaticClass());
 	NameTagWidgetComponent->SetWidgetSpace(EWidgetSpace::Screen);
+	NameTagWidgetComponent->SetInitialSharedLayerName(NameTagSharedLayerName);
+	NameTagWidgetComponent->SetInitialLayerZOrder(NameTagLayerZOrder);
 	NameTagWidgetComponent->SetDrawAtDesiredSize(true);
 	NameTagWidgetComponent->SetDrawSize(FVector2D(260.0f, 64.0f));
 	NameTagWidgetComponent->SetPivot(FVector2D(0.5f, 1.0f));
+	NameTagWidgetComponent->SetTickWhenOffscreen(true);
+	NameTagWidgetComponent->SetManuallyRedraw(false);
+	NameTagWidgetComponent->SetRedrawTime(0.0f);
 	NameTagWidgetComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	NameTagWidgetComponent->SetGenerateOverlapEvents(false);
 	NameTagWidgetComponent->SetVisibility(false);
@@ -87,8 +96,8 @@ AShowDownCharacter::AShowDownCharacter()
 	WorldLivesAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("WorldLivesAnchor"));
 	WorldLivesAnchor->SetupAttachment(GetCapsuleComponent());
 	WorldLivesAnchor->SetRelativeLocation(FVector(
-		WorldStatusLocalForwardOffset,
-		WorldStatusLocalRightOffset,
+		WorldLivesLocalForwardOffset,
+		WorldLivesLocalRightOffset,
 		WorldLivesLocalHeight));
 	WorldLivesAnchor->SetRelativeRotation(WorldStatusLocalFacingRotation);
 
@@ -148,8 +157,8 @@ AShowDownCharacter::AShowDownCharacter()
 	BetStatusAnchorComponent = CreateDefaultSubobject<USceneComponent>(TEXT("BetStatusAnchor"));
 	BetStatusAnchorComponent->SetupAttachment(GetCapsuleComponent());
 	BetStatusAnchorComponent->SetRelativeLocation(FVector(
-		WorldStatusLocalForwardOffset,
-		WorldStatusLocalRightOffset,
+		BetStatusLocalForwardOffset,
+		BetStatusLocalRightOffset,
 		BetStatusLocalHeight));
 	BetStatusAnchorComponent->SetRelativeRotation(WorldStatusLocalFacingRotation);
 
@@ -1351,7 +1360,19 @@ void AShowDownCharacter::RefreshNameTag()
 		return;
 	}
 
+	// Normalize the short-lived raised value serialized by older map instances,
+	// while preserving any genuinely custom authored offset.
+	if (NameTagLocalOffset.Equals(LegacyRaisedNameTagOffset, KINDA_SMALL_NUMBER))
+	{
+		NameTagLocalOffset = AuthoredSinglePlayerNameTagOffset;
+	}
 	NameTagWidgetComponent->SetRelativeLocation(NameTagLocalOffset);
+	NameTagWidgetComponent->SetWidgetSpace(EWidgetSpace::Screen);
+	NameTagWidgetComponent->SetInitialSharedLayerName(NameTagSharedLayerName);
+	NameTagWidgetComponent->SetInitialLayerZOrder(NameTagLayerZOrder);
+	NameTagWidgetComponent->SetTickWhenOffscreen(true);
+	NameTagWidgetComponent->SetManuallyRedraw(false);
+	NameTagWidgetComponent->SetRedrawTime(0.0f);
 	if (NameTagWidgetComponent->GetWidgetClass() != UShowDownNameTagWidget::StaticClass())
 	{
 		NameTagWidgetComponent->SetWidgetClass(UShowDownNameTagWidget::StaticClass());
@@ -1379,12 +1400,27 @@ void AShowDownCharacter::SyncNameTagVisibility()
 	}
 
 	const bool bVisible = ShouldShowNameTag();
+	const bool bHiddenInGameMismatch = NameTagWidgetComponent->bHiddenInGame == bVisible;
+	const bool bVisibleTickNeedsRepair = bVisible
+		&& (!NameTagWidgetComponent->IsComponentTickEnabled()
+			|| !NameTagWidgetComponent->GetTickWhenOffscreen()
+			|| NameTagWidgetComponent->GetManuallyRedraw());
 	if (!bNameTagVisibilityInitialized
 		|| bLastNameTagVisible != bVisible
-		|| NameTagWidgetComponent->IsVisible() != bVisible)
+		|| NameTagWidgetComponent->IsVisible() != bVisible
+		|| bHiddenInGameMismatch
+		|| bVisibleTickNeedsRepair)
 	{
 		NameTagWidgetComponent->SetVisibility(bVisible, true);
 		NameTagWidgetComponent->SetHiddenInGame(!bVisible, true);
+		if (bVisible)
+		{
+			NameTagWidgetComponent->SetComponentTickEnabled(true);
+			NameTagWidgetComponent->SetTickWhenOffscreen(true);
+			NameTagWidgetComponent->SetManuallyRedraw(false);
+			NameTagWidgetComponent->SetRedrawTime(0.0f);
+			NameTagWidgetComponent->RequestRenderUpdate();
+		}
 		bLastNameTagVisible = bVisible;
 		bNameTagVisibilityInitialized = true;
 	}
@@ -1396,6 +1432,11 @@ void AShowDownCharacter::RefreshWorldLives()
 	{
 		return;
 	}
+
+	// Blueprint instances retain legacy child transforms, so normalize the text
+	// locally before applying the authored character-relative anchor transform.
+	WorldLivesText->SetRelativeLocation(FVector::ZeroVector);
+	WorldLivesShadowText->SetRelativeLocation(FVector(-0.2f, 0.0f, 0.0f));
 
 	if (!IsRunningDedicatedServer())
 	{
@@ -1448,6 +1489,10 @@ void AShowDownCharacter::RefreshWorldBetStatus()
 	{
 		return;
 	}
+
+	// Override stale serialized child offsets from the presentation Blueprint.
+	BetStatusValueText->SetRelativeLocation(FVector::ZeroVector);
+	BetStatusActionText->SetRelativeLocation(FVector(0.0f, 0.0f, -12.0f));
 
 	if (!IsRunningDedicatedServer())
 	{
@@ -1518,16 +1563,19 @@ void AShowDownCharacter::UpdateWorldPresentationTransform()
 	const FVector LocalForward = GetActorForwardVector();
 	const FVector LocalRight = GetActorRightVector();
 	const FVector LocalUp = GetActorUpVector();
-	const FVector CommonOffset =
-		LocalForward * WorldStatusLocalForwardOffset
-		+ LocalRight * WorldStatusLocalRightOffset;
+	const FVector LivesOffset =
+		LocalForward * WorldLivesLocalForwardOffset
+		+ LocalRight * WorldLivesLocalRightOffset;
+	const FVector BetStatusOffset =
+		LocalForward * BetStatusLocalForwardOffset
+		+ LocalRight * BetStatusLocalRightOffset;
 	const FQuat WorldFacingRotation = GetActorQuat() * WorldStatusLocalFacingRotation.Quaternion();
 
 	WorldLivesAnchor->SetWorldLocationAndRotation(
-		ActorLocation + CommonOffset + LocalUp * WorldLivesLocalHeight,
+		ActorLocation + LivesOffset + LocalUp * WorldLivesLocalHeight,
 		WorldFacingRotation);
 	BetStatusAnchorComponent->SetWorldLocationAndRotation(
-		ActorLocation + CommonOffset + LocalUp * BetStatusLocalHeight,
+		ActorLocation + BetStatusOffset + LocalUp * BetStatusLocalHeight,
 		WorldFacingRotation);
 }
 

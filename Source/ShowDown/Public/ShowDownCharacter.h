@@ -284,15 +284,15 @@ protected:
 	// Kept separate from the Blueprint component transform so stale component
 	// overrides cannot put the name tag back inside the head.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Name Tag")
-	FVector NameTagLocalOffset = FVector(0.0f, 0.0f, 112.0f);
+	FVector NameTagLocalOffset = FVector(0.0f, 0.0f, 92.0f);
 
 	// World status is authored in the character's local frame. Positive Y is
 	// always that character's right, regardless of the seat's world rotation.
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Presentation", meta = (ClampMin = "0.0"))
-	float WorldStatusLocalRightOffset = 80.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Lives")
+	float WorldLivesLocalForwardOffset = 0.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Presentation")
-	float WorldStatusLocalForwardOffset = 0.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Lives", meta = (ClampMin = "0.0"))
+	float WorldLivesLocalRightOffset = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Presentation")
 	FRotator WorldStatusLocalFacingRotation = FRotator(0.0f, 180.0f, 0.0f);
@@ -320,6 +320,12 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|World Bet Status")
 	TObjectPtr<UTextRenderComponent> BetStatusActionText;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Bet Status")
+	float BetStatusLocalForwardOffset = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Bet Status", meta = (ClampMin = "0.0"))
+	float BetStatusLocalRightOffset = 80.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Bet Status")
 	float BetStatusLocalHeight = 65.0f;
