@@ -2923,7 +2923,13 @@ void AShowDownPlayerController::ReturnToMainMenuFromPause()
 	ResumeFromPauseMenu();
 	DisableGameplayChat();
 	TArray<AActor*> Managers; UGameplayStatics::GetAllActorsOfClass(this,AShowDownHubFlowManager::StaticClass(),Managers);
-	if(Managers.Num()>0) CastChecked<AShowDownHubFlowManager>(Managers[0])->ShowMainMenu();
+	if(Managers.Num()>0)
+	{
+		// Returning from an active single-player match must stop the match before
+		// swapping the camera/UI. This clears gameplay timers, pending reveals,
+		// cards, gun callbacks, and the current reward context.
+		CastChecked<AShowDownHubFlowManager>(Managers[0])->FinishResultAndReturnToHub();
+	}
 }
 
 void AShowDownPlayerController::OpenSettingsFromPause()
