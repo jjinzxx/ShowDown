@@ -293,7 +293,10 @@ void AShowDownHubFlowManager::ShowRanking()
 void AShowDownHubFlowManager::ShowMultiplayerMenu()
 {
 	UE_LOG(LogTemp, Log, TEXT("Showing multiplayer menu."));
-	PlayCamera(MainMenuCamera);
+	if (!PlayCamera(MultiplayerCamera))
+	{
+		PlayCamera(MainMenuCamera);
+	}
 
 	TSubclassOf<UShowDownMultiplayerWidget> WidgetClass = MultiplayerWidgetClass;
 	if (!WidgetClass)
@@ -328,7 +331,10 @@ void AShowDownHubFlowManager::ShowMultiplayerMenu()
 void AShowDownHubFlowManager::ShowLobby()
 {
 	UE_LOG(LogTemp, Log, TEXT("Showing multiplayer lobby."));
-	PlayCamera(MainMenuCamera);
+	if (!PlayCamera(MultiplayerCamera))
+	{
+		PlayCamera(MainMenuCamera);
+	}
 
 	TSubclassOf<UShowDownLobbyWidget> WidgetClass = LobbyWidgetClass;
 	if (!WidgetClass)
@@ -376,7 +382,10 @@ void AShowDownHubFlowManager::ShowLobby()
 
 void AShowDownHubFlowManager::ShowSettings()
 {
-	PlayCamera(MainMenuCamera);
+	if (!PlayCamera(OptionsCamera))
+	{
+		PlayCamera(MainMenuCamera);
+	}
 	TSubclassOf<UShowDownSettingsWidget> WidgetClass = SettingsWidgetClass;
 	if (!WidgetClass) WidgetClass = UShowDownSettingsWidget::StaticClass();
 	SettingsWidget = CreateWidget<UShowDownSettingsWidget>(GetPrimaryPlayerController(), WidgetClass);

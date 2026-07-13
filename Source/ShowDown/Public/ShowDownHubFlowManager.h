@@ -131,6 +131,14 @@ private:
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera")
 	ACameraActor* ShopCamera;
 
+	// Camera used by the multiplayer browser and lobby. Falls back to MainMenuCamera.
+	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera", meta = (DisplayName = "Multiplayer Camera"))
+	ACameraActor* MultiplayerCamera;
+
+	// Camera used by the options/settings screen. Falls back to MainMenuCamera.
+	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera", meta = (DisplayName = "Options Camera"))
+	ACameraActor* OptionsCamera;
+
 	// 랭킹 화면용 카메라. 비워두면 메뉴 카메라(MainMenuCamera) 시점을 사용합니다.
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera")
 	ACameraActor* RankingCamera;
