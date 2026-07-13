@@ -75,7 +75,7 @@ AShowDownCharacter::AShowDownCharacter()
 
 	NameTagWidgetComponent = CreateDefaultSubobject<UWidgetComponent>(TEXT("NameTag"));
 	NameTagWidgetComponent->SetupAttachment(GetCapsuleComponent());
-	NameTagWidgetComponent->SetRelativeLocation(NameTagRelativeLocation);
+	NameTagWidgetComponent->SetRelativeLocation(FVector(0.0f, 0.0f, 80.0f));
 	NameTagWidgetComponent->SetWidgetClass(UShowDownNameTagWidget::StaticClass());
 	NameTagWidgetComponent->SetWidgetSpace(EWidgetSpace::Screen);
 	NameTagWidgetComponent->SetDrawAtDesiredSize(true);
@@ -87,12 +87,12 @@ AShowDownCharacter::AShowDownCharacter()
 
 	WorldLivesAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("WorldLivesAnchor"));
 	WorldLivesAnchor->SetupAttachment(GetCapsuleComponent());
-	WorldLivesAnchor->SetRelativeLocation(WorldLivesRelativeLocation);
+	WorldLivesAnchor->SetRelativeLocation(FVector(0.0f, 80.0f, 85.0f));
 	WorldLivesAnchor->SetRelativeRotation(FRotator::ZeroRotator);
 
 	WorldLivesShadowText = CreateDefaultSubobject<UTextRenderComponent>(TEXT("WorldLivesShadow"));
 	WorldLivesShadowText->SetupAttachment(WorldLivesAnchor);
-	WorldLivesShadowText->SetRelativeLocation(FVector(-0.20f, 0.65f, -0.65f));
+	WorldLivesShadowText->SetRelativeLocation(FVector(-0.20f, 0.0f, 0.0f));
 	WorldLivesShadowText->SetHorizontalAlignment(EHTA_Center);
 	WorldLivesShadowText->SetVerticalAlignment(EVRTA_TextCenter);
 	WorldLivesShadowText->SetWorldSize(WorldLivesTextSize);
@@ -143,8 +143,8 @@ AShowDownCharacter::AShowDownCharacter()
 
 	BetStatusAnchorComponent = CreateDefaultSubobject<USceneComponent>(TEXT("BetStatusAnchor"));
 	BetStatusAnchorComponent->SetupAttachment(GetCapsuleComponent());
-	BetStatusAnchorComponent->SetRelativeLocation(BetStatusRelativeLocation);
-	BetStatusAnchorComponent->SetRelativeRotation(BetStatusRelativeRotation);
+	BetStatusAnchorComponent->SetRelativeLocation(FVector(0.0f, 80.0f, 65.0f));
+	BetStatusAnchorComponent->SetRelativeRotation(FRotator::ZeroRotator);
 
 	auto ConfigureWorldStatusText = [this, WorldStatusFontObject, WorldStatusOutlinedMaterialObject](
 		UTextRenderComponent* TextComponent,
@@ -174,7 +174,7 @@ AShowDownCharacter::AShowDownCharacter()
 
 	BetStatusActionText = CreateDefaultSubobject<UTextRenderComponent>(TEXT("BetStatusAction"));
 	ConfigureWorldStatusText(BetStatusActionText, FColor(40, 255, 90, 255));
-	BetStatusActionText->SetRelativeLocation(FVector(0.0f, 0.0f, BetStatusActionVerticalOffset));
+	BetStatusActionText->SetRelativeLocation(FVector(0.0f, 0.0f, -12.0f));
 
 	UCharacterMovementComponent* MovementComponent = GetCharacterMovement();
 	MovementComponent->bOrientRotationToMovement = true;
@@ -1355,8 +1355,6 @@ void AShowDownCharacter::RefreshWorldLives()
 		return;
 	}
 
-	WorldLivesAnchor->SetRelativeLocation(WorldLivesRelativeLocation);
-	WorldLivesAnchor->SetRelativeRotation(WorldLivesRelativeRotation);
 	if (!IsRunningDedicatedServer())
 	{
 		if (UFont* HeartFont = LoadObject<UFont>(
@@ -1379,8 +1377,6 @@ void AShowDownCharacter::RefreshWorldLives()
 	const float HeartSize = FMath::Max(4.0f, WorldLivesTextSize);
 	WorldLivesText->SetWorldSize(HeartSize);
 	WorldLivesShadowText->SetWorldSize(HeartSize + 1.5f);
-	WorldLivesText->SetRelativeLocation(FVector::ZeroVector);
-	WorldLivesShadowText->SetRelativeLocation(FVector(-0.20f, 0.0f, 0.0f));
 	// Overhead presentation belongs to characters the local player can see.
 	// Rendering it for the local first-person character leaves orphaned hearts/status
 	// in the middle of the screen while the local name tag is intentionally hidden.
@@ -1400,8 +1396,6 @@ void AShowDownCharacter::RefreshWorldBetStatus()
 		return;
 	}
 
-	BetStatusAnchorComponent->SetRelativeLocation(BetStatusRelativeLocation);
-	BetStatusAnchorComponent->SetRelativeRotation(BetStatusRelativeRotation);
 	if (!IsRunningDedicatedServer())
 	{
 		if (UFont* StatusFont = LoadObject<UFont>(
@@ -1412,9 +1406,6 @@ void AShowDownCharacter::RefreshWorldBetStatus()
 			BetStatusActionText->SetFont(StatusFont);
 		}
 	}
-	BetStatusValueText->SetRelativeLocation(FVector::ZeroVector);
-	BetStatusActionText->SetRelativeLocation(FVector(0.0f, 0.0f, BetStatusActionVerticalOffset));
-
 	const float ValueSize = FMath::Max(4.0f, BetStatusValueTextSize);
 	const float ActionSize = FMath::Max(4.0f, BetStatusActionTextSize);
 	BetStatusValueText->SetWorldSize(ValueSize);
@@ -1453,14 +1444,10 @@ void AShowDownCharacter::RefreshWorldBetStatus()
 
 void AShowDownCharacter::UpdateWorldPresentationTransform()
 {
-	if (!NameTagWidgetComponent || !WorldLivesAnchor || !BetStatusAnchorComponent)
+	if (!WorldLivesAnchor || !BetStatusAnchorComponent)
 	{
 		return;
 	}
-
-	// The name tag keeps its original centered-above-character placement.
-	// Only the compact hearts/bet/action stack is camera-relative on the face's right side.
-	NameTagWidgetComponent->SetRelativeLocation(NameTagRelativeLocation);
 
 	const UWorld* World = GetWorld();
 	const APlayerController* LocalPlayerController = World ? World->GetFirstPlayerController() : nullptr;
@@ -1469,37 +1456,24 @@ void AShowDownCharacter::UpdateWorldPresentationTransform()
 		: nullptr;
 	if (!CameraManager)
 	{
-		WorldLivesAnchor->SetRelativeLocation(WorldLivesRelativeLocation);
-		WorldLivesAnchor->SetRelativeRotation(WorldLivesRelativeRotation);
-		BetStatusAnchorComponent->SetRelativeLocation(BetStatusRelativeLocation);
-		BetStatusAnchorComponent->SetRelativeRotation(BetStatusRelativeRotation);
 		return;
 	}
 
 	const FVector CameraLocation = CameraManager->GetCameraLocation();
-	const FRotator CameraRotation = CameraManager->GetCameraRotation();
-	const FVector CameraForward = CameraRotation.Vector();
-	const FVector CameraRight = FRotationMatrix(CameraRotation).GetUnitAxis(EAxis::Y);
-	const FVector ActorLocation = GetActorLocation();
-	auto ResolveWorldLocation = [&](const FVector& RelativeLocation)
-	{
-		return ActorLocation
-			+ CameraForward * RelativeLocation.X
-			+ CameraRight * (WorldPresentationRightOffset + RelativeLocation.Y)
-			+ FVector::UpVector * RelativeLocation.Z;
-	};
-
-	const FVector LivesWorldLocation = ResolveWorldLocation(WorldLivesRelativeLocation);
-	const FVector BetStatusWorldLocation = ResolveWorldLocation(BetStatusRelativeLocation);
-	WorldLivesAnchor->SetWorldLocation(LivesWorldLocation);
-	BetStatusAnchorComponent->SetWorldLocation(BetStatusWorldLocation);
+	// Component locations are authored directly in the Blueprint component tree.
+	// Runtime code only billboards the text; it never overwrites editor positioning.
+	const FVector LivesWorldLocation = WorldLivesAnchor->GetComponentLocation();
+	const FVector BetStatusWorldLocation = BetStatusAnchorComponent->GetComponentLocation();
 
 	const FRotator LivesFacingRotation = (CameraLocation - LivesWorldLocation).Rotation();
 	const FRotator BetStatusFacingRotation = (CameraLocation - BetStatusWorldLocation).Rotation();
+	// Text render fronts face opposite the look-at forward axis. Apply a local
+	// half-turn so hearts and status text read correctly instead of mirrored.
+	const FQuat TextFacingCorrection = FRotator(0.0f, 180.0f, 0.0f).Quaternion();
 	WorldLivesAnchor->SetWorldRotation(
-		(LivesFacingRotation.Quaternion() * WorldLivesRelativeRotation.Quaternion()).Rotator());
+		(LivesFacingRotation.Quaternion() * TextFacingCorrection).Rotator());
 	BetStatusAnchorComponent->SetWorldRotation(
-		(BetStatusFacingRotation.Quaternion() * BetStatusRelativeRotation.Quaternion()).Rotator());
+		(BetStatusFacingRotation.Quaternion() * TextFacingCorrection).Rotator());
 }
 
 FString AShowDownCharacter::ResolveNameTagDisplayName() const

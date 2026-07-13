@@ -281,12 +281,6 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Name Tag")
 	TObjectPtr<UWidgetComponent> NameTagWidgetComponent;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Name Tag")
-	FVector NameTagRelativeLocation = FVector(0.0f, 0.0f, 80.0f);
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Presentation", meta = (ClampMin = "0.0"))
-	float WorldPresentationRightOffset = 80.0f;
-
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|World Lives")
 	TObjectPtr<USceneComponent> WorldLivesAnchor;
 
@@ -295,12 +289,6 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|World Lives")
 	TObjectPtr<UTextRenderComponent> WorldLivesText;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Lives")
-	FVector WorldLivesRelativeLocation = FVector(0.0f, 0.0f, 85.0f);
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Lives")
-	FRotator WorldLivesRelativeRotation = FRotator::ZeroRotator;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Lives", meta = (ClampMin = "4.0"))
 	float WorldLivesTextSize = 22.0f;
@@ -314,20 +302,11 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|World Bet Status")
 	TObjectPtr<UTextRenderComponent> BetStatusActionText;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Bet Status")
-	FVector BetStatusRelativeLocation = FVector(0.0f, 0.0f, 65.0f);
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Bet Status")
-	FRotator BetStatusRelativeRotation = FRotator::ZeroRotator;
-
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Bet Status", meta = (ClampMin = "4.0"))
 	float BetStatusValueTextSize = 12.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Bet Status", meta = (ClampMin = "4.0"))
 	float BetStatusActionTextSize = 15.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|World Bet Status")
-	float BetStatusActionVerticalOffset = -12.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Player Camera")
 	FName PlayerCameraAttachName = TEXT("Head");
