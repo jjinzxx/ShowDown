@@ -16,6 +16,8 @@
 #include "Engine/SkeletalMesh.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
+#include "Camera/PlayerCameraManager.h"
+#include "Materials/MaterialInterface.h"
 #include "Net/UnrealNetwork.h"
 #include "SDPlayerState.h"
 #include "ShowDownCharacterAnimInstance.h"
@@ -48,7 +50,8 @@ namespace
 
 AShowDownCharacter::AShowDownCharacter()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.TickGroup = TG_PostUpdateWork;
 	bReplicates = true;
 	SetReplicateMovement(true);
 
@@ -72,7 +75,7 @@ AShowDownCharacter::AShowDownCharacter()
 
 	NameTagWidgetComponent = CreateDefaultSubobject<UWidgetComponent>(TEXT("NameTag"));
 	NameTagWidgetComponent->SetupAttachment(GetCapsuleComponent());
-	NameTagWidgetComponent->SetRelativeLocation(NameTagRelativeLocation);
+	NameTagWidgetComponent->SetRelativeLocation(FVector(0.0f, 0.0f, 80.0f));
 	NameTagWidgetComponent->SetWidgetClass(UShowDownNameTagWidget::StaticClass());
 	NameTagWidgetComponent->SetWidgetSpace(EWidgetSpace::Screen);
 	NameTagWidgetComponent->SetDrawAtDesiredSize(true);
@@ -84,12 +87,12 @@ AShowDownCharacter::AShowDownCharacter()
 
 	WorldLivesAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("WorldLivesAnchor"));
 	WorldLivesAnchor->SetupAttachment(GetCapsuleComponent());
-	WorldLivesAnchor->SetRelativeLocation(WorldLivesRelativeLocation);
+	WorldLivesAnchor->SetRelativeLocation(FVector(0.0f, 80.0f, 85.0f));
 	WorldLivesAnchor->SetRelativeRotation(FRotator::ZeroRotator);
 
 	WorldLivesShadowText = CreateDefaultSubobject<UTextRenderComponent>(TEXT("WorldLivesShadow"));
 	WorldLivesShadowText->SetupAttachment(WorldLivesAnchor);
-	WorldLivesShadowText->SetRelativeLocation(FVector(-0.20f, 0.65f, -0.65f));
+	WorldLivesShadowText->SetRelativeLocation(FVector(-0.20f, 0.0f, 0.0f));
 	WorldLivesShadowText->SetHorizontalAlignment(EHTA_Center);
 	WorldLivesShadowText->SetVerticalAlignment(EVRTA_TextCenter);
 	WorldLivesShadowText->SetWorldSize(WorldLivesTextSize);
@@ -112,6 +115,7 @@ AShowDownCharacter::AShowDownCharacter()
 	WorldLivesText->SetVisibility(false);
 
 	UFont* WorldStatusFontObject = nullptr;
+	UMaterialInterface* WorldStatusOutlinedMaterialObject = nullptr;
 	if (!IsRunningDedicatedServer())
 	{
 		static ConstructorHelpers::FObjectFinder<UFont> WorldLivesFont(
@@ -128,14 +132,21 @@ AShowDownCharacter::AShowDownCharacter()
 		{
 			WorldStatusFontObject = WorldStatusFont.Object;
 		}
+
+		static ConstructorHelpers::FObjectFinder<UMaterialInterface> WorldStatusOutlinedMaterial(
+			TEXT("/Game/UI/Materials/M_WorldTextOutlined.M_WorldTextOutlined"));
+		if (WorldStatusOutlinedMaterial.Succeeded())
+		{
+			WorldStatusOutlinedMaterialObject = WorldStatusOutlinedMaterial.Object;
+		}
 	}
 
 	BetStatusAnchorComponent = CreateDefaultSubobject<USceneComponent>(TEXT("BetStatusAnchor"));
 	BetStatusAnchorComponent->SetupAttachment(GetCapsuleComponent());
-	BetStatusAnchorComponent->SetRelativeLocation(BetStatusRelativeLocation);
-	BetStatusAnchorComponent->SetRelativeRotation(BetStatusRelativeRotation);
+	BetStatusAnchorComponent->SetRelativeLocation(FVector(0.0f, 80.0f, 65.0f));
+	BetStatusAnchorComponent->SetRelativeRotation(FRotator::ZeroRotator);
 
-	auto ConfigureWorldStatusText = [this, WorldStatusFontObject](
+	auto ConfigureWorldStatusText = [this, WorldStatusFontObject, WorldStatusOutlinedMaterialObject](
 		UTextRenderComponent* TextComponent,
 		const FColor& Color)
 	{
@@ -151,23 +162,19 @@ AShowDownCharacter::AShowDownCharacter()
 		{
 			TextComponent->SetFont(WorldStatusFontObject);
 		}
+		if (WorldStatusOutlinedMaterialObject)
+		{
+			TextComponent->SetTextMaterial(WorldStatusOutlinedMaterialObject);
+		}
 	};
-
-	BetStatusValueOutlineText = CreateDefaultSubobject<UTextRenderComponent>(TEXT("BetStatusValueOutline"));
-	ConfigureWorldStatusText(BetStatusValueOutlineText, FColor::Black);
-	BetStatusValueOutlineText->SetRelativeLocation(FVector(-0.20f, 0.0f, 0.0f));
 
 	BetStatusValueText = CreateDefaultSubobject<UTextRenderComponent>(TEXT("BetStatusValue"));
 	ConfigureWorldStatusText(BetStatusValueText, FColor(255, 220, 55, 255));
 	BetStatusValueText->SetRelativeLocation(FVector::ZeroVector);
 
-	BetStatusActionOutlineText = CreateDefaultSubobject<UTextRenderComponent>(TEXT("BetStatusActionOutline"));
-	ConfigureWorldStatusText(BetStatusActionOutlineText, FColor::Black);
-	BetStatusActionOutlineText->SetRelativeLocation(FVector(-0.20f, 0.0f, BetStatusActionVerticalOffset));
-
 	BetStatusActionText = CreateDefaultSubobject<UTextRenderComponent>(TEXT("BetStatusAction"));
 	ConfigureWorldStatusText(BetStatusActionText, FColor(40, 255, 90, 255));
-	BetStatusActionText->SetRelativeLocation(FVector(0.0f, 0.0f, BetStatusActionVerticalOffset));
+	BetStatusActionText->SetRelativeLocation(FVector(0.0f, 0.0f, -12.0f));
 
 	UCharacterMovementComponent* MovementComponent = GetCharacterMovement();
 	MovementComponent->bOrientRotationToMovement = true;
@@ -175,6 +182,12 @@ AShowDownCharacter::AShowDownCharacter()
 	MovementComponent->MaxWalkSpeed = 240.0f;
 	MovementComponent->bEnablePhysicsInteraction = false;
 	MovementComponent->DisableMovement();
+}
+
+void AShowDownCharacter::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	UpdateWorldPresentationTransform();
 }
 
 void AShowDownCharacter::PostInitializeComponents()
@@ -196,6 +209,7 @@ void AShowDownCharacter::BeginPlay()
 	ApplyCharacterSceneActive();
 	RefreshNameTag();
 	RefreshWorldBetStatus();
+	UpdateWorldPresentationTransform();
 	BindToRouletteEvents();
 }
 
@@ -1341,8 +1355,6 @@ void AShowDownCharacter::RefreshWorldLives()
 		return;
 	}
 
-	WorldLivesAnchor->SetRelativeLocation(WorldLivesRelativeLocation);
-	WorldLivesAnchor->SetRelativeRotation(WorldLivesRelativeRotation);
 	if (!IsRunningDedicatedServer())
 	{
 		if (UFont* HeartFont = LoadObject<UFont>(
@@ -1365,11 +1377,10 @@ void AShowDownCharacter::RefreshWorldLives()
 	const float HeartSize = FMath::Max(4.0f, WorldLivesTextSize);
 	WorldLivesText->SetWorldSize(HeartSize);
 	WorldLivesShadowText->SetWorldSize(HeartSize + 1.5f);
-	WorldLivesText->SetRelativeLocation(FVector::ZeroVector);
-	WorldLivesShadowText->SetRelativeLocation(FVector(-0.20f, 0.0f, 0.0f));
-	const bool bVisible = bCharacterSceneActive
-		&& CharacterRole != EShowDownCharacterRole::Unassigned
-		&& CharacterLives > 0;
+	// Overhead presentation belongs to characters the local player can see.
+	// Rendering it for the local first-person character leaves orphaned hearts/status
+	// in the middle of the screen while the local name tag is intentionally hidden.
+	const bool bVisible = ShouldShowNameTag() && CharacterLives > 0;
 	WorldLivesText->SetVisibility(bVisible, true);
 	WorldLivesText->SetHiddenInGame(!bVisible, true);
 	WorldLivesShadowText->SetVisibility(bVisible, true);
@@ -1379,40 +1390,26 @@ void AShowDownCharacter::RefreshWorldLives()
 void AShowDownCharacter::RefreshWorldBetStatus()
 {
 	if (!BetStatusAnchorComponent
-		|| !BetStatusValueOutlineText
 		|| !BetStatusValueText
-		|| !BetStatusActionOutlineText
 		|| !BetStatusActionText)
 	{
 		return;
 	}
 
-	BetStatusAnchorComponent->SetRelativeLocation(BetStatusRelativeLocation);
-	BetStatusAnchorComponent->SetRelativeRotation(BetStatusRelativeRotation);
 	if (!IsRunningDedicatedServer())
 	{
 		if (UFont* StatusFont = LoadObject<UFont>(
 			nullptr,
 			TEXT("/Engine/EngineFonts/RobotoDistanceField.RobotoDistanceField")))
 		{
-			BetStatusValueOutlineText->SetFont(StatusFont);
 			BetStatusValueText->SetFont(StatusFont);
-			BetStatusActionOutlineText->SetFont(StatusFont);
 			BetStatusActionText->SetFont(StatusFont);
 		}
 	}
-	BetStatusValueOutlineText->SetRelativeLocation(FVector(-0.20f, 0.0f, 0.0f));
-	BetStatusValueText->SetRelativeLocation(FVector::ZeroVector);
-	BetStatusActionOutlineText->SetRelativeLocation(FVector(-0.20f, 0.0f, BetStatusActionVerticalOffset));
-	BetStatusActionText->SetRelativeLocation(FVector(0.0f, 0.0f, BetStatusActionVerticalOffset));
-
 	const float ValueSize = FMath::Max(4.0f, BetStatusValueTextSize);
 	const float ActionSize = FMath::Max(4.0f, BetStatusActionTextSize);
-	const float OutlineSize = FMath::Clamp(BetStatusOutlineSize, 0.0f, 6.0f);
 	BetStatusValueText->SetWorldSize(ValueSize);
-	BetStatusValueOutlineText->SetWorldSize(ValueSize + OutlineSize);
 	BetStatusActionText->SetWorldSize(ActionSize);
-	BetStatusActionOutlineText->SetWorldSize(ActionSize + OutlineSize);
 
 	const FString ValueString = FString::Printf(
 		TEXT("%d/%d"),
@@ -1421,9 +1418,7 @@ void AShowDownCharacter::RefreshWorldBetStatus()
 	const FText Value = FText::FromString(ValueString);
 	const FText Action = FText::FromString(ReplicatedBetStatusPresentation.StatusText.TrimStartAndEnd());
 	BetStatusValueText->SetText(Value);
-	BetStatusValueOutlineText->SetText(Value);
 	BetStatusActionText->SetText(Action);
-	BetStatusActionOutlineText->SetText(Action);
 
 	const bool bFolded = ReplicatedBetStatusPresentation.StatusText.StartsWith(
 		TEXT("FOLD"),
@@ -1434,23 +1429,51 @@ void AShowDownCharacter::RefreshWorldBetStatus()
 			? FLinearColor::White
 			: FLinearColor(0.12f, 1.0f, 0.28f, 1.0f));
 	BetStatusValueText->SetTextRenderColor(ValueColor.ToFColor(true));
-	BetStatusValueOutlineText->SetTextRenderColor(FColor::Black);
 	BetStatusActionText->SetTextRenderColor(ReplicatedBetStatusPresentation.AccentColor.ToFColor(true));
-	BetStatusActionOutlineText->SetTextRenderColor(FColor::Black);
 
 	const bool bVisible =
-		bCharacterSceneActive
+		ShouldShowNameTag()
 		&& ReplicatedBetStatusPresentation.bVisible
 		&& !ReplicatedBetStatusPresentation.DisplayName.TrimStartAndEnd().IsEmpty();
 	const bool bActionVisible = bVisible && !ReplicatedBetStatusPresentation.StatusText.TrimStartAndEnd().IsEmpty();
 	BetStatusValueText->SetVisibility(bVisible, true);
 	BetStatusValueText->SetHiddenInGame(!bVisible, true);
-	BetStatusValueOutlineText->SetVisibility(bVisible, true);
-	BetStatusValueOutlineText->SetHiddenInGame(!bVisible, true);
 	BetStatusActionText->SetVisibility(bActionVisible, true);
 	BetStatusActionText->SetHiddenInGame(!bActionVisible, true);
-	BetStatusActionOutlineText->SetVisibility(bActionVisible, true);
-	BetStatusActionOutlineText->SetHiddenInGame(!bActionVisible, true);
+}
+
+void AShowDownCharacter::UpdateWorldPresentationTransform()
+{
+	if (!WorldLivesAnchor || !BetStatusAnchorComponent)
+	{
+		return;
+	}
+
+	const UWorld* World = GetWorld();
+	const APlayerController* LocalPlayerController = World ? World->GetFirstPlayerController() : nullptr;
+	const APlayerCameraManager* CameraManager = LocalPlayerController
+		? LocalPlayerController->PlayerCameraManager
+		: nullptr;
+	if (!CameraManager)
+	{
+		return;
+	}
+
+	const FVector CameraLocation = CameraManager->GetCameraLocation();
+	// Component locations are authored directly in the Blueprint component tree.
+	// Runtime code only billboards the text; it never overwrites editor positioning.
+	const FVector LivesWorldLocation = WorldLivesAnchor->GetComponentLocation();
+	const FVector BetStatusWorldLocation = BetStatusAnchorComponent->GetComponentLocation();
+
+	const FRotator LivesFacingRotation = (CameraLocation - LivesWorldLocation).Rotation();
+	const FRotator BetStatusFacingRotation = (CameraLocation - BetStatusWorldLocation).Rotation();
+	// Text render fronts face opposite the look-at forward axis. Apply a local
+	// half-turn so hearts and status text read correctly instead of mirrored.
+	const FQuat TextFacingCorrection = FRotator(0.0f, 180.0f, 0.0f).Quaternion();
+	WorldLivesAnchor->SetWorldRotation(
+		(LivesFacingRotation.Quaternion() * TextFacingCorrection).Rotator());
+	BetStatusAnchorComponent->SetWorldRotation(
+		(BetStatusFacingRotation.Quaternion() * TextFacingCorrection).Rotator());
 }
 
 FString AShowDownCharacter::ResolveNameTagDisplayName() const
