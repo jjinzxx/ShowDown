@@ -582,6 +582,9 @@ private:
 	bool bInitialCardDealPresentationPlayed = false;
 	bool bInitialCardDealIsMultiplayer = false;
 	int32 InitialCardDealDeckCopies = 2;
+	// Number of rank copies in the current logical deck cycle. The deck starts
+	// with seven cards per participant and is only rebuilt after it is exhausted.
+	int32 ActiveCardDeckCopies = 0;
 	TFunction<void()> InitialCardDealPresentationContinuation;
 	mutable bool bInitialCardDeckBoundsCacheValid = false;
 	mutable FVector CachedInitialCardDeckTop = FVector::ZeroVector;
@@ -706,6 +709,7 @@ private:
 	void UpdateSinglePlayerIntroFallback();
 	void FinishSinglePlayerIntro();
 	void StartInitialCardDealPresentation(int32 DeckCopies, bool bMultiplayer, TFunction<void()>&& Continuation);
+	void StartHandRedealPresentation(bool bMultiplayer, TFunction<void()>&& Continuation);
 	void BeginInitialCardDeckShowcase();
 	bool TryImmediateInitialCardDealFallback();
 	void StopInitialCardDealOnFailure(const TCHAR* Reason);
@@ -723,11 +727,24 @@ private:
 		TArray<FTransform>& OutFlatTransforms,
 		TArray<FTransform>& OutFinalTransforms,
 		int32& OutParticipantCount);
+	bool PrepareSinglePlayerRedealHands(
+		TArray<ACard*>& OutCardsInDealOrder,
+		TArray<FTransform>& OutFlatTransforms,
+		TArray<FTransform>& OutFinalTransforms,
+		int32& OutParticipantCount,
+		int32& OutDeckRemainingBeforeDeal);
+	bool PrepareMultiplayerRedealHands(
+		TArray<ACard*>& OutCardsInDealOrder,
+		TArray<FTransform>& OutFlatTransforms,
+		TArray<FTransform>& OutFinalTransforms,
+		int32& OutParticipantCount,
+		int32& OutDeckRemainingBeforeDeal);
 	void AnimatePreparedOpeningHands(
 		const TArray<ACard*>& CardsInDealOrder,
 		const TArray<FTransform>& FlatTransforms,
 		const TArray<FTransform>& FinalTransforms,
-		int32 ParticipantCount);
+		int32 ParticipantCount,
+		int32 DeckRemainingBeforeDeal);
 	void FinishInitialCardDealPresentation();
 	void ClearInitialCardDealPresentation(bool bDestroyDeckCards = true);
 	void ScheduleInitialCardDealAction(float DelaySeconds, TFunction<void()>&& Action);

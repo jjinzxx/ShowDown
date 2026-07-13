@@ -120,14 +120,22 @@ bool FShowDownCardSystemTest::RunTest(const FString& Parameters)
 	CardSystem->ResetDeck(2);
 	TestEqual(TEXT("Two copies of seven ranks create fourteen cards"), CardSystem->GetRemainingCardCount(), 14);
 
-	TArray<int32> DealtCards;
-	TestTrue(TEXT("The complete deck can be dealt"), CardSystem->DealCards(14, DealtCards));
-	TestEqual(TEXT("Dealing the complete deck returns fourteen cards"), DealtCards.Num(), 14);
-	TestEqual(TEXT("The deck is empty after all cards are dealt"), CardSystem->GetRemainingCardCount(), 0);
+	TArray<int32> FirstDealCards;
+	TestTrue(TEXT("Ten cards can be dealt while keeping the reserve deck"), CardSystem->DealCards(10, FirstDealCards));
+	TestEqual(TEXT("The first deal returns ten cards"), FirstDealCards.Num(), 10);
+	TestEqual(TEXT("Four cards remain after the first deal"), CardSystem->GetRemainingCardCount(), 4);
+
+	TArray<int32> SecondDealCards;
+	TestTrue(TEXT("The four reserve cards can be dealt afterwards"), CardSystem->DealCards(4, SecondDealCards));
+	TestEqual(TEXT("The second deal returns four cards"), SecondDealCards.Num(), 4);
+	TestEqual(TEXT("The deck is empty after both deals"), CardSystem->GetRemainingCardCount(), 0);
 
 	TArray<int32> RankCounts;
 	RankCounts.Init(0, 8);
-	for (const int32 Rank : DealtCards)
+	TArray<int32> AllDealtCards = FirstDealCards;
+	AllDealtCards.Append(SecondDealCards);
+	TestEqual(TEXT("Both deals return all fourteen cards in total"), AllDealtCards.Num(), 14);
+	for (const int32 Rank : AllDealtCards)
 	{
 		TestTrue(TEXT("Dealt ranks stay in the supported range"), Rank >= 1 && Rank <= 7);
 		if (RankCounts.IsValidIndex(Rank))
@@ -140,8 +148,8 @@ bool FShowDownCardSystemTest::RunTest(const FString& Parameters)
 		TestEqual(*FString::Printf(TEXT("Rank %d keeps its configured copy count"), Rank), RankCounts[Rank], 2);
 	}
 
-	TestFalse(TEXT("Dealing from an empty deck fails"), CardSystem->DealCards(1, DealtCards));
-	TestEqual(TEXT("A failed deal clears the output"), DealtCards.Num(), 0);
+	TestFalse(TEXT("Dealing from an empty deck fails"), CardSystem->DealCards(1, SecondDealCards));
+	TestEqual(TEXT("A failed deal clears the output"), SecondDealCards.Num(), 0);
 	CardSystem->ResetDeck(-1);
 	TestEqual(TEXT("Negative deck copies clamp to an empty deck"), CardSystem->GetRemainingCardCount(), 0);
 	return true;
