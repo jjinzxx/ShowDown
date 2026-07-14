@@ -15,6 +15,7 @@ class UPointLightComponent;
 class USceneComponent;
 class USoundBase;
 class UStaticMeshComponent;
+class UWidgetComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FSDSelfShotGunEvent);
 
@@ -87,9 +88,6 @@ public:
 		ACameraActor* ShotCamera);
 
 	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Target Shot")
-	ACameraActor* GetEnemyShotCinematicCamera() const;
-
-	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Target Shot")
 	float GetTargetShotSourcePullDistance() const;
 
 	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Timing")
@@ -97,6 +95,62 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Timing")
 	float GetPresentationFinishDelay(bool bLiveRound) const;
+
+	// Pure helpers kept public so the multiplayer gate and seat-relative camera
+	// math can be covered without creating a PIE world.
+	static bool ShouldUseGunShotCamera(bool bLiveRound, bool bTargetsLocalPlayer);
+	static bool ShouldUseEliminationTableOverview(
+		bool bLiveRound,
+		bool bTargetsLocalPlayer,
+		int32 RemainingLives);
+	static bool IsGunShotTargetLocalPlayer(
+		EShowDownPlayerSlot TargetSlot,
+		EShowDownPlayerSlot LocalPlayerSlot);
+	static FTransform BuildSeatRelativeGunShotCameraTransform(
+		const FTransform& PlayerOneCameraTransform,
+		const FTransform& PlayerOneCharacterTransform,
+		const FTransform& TargetCharacterTransform);
+	static FTransform BuildEliminationTableOverviewTransform(
+		const FVector& TableCenter,
+		const FTransform& TargetCharacterTransform,
+		float BackDistance,
+		float Height,
+		float LookAtHeight);
+
+	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Status")
+	void SetTableStatus(int32 LiveRounds, int32 RemainingChambers, EShowDownPhase Phase, EShowDownPlayerSlot TurnSlot);
+
+	// Clears the centre of the table while the opening deck is displayed, then
+	// drops the complete revolver actor back onto its authored table transform.
+	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Opening Cards")
+	void SetOpeningCardShowcaseStowed(bool bStowed);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Opening Cards", meta = (ClampMin = "0.0", DisplayName = "Drop Height"))
+	float OpeningCardDropHeight = 140.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Opening Cards", meta = (ClampMin = "1.0", DisplayName = "Drop Gravity"))
+	float OpeningCardDropGravity = 980.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Opening Cards", meta = (ClampMin = "0.0", ClampMax = "0.8", DisplayName = "Drop Bounciness"))
+	float OpeningCardDropRestitution = 0.22f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Opening Cards", meta = (ClampMin = "1.0", DisplayName = "Drop Stop Speed"))
+	float OpeningCardDropStopSpeed = 35.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Ammo Status Display")
+	FVector AmmoStatusWorldOffset = FVector(0.0f, 0.0f, 12.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Ammo Status Display", meta = (ClampMin = "32.0"))
+	FVector2D AmmoStatusDrawSize = FVector2D(260.0f, 100.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Ammo Status Display", meta = (ClampMin = "8", ClampMax = "160"))
+	int32 AmmoStatusFontSize = 48;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Ammo Status Display")
+	FLinearColor AmmoStatusTextColor = FLinearColor(1.0f, 0.82f, 0.25f, 1.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Ammo Status Display")
+	FLinearColor AmmoStatusBackgroundColor = FLinearColor(0.0f, 0.0f, 0.0f, 0.68f);
 
 	bool TryResolveCharacterPresentationShot(
 		const AShowDownCharacter* TargetCharacter,
@@ -123,11 +177,46 @@ public:
 	FSDSelfShotGunEvent OnGunPresentationFinished;
 
 protected:
+	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
+	UFUNCTION()
+	void OnRep_TableStatus();
+
+	UFUNCTION()
+	void OnRep_OpeningCardShowcaseStowed();
+
+	UFUNCTION()
+	void HandleGamePhaseChanged(EShowDownPhase NewPhase);
+
+	void ApplyAmmoStatusDisplaySettings();
+	void UpdateAmmoStatusAnchorLocation();
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<USceneComponent> SceneRoot;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<USceneComponent> AmmoStatusAnchor;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<UWidgetComponent> AmmoStatusWidgetComponent;
+
+	UPROPERTY(ReplicatedUsing = OnRep_TableStatus, BlueprintReadOnly, Category = "Self Shot Gun|Status")
+	int32 StatusLiveRounds = 0;
+
+	UPROPERTY(ReplicatedUsing = OnRep_TableStatus, BlueprintReadOnly, Category = "Self Shot Gun|Status")
+	int32 StatusRemainingChambers = 6;
+
+	UPROPERTY(ReplicatedUsing = OnRep_TableStatus, BlueprintReadOnly, Category = "Self Shot Gun|Status")
+	EShowDownPhase StatusPhase = EShowDownPhase::None;
+
+	UPROPERTY(ReplicatedUsing = OnRep_TableStatus, BlueprintReadOnly, Category = "Self Shot Gun|Status")
+	EShowDownPlayerSlot StatusTurnSlot = EShowDownPlayerSlot::None;
+
+	UPROPERTY(ReplicatedUsing = OnRep_OpeningCardShowcaseStowed)
+	bool bOpeningCardShowcaseStowed = false;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UStaticMeshComponent> GunMesh;
@@ -194,9 +283,6 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Target Shot", meta = (ClampMin = "0.0", DisplayName = "Source Pull Distance"))
 	float TargetShotSourcePullDistance = 36.0f;
-
-	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Self Shot Gun|Target Shot", meta = (DisplayName = "Enemy Shot Cinematic Camera"))
-	TObjectPtr<ACameraActor> EnemyShotCinematicCamera;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Developer Preview", meta = (DisplayName = "Enable Revolver Placement Dev Mode"))
 	bool bEnableRevolverPlacementDevMode = false;
@@ -270,11 +356,8 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera")
 	bool bUseSelfShotCinematicCamera = true;
 
-	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera")
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera", meta = (DisplayName = "Gun Shot Camera (Player 1 Reference)", ToolTip = "Author this camera for Player 1. Runtime copies the same character-relative position and rotation for Players 2-4."))
 	TObjectPtr<ACameraActor> SelfShotCinematicCamera;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera", meta = (ClampMin = "0.0"))
-	float CinematicCameraStartDelay = 0.3f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera", meta = (ClampMin = "0.0"))
 	float CinematicCameraBlendInTime = 0.55f;
@@ -287,6 +370,21 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera", meta = (ClampMin = "1.0"))
 	float CinematicCameraBlendExponent = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera|Elimination", meta = (DisplayName = "Use Elimination Table Overview"))
+	bool bUseEliminationTableOverview = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera|Elimination", meta = (ClampMin = "0.0", DisplayName = "Overview Move Time"))
+	float EliminationOverviewMoveTime = 0.55f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera|Elimination", meta = (ClampMin = "0.0", DisplayName = "Overview Back Distance"))
+	float EliminationOverviewBackDistance = 90.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera|Elimination", meta = (DisplayName = "Overview Height"))
+	float EliminationOverviewHeight = 135.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera|Elimination", meta = (DisplayName = "Overview Look At Height"))
+	float EliminationOverviewLookAtHeight = 28.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Shot Result")
 	ESDSelfShotRoundMode ShotResultMode = ESDSelfShotRoundMode::AlwaysLive;
@@ -335,24 +433,6 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Effects|Empty Shot")
 	bool bPlayEmptyShotSound2D = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Effects|Empty Shot")
-	bool bEnableEmptyShotShake = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Effects|Empty Shot")
-	FRotator EmptyShotShakeRotationAmplitude = FRotator(0.35f, 0.75f, 0.45f);
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Effects|Empty Shot")
-	FVector EmptyShotShakeLocationAmplitude = FVector(0.08f, 0.28f, 0.1f);
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Effects|Empty Shot", meta = (ClampMin = "0.0"))
-	float EmptyShotShakeHoldTime = 0.08f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Effects|Empty Shot", meta = (ClampMin = "0.01"))
-	float EmptyShotShakeBlendOutTime = 0.28f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Effects|Empty Shot", meta = (ClampMin = "0.01"))
-	float EmptyShotShakeStepInterval = 0.055f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Mechanism|Empty Shot", meta = (ClampMin = "0.005"))
 	float EmptyShotImpactTime = 0.035f;
@@ -420,6 +500,11 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Hit Sequence|Blackout", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float HitBlackoutAmount = 1.0f;
 
+	// Lets the victim and observers see the body settle before the blackout masks
+	// the shared seat-reset pulse at its peak.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Hit Sequence|Blackout", meta = (ClampMin = "0.0"))
+	float HitBlackoutDelay = 0.82f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Hit Sequence|Blackout", meta = (ClampMin = "0.0"))
 	float HitBlackoutDuration = 0.45f;
 
@@ -473,6 +558,7 @@ private:
 	{
 		Idle,
 		InitialHit,
+		PreBlackoutHold,
 		Blackout,
 		RecoveryHold,
 		RecoveryBlendOut
@@ -492,6 +578,14 @@ private:
 	void StartSelfShotCinematicCamera();
 	void ActivateSelfShotCinematicCamera();
 	void UpdateSelfShotCinematicCamera(float DeltaSeconds);
+	bool TryStartEliminationTableOverview();
+	void FinishEliminationTableOverview();
+	FTransform BuildEliminationTableOverviewTransform(const AShowDownCharacter* TargetCharacter) const;
+	void CancelSelfShotCinematicCamera();
+	bool PrepareLocalGunShotCamera();
+	ACameraActor* GetOrCreateLocalGunShotCamera();
+	AShowDownCharacter* FindGunShotCameraReferenceCharacter() const;
+	AShowDownCharacter* ResolveCurrentGunShotCameraTarget() const;
 	FTransform ApplyHeldGunJitter(const FTransform& BaseTransform) const;
 	void PlayCinematicCameraSteppedShake(
 		float HoldDuration,
@@ -524,6 +618,7 @@ private:
 	static FRotator LerpRotation(const FRotator& From, const FRotator& To, float Alpha);
 	void StartHitSequence();
 	void UpdateHitSequence(float DeltaSeconds);
+	void EnterHitSequencePreBlackoutHold();
 	void EnterHitSequenceBlackout();
 	void EnterHitSequenceRecovery();
 	void FinishHitSequence();
@@ -531,6 +626,14 @@ private:
 	void StartTinnitusSound();
 	void UpdateTinnitusSound(float DeltaSeconds);
 	void StopTinnitusSound();
+	bool IsRuntimeTickRequired() const;
+	void RefreshRuntimeTickState();
+	void StageOpeningCardDrop();
+	void StartOpeningCardDrop();
+	void UpdateOpeningCardDrop(float DeltaSeconds);
+	void FinishOpeningCardDrop();
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastFinishOpeningCardDrop();
 	void SetBlackoutInstant(float Alpha, bool bHoldWhenFinished);
 	ASDArtToneController* ResolveHitSequenceArtToneController();
 	bool ResolveCurrentShotIsLive() const;
@@ -554,18 +657,21 @@ private:
 	FRotator ChamberCurrentRotation = FRotator::ZeroRotator;
 	FRotator ChamberStartRotation = FRotator::ZeroRotator;
 	FRotator ChamberTargetRotation = FRotator::ZeroRotator;
-	TWeakObjectPtr<AActor> PreviousViewTarget;
 	TWeakObjectPtr<ACameraActor> ForcedShotCamera;
 	UPROPERTY(Transient)
 	TObjectPtr<ACameraActor> ActiveSelfShotCinematicCamera = nullptr;
+	UPROPERTY(Transient)
+	TObjectPtr<ACameraActor> LocalGunShotCamera = nullptr;
 	ECollisionEnabled::Type OriginalCollisionEnabled = ECollisionEnabled::QueryAndPhysics;
+	ECollisionEnabled::Type OriginalInteractionCollisionEnabled = ECollisionEnabled::QueryOnly;
 	EGunAnimState AnimState = EGunAnimState::Idle;
 	EHitSequenceState HitSequenceState = EHitSequenceState::Idle;
 	float StateElapsedTime = 0.0f;
 	float MechanismResetElapsedTime = 0.0f;
 	float HeldGunJitterElapsedTime = 0.0f;
-	float CinematicCameraStartElapsedTime = 0.0f;
 	float CinematicCameraElapsedTime = 0.0f;
+	float CinematicCameraBlendOutElapsedTime = 0.0f;
+	float EliminationOverviewElapsedTime = 0.0f;
 	float CinematicCameraShakeElapsedTime = 0.0f;
 	float CinematicCameraShakeHoldDuration = 0.0f;
 	float CinematicCameraShakeBlendOutTime = 0.0f;
@@ -574,27 +680,36 @@ private:
 	float HitSequenceElapsedTime = 0.0f;
 	float MuzzleFlashElapsedTime = 0.0f;
 	float TinnitusElapsedTime = 0.0f;
+	float OpeningCardDropVelocityZ = 0.0f;
 	bool bSelfShotCinematicCameraActive = false;
 	bool bSelfShotCinematicCameraStartPending = false;
 	bool bSelfShotCinematicCameraHoldStarted = false;
+	bool bSelfShotCinematicCameraBlendOutActive = false;
+	bool bEliminationTableOverviewActive = false;
 	bool bPresentationFinishPending = false;
 	bool bHasCapturedRestActorTransform = false;
+	bool bOpeningCardDropActive = false;
 	bool bRevolverPlacementDevPreviewActive = false;
 	bool bCurrentShotTargetsLocalPlayer = true;
 	bool bCurrentShotWasEmpty = false;
 	bool bHasForcedShotSourceLocation = false;
 	bool bHasForcedShotAimLocation = false;
 	bool bHasForcedShotRotationOffset = false;
+	bool bHasGunShotCameraReferenceTransform = false;
 	bool bCinematicCameraShakeActive = false;
 	bool bTinnitusFadeOutStarted = false;
 	UPROPERTY(Transient)
 	TObjectPtr<UAudioComponent> TinnitusAudioComponent;
 	TWeakObjectPtr<AActor> ForcedShotTargetActor;
+	EShowDownPlayerSlot CurrentShotTargetSlot = EShowDownPlayerSlot::None;
 	FVector ForcedShotSourceLocation = FVector::ZeroVector;
 	FVector ForcedShotAimLocation = FVector::ZeroVector;
 	FRotator ForcedShotRotationOffset = FRotator::ZeroRotator;
 	FRotator CinematicCameraShakeRotationAmplitude = FRotator::ZeroRotator;
 	FVector CinematicCameraShakeLocationAmplitude = FVector::ZeroVector;
 	FTransform CinematicCameraShakeBaseTransform;
+	FTransform GunShotCameraReferenceTransform;
+	FTransform EliminationOverviewStartTransform;
+	FTransform EliminationOverviewTargetTransform;
 	FSDArtToneSettings HitSequenceBaseSettings;
 };

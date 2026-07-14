@@ -81,6 +81,11 @@ ASDOpponentForeheadAnchor::ASDOpponentForeheadAnchor()
 ASDPlayer3HandAnchor::ASDPlayer3HandAnchor()
 {
 	PlacementRole = ESDCardPlacementRole::Player3Hand;
+	CardSpacing = 9.0f;
+	ForwardOffset = 0.0f;
+	HeightOffset = 0.0f;
+	LeanAngle = 0.0f;
+	LayerStep = 0.0f;
 }
 
 ASDPlayer3ForeheadAnchor::ASDPlayer3ForeheadAnchor()
@@ -91,6 +96,11 @@ ASDPlayer3ForeheadAnchor::ASDPlayer3ForeheadAnchor()
 ASDPlayer4HandAnchor::ASDPlayer4HandAnchor()
 {
 	PlacementRole = ESDCardPlacementRole::Player4Hand;
+	CardSpacing = 9.0f;
+	ForwardOffset = 0.0f;
+	HeightOffset = 0.0f;
+	LeanAngle = 0.0f;
+	LayerStep = 0.0f;
 }
 
 ASDPlayer4ForeheadAnchor::ASDPlayer4ForeheadAnchor()

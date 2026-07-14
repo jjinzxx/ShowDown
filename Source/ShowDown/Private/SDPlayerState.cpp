@@ -2,6 +2,22 @@
 
 #include "Card.h"
 #include "Net/UnrealNetwork.h"
+#include "ShowDownCharacterSkinCatalog.h"
+
+namespace
+{
+	FString NormalizeEquippedCharacterSkinId(const FString& SkinId)
+	{
+		FShowDownCharacterSkinDefinition Definition;
+		FString ResolvedSkinId;
+		UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
+			nullptr,
+			SkinId,
+			Definition,
+			ResolvedSkinId);
+		return ResolvedSkinId;
+	}
+}
 
 void ASDPlayerState::AddHandCard(ACard* Card)
 {
@@ -48,6 +64,41 @@ void ASDPlayerState::SetHostPlayer(bool bNewHostPlayer)
 	}
 }
 
+void ASDPlayerState::SetEquippedCharacterSkinId(const FString& NewSkinId)
+{
+	if (HasAuthority())
+	{
+		EquippedCharacterSkinId = NormalizeEquippedCharacterSkinId(NewSkinId);
+		ForceNetUpdate();
+	}
+}
+
+void ASDPlayerState::CopyProperties(APlayerState* PlayerState)
+{
+	Super::CopyProperties(PlayerState);
+
+	if (ASDPlayerState* NewPlayerState = Cast<ASDPlayerState>(PlayerState))
+	{
+		NewPlayerState->EquippedCharacterSkinId = NormalizeEquippedCharacterSkinId(EquippedCharacterSkinId);
+	}
+}
+
+void ASDPlayerState::OverrideWith(APlayerState* PlayerState)
+{
+	Super::OverrideWith(PlayerState);
+
+	if (const ASDPlayerState* PreviousPlayerState = Cast<ASDPlayerState>(PlayerState))
+	{
+		EquippedCharacterSkinId = NormalizeEquippedCharacterSkinId(
+			PreviousPlayerState->EquippedCharacterSkinId);
+	}
+}
+
+void ASDPlayerState::OnRep_EquippedCharacterSkinId()
+{
+	EquippedCharacterSkinId = NormalizeEquippedCharacterSkinId(EquippedCharacterSkinId);
+}
+
 void ASDPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
@@ -59,4 +110,5 @@ void ASDPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 	DOREPLIFETIME(ASDPlayerState, ShowDownSlot);
 	DOREPLIFETIME(ASDPlayerState, bReady);
 	DOREPLIFETIME(ASDPlayerState, bHostPlayer);
+	DOREPLIFETIME(ASDPlayerState, EquippedCharacterSkinId);
 }

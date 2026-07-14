@@ -76,11 +76,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Card")
 	bool MoveCardToSlotWithRotationOffset(ACard* Card, USceneComponent* Slot, bool bFaceUp, FRotator RotationOffset);
 
-private:
-	void BuildDeck(int32 CopiesPerRank);
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "ShowDown|Card")
 	FTransform BuildHandCardTransform(
 		USceneComponent* HandRoot,
 		const FSDCardHandLayoutSettings& HandLayoutSettings,
 		int32 CardIndex,
 		int32 CardCount) const;
+
+private:
+	void BuildDeck(int32 CopiesPerRank);
 };

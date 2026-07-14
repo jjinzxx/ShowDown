@@ -1,4 +1,10 @@
 #include "ShowDownPlayerController.h"
+#include "ShowDownPauseMenuWidget.h"
+#include "ShowDownSettingsWidget.h"
+#include "ShowDownHubFlowManager.h"
+#include "Kismet/GameplayStatics.h"
+#include "Kismet/KismetSystemLibrary.h"
+#include "Misc/ConfigCacheIni.h"
 
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
@@ -18,15 +24,19 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "PlayerPawn.h"
+#include "Presentation/SDBetActionPanelActor.h"
 #include "SDPlayerState.h"
 #include "ShowDownCameraAspect.h"
 #include "ShowDownCharacter.h"
+#include "ShowDownCharacterSkinCatalog.h"
 #include "ShowDownChatWidget.h"
 #include "ShowDownEosSubsystem.h"
 #include "ShowDownGameModeBase.h"
 #include "ShowDownGameStateBase.h"
 #include "ShowDownLeaveConfirmWidget.h"
+#include "ShowDownLoadingScreen.h"
 #include "ShowDownMultiRankWidget.h"
+#include "ShowDownTransitionWidget.h"
 #include "ShowDownVoiceSubsystem.h"
 #include "UObject/ConstructorHelpers.h"
 #include "SlateOptMacros.h"
@@ -38,6 +48,8 @@
 namespace
 {
 	const TCHAR* DefaultInteractionOutlineMaterialPath = TEXT("/Game/ArtTone/M_PP_InteractionOutline.M_PP_InteractionOutline");
+	constexpr float CharacterHeadLookReplicationInterval = 0.05f;
+	constexpr float CharacterHeadLookReplicationAngleThreshold = 0.5f;
 
 	bool IsOutlineablePrimitive(const UPrimitiveComponent* Component)
 	{
@@ -139,10 +151,23 @@ namespace
 	{
 		return World && World->GetNetMode() != NM_Standalone;
 	}
+
+	FString NormalizeSubmittedCharacterSkinId(const FString& SkinId)
+	{
+		FShowDownCharacterSkinDefinition Definition;
+		FString ResolvedSkinId;
+		UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
+			nullptr,
+			SkinId,
+			Definition,
+			ResolvedSkinId);
+		return ResolvedSkinId;
+	}
 }
 
 AShowDownPlayerController::AShowDownPlayerController()
 {
+	PrimaryActorTick.bTickEvenWhenPaused = true;
 	bShowMouseCursor = false;
 	bEnableClickEvents = false;
 	bEnableMouseOverEvents = false;
@@ -151,19 +176,10 @@ AShowDownPlayerController::AShowDownPlayerController()
 	// not supplied an override. This also makes the widget available early so it
 	// can subscribe to replicated GameState chat broadcasts before the user
 	// presses the chat key.
-	static ConstructorHelpers::FClassFinder<UShowDownChatWidget> ChatWidgetBlueprint(
-		TEXT("/Game/UI/WBP_Chat"));
-	if (ChatWidgetBlueprint.Succeeded())
-	{
-		ChatWidgetClass = ChatWidgetBlueprint.Class;
-	}
-	else
-	{
-		ChatWidgetClass = UShowDownChatWidget::StaticClass();
-	}
+	ChatWidgetClass = UShowDownChatWidget::StaticClass();
 
 	static ConstructorHelpers::FClassFinder<UShowDownMultiRankWidget> MultiRankWidgetBlueprint(
-		TEXT("/Game/UI/WBP_MultiRank"));
+		TEXT("/Game/UI/WBP_MultiResult"));
 	if (MultiRankWidgetBlueprint.Succeeded())
 	{
 		MultiplayerRankWidgetClass = MultiRankWidgetBlueprint.Class;
@@ -172,15 +188,23 @@ AShowDownPlayerController::AShowDownPlayerController()
 	{
 		MultiplayerRankWidgetClass = UShowDownMultiRankWidget::StaticClass();
 	}
+
+	static ConstructorHelpers::FClassFinder<UShowDownPauseMenuWidget> PauseMenuWidgetBlueprint(
+		TEXT("/Game/UI/WBP_PauseMenu"));
+	if (PauseMenuWidgetBlueprint.Succeeded())
+	{
+		PauseMenuWidgetClass = PauseMenuWidgetBlueprint.Class;
+	}
 }
 
 void AShowDownPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
+	GConfig->GetFloat(TEXT("ShowDown.UserSettings"), TEXT("MouseSensitivity"), UserMouseSensitivityMultiplier, GGameUserSettingsIni);
+	UserMouseSensitivityMultiplier = FMath::Clamp(UserMouseSensitivityMultiplier, 0.2f, 2.0f);
 
-	if (!Player)
+	if (!CanCreateLocalPlayerWidgets())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Skipping local player setup for ShowDownPlayerController without a UPlayer yet: %s"), *GetName());
 		return;
 	}
 
@@ -192,10 +216,13 @@ void AShowDownPlayerController::BeginPlay()
 	CreateCenterCrosshairWidget();
 	UpdateCenterCrosshairVisibility();
 	TryBindVoiceChatEvents();
+	SubmitLocalEquippedCharacterSkin();
 }
 
 void AShowDownPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	CancelGunShotCameraOverride();
+
 	if (AShowDownGameStateBase* PreviousGameState = VoiceBoundGameState.Get())
 	{
 		PreviousGameState->OnChatMessageReceived.RemoveDynamic(this, &AShowDownPlayerController::HandleChatMessageReceived);
@@ -205,6 +232,9 @@ void AShowDownPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason
 		: nullptr)
 	{
 		VoiceSubsystem->OnVoiceStatus.RemoveDynamic(this, &AShowDownPlayerController::HandleVoiceStatus);
+		VoiceSubsystem->OnSpeechPlaybackStateChanged.RemoveDynamic(
+			this,
+			&AShowDownPlayerController::HandleSpeechPlaybackStateChanged);
 	}
 	if (UShowDownEosSubsystem* EosSubsystem = GetGameInstance()
 		? GetGameInstance()->GetSubsystem<UShowDownEosSubsystem>()
@@ -228,18 +258,32 @@ void AShowDownPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason
 	}
 	SetHoveredCard(nullptr);
 	RemoveCenterCrosshairWidget();
+	if (MultiplayerLoadingWidget)
+	{
+		MultiplayerLoadingWidget->RemoveFromParent();
+		MultiplayerLoadingWidget = nullptr;
+	}
 	Super::EndPlay(EndPlayReason);
 }
 
 void AShowDownPlayerController::OnPossess(APawn* InPawn)
 {
+	CancelGunShotCameraOverride();
 	Super::OnPossess(InPawn);
 	InitializeFromPossessedPawn();
 	SubmitLocalMultiplayerDisplayName();
+	SubmitLocalEquippedCharacterSkin();
 }
 
 void AShowDownPlayerController::ClientEnterMultiplayerGameplay_Implementation()
 {
+	if (!CanCreateLocalPlayerWidgets())
+	{
+		return;
+	}
+
+	bGameplayChatEnabled = true;
+	SubmitLocalEquippedCharacterSkin();
 	if (UShowDownEosSubsystem* EosSubsystem = GetGameInstance()
 		? GetGameInstance()->GetSubsystem<UShowDownEosSubsystem>()
 		: nullptr)
@@ -255,6 +299,16 @@ void AShowDownPlayerController::ClientEnterMultiplayerGameplay_Implementation()
 	ChatWidget = nullptr;
 	LeaveConfirmWidget = nullptr;
 	MultiplayerRankWidget = nullptr;
+	MultiplayerLoadingWidget = CreateWidget<UShowDownTransitionWidget>(this, UShowDownTransitionWidget::StaticClass());
+	if (MultiplayerLoadingWidget)
+	{
+		MultiplayerLoadingWidget->SetTransitionText(
+			TEXT("플레이 준비 중"),
+			TEXT("좌석과 카메라를 안전하게 연결하고 있습니다."));
+		MultiplayerLoadingWidget->AddToViewport(10000);
+	}
+	MultiplayerLoadingElapsedTime = 0.0f;
+	bMultiplayerLoadingDelayMessageShown = false;
 	bChatOpen = false;
 
 	bHandleShowDownGameplayInput = false;
@@ -273,6 +327,62 @@ void AShowDownPlayerController::ClientEnterMultiplayerGameplay_Implementation()
 	ClientShowStatusMessage(TEXT("로딩 중... 멀티플레이 좌석과 카메라를 확인하는 중입니다."));
 }
 
+void AShowDownPlayerController::ClientSetInitialCardDealInputLocked_Implementation(bool bLocked)
+{
+	if (!CanCreateLocalPlayerWidgets())
+	{
+		return;
+	}
+
+	if (!bGameplayChatEnabled)
+	{
+		bGameplayChatEnabled = true;
+		EnsureChatWidget();
+	}
+	bInitialCardDealInputLocked = bLocked;
+	if (bLocked)
+	{
+		bHandleShowDownGameplayInput = false;
+		bShowCenterCrosshair = false;
+		CancelPressedBetActionButton();
+		SetFocusedInteractable(nullptr);
+		SetHoveredCard(nullptr);
+		if (!bInitialCardDealIgnoreMoveInputApplied)
+		{
+			SetIgnoreMoveInput(true);
+			bInitialCardDealIgnoreMoveInputApplied = true;
+		}
+		UpdateCenterCrosshairVisibility();
+
+		const bool bMultiplayerCameraReady = GetNetMode() != NM_Standalone
+			&& !bPendingMultiplayerSeatCamera
+			&& bUseCharacterPlayerCamera
+			&& IsValid(LocalPlayerCameraCharacterTarget)
+			&& GetViewTarget() == GetPawn();
+		if (bMultiplayerCameraReady)
+		{
+			ServerNotifyInitialCardDealCameraReady();
+		}
+		return;
+	}
+
+	if (bInitialCardDealIgnoreMoveInputApplied)
+	{
+		SetIgnoreMoveInput(false);
+		bInitialCardDealIgnoreMoveInputApplied = false;
+	}
+	if (GetNetMode() == NM_Standalone || !bPendingMultiplayerSeatCamera)
+	{
+		bHandleShowDownGameplayInput = true;
+		bShowCenterCrosshair = true;
+		if (GetNetMode() != NM_Standalone)
+		{
+			RestoreMultiplayerGameplayInput();
+		}
+	}
+	UpdateCenterCrosshairVisibility();
+}
+
 void AShowDownPlayerController::ClientUseMultiplayerSeatCamera_Implementation(
 	int32 SeatIndex,
 	float SeatCameraLookSensitivity,
@@ -287,6 +397,8 @@ void AShowDownPlayerController::ClientUseMultiplayerSeatCamera_Implementation(
 	FVector InBreathingSwayLocationAmplitude,
 	float InBreathingSwayBlendInTime)
 {
+	CancelGunShotCameraOverride();
+
 	const ASDPlayerState* ShowDownPlayerState = GetPlayerState<ASDPlayerState>();
 	UE_LOG(
 		LogTemp,
@@ -359,7 +471,16 @@ void AShowDownPlayerController::ClientLeaveMultiplayerRoomToHub_Implementation()
 		return;
 	}
 
+	ShowDownLoadingScreen::Prepare(
+		TEXT("메인 화면으로 돌아가는 중"),
+		TEXT("네트워크 연결을 정리하고 있습니다."));
 	ClientTravel(TEXT("/Game/Maps/L_ShowdownMain"), TRAVEL_Absolute);
+}
+
+void AShowDownPlayerController::ClientWasKicked_Implementation(const FText& KickReason)
+{
+	UE_LOG(LogTemp, Warning, TEXT("Removed from multiplayer lobby: %s"), *KickReason.ToString());
+	ClientLeaveMultiplayerRoomToHub_Implementation();
 }
 
 bool AShowDownPlayerController::TryApplyPendingMultiplayerSeatCamera()
@@ -426,11 +547,23 @@ bool AShowDownPlayerController::TryApplyPendingMultiplayerCharacterCamera()
 
 	EnsureChatWidget();
 	bPendingMultiplayerSeatCamera = false;
-	bHandleShowDownGameplayInput = true;
-	bShowCenterCrosshair = true;
-	RestoreMultiplayerGameplayInput();
+	bHandleShowDownGameplayInput = !bInitialCardDealInputLocked;
+	bShowCenterCrosshair = !bInitialCardDealInputLocked;
+	if (bInitialCardDealInputLocked)
+	{
+		ServerNotifyInitialCardDealCameraReady();
+	}
+	else
+	{
+		RestoreMultiplayerGameplayInput();
+	}
 	CreateCenterCrosshairWidget();
 	UpdateCenterCrosshairVisibility();
+	if (MultiplayerLoadingWidget)
+	{
+		MultiplayerLoadingWidget->Dismiss(0.22f);
+		MultiplayerLoadingWidget = nullptr;
+	}
 	ClientShowStatusMessage(TEXT("Multiplayer character head camera ready."));
 	UE_LOG(
 		LogTemp,
@@ -445,6 +578,18 @@ bool AShowDownPlayerController::TryApplyPendingMultiplayerCharacterCamera()
 void AShowDownPlayerController::PlayerTick(float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime);
+	UpdateGunShotCameraOverride(DeltaTime);
+	if (MultiplayerLoadingWidget)
+	{
+		MultiplayerLoadingElapsedTime += FMath::Max(0.0f, DeltaTime);
+		if (!bMultiplayerLoadingDelayMessageShown && MultiplayerLoadingElapsedTime >= 8.0f)
+		{
+			bMultiplayerLoadingDelayMessageShown = true;
+			MultiplayerLoadingWidget->SetTransitionText(
+				TEXT("플레이 준비가 지연되는 중"),
+				TEXT("좌석과 캐릭터 동기화를 다시 확인하고 있습니다."));
+		}
+	}
 
 	if (bPendingMultiplayerSeatCamera)
 	{
@@ -457,6 +602,7 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 	if (IsMultiplayerGameMap(GetWorld()))
 	{
 		SubmitLocalMultiplayerDisplayName();
+		SubmitLocalEquippedCharacterSkin();
 	}
 
 	const bool bHasFixedCameraLook = FixedCameraMouseLookTarget != nullptr;
@@ -464,9 +610,36 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 	{
 		UpdateFixedCameraMouseLook(DeltaTime);
 	}
+	else if (bInitialCardDealInputLocked
+		&& GetPawn()
+		&& bEnablePawnCameraMouseLook
+		&& (!bRequireRightMouseForPawnCameraLook || IsInputKeyDown(EKeys::RightMouseButton)))
+	{
+		float MouseDeltaX = 0.0f;
+		float MouseDeltaY = 0.0f;
+		GetInputMouseDelta(MouseDeltaX, MouseDeltaY);
+		if (!FMath::IsNearlyZero(MouseDeltaX) || !FMath::IsNearlyZero(MouseDeltaY))
+		{
+			ApplyPawnCameraInput(MouseDeltaX, MouseDeltaY);
+		}
+	}
+	if (bInitialCardDealInputLocked)
+	{
+		UpdateCharacterPlayerCamera(DeltaTime);
+	}
+
+	if (WasInputKeyJustPressed(LeaveMatchKey)
+		&& (bHandleShowDownGameplayInput || bPauseMenuOpen)
+		&& !bChatOpen
+		&& (!LeaveConfirmWidget || LeaveConfirmWidget->GetVisibility() != ESlateVisibility::Visible))
+	{
+		TogglePauseMenu();
+		return;
+	}
 
 	if (!bHandleShowDownGameplayInput)
 	{
+		CancelPressedBetActionButton();
 		SetFocusedInteractable(nullptr);
 		SetHoveredCard(nullptr);
 		UpdateCenterCrosshairVisibility();
@@ -475,6 +648,7 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 
 	if (LeaveConfirmWidget && LeaveConfirmWidget->GetVisibility() == ESlateVisibility::Visible)
 	{
+		CancelPressedBetActionButton();
 		if (WasInputKeyJustPressed(LeaveMatchKey))
 		{
 			CancelLeaveMultiplayerMatch();
@@ -485,33 +659,52 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 
 	if (bChatOpen)
 	{
+		CancelPressedBetActionButton();
 		SetFocusedInteractable(nullptr);
 		SetHoveredCard(nullptr);
 		UpdateCenterCrosshairVisibility();
 		if (WasInputKeyJustPressed(CloseChatKey))
 		{
 			CloseChat();
+			return;
+		}
+		if (WasInputKeyJustPressed(ToggleChatKey) && ChatWidget && !ChatWidget->IsChatInputFocused())
+		{
+			ChatWidget->SetVisibility(ESlateVisibility::Visible);
+			ChatWidget->SetChatInputOpen(true);
+			ApplyChatInputMode(true);
+			ChatWidget->FocusChatInput();
 		}
 		return;
 	}
 
 	if (WasInputKeyJustPressed(ToggleChatKey))
 	{
+		CancelPressedBetActionButton();
 		OpenChat();
 		return;
 	}
 
 	HandleVoicePushToTalkInput();
 
-	if (WasInputKeyJustPressed(LeaveMatchKey))
+	if (bEnablePrimaryClickTrace)
 	{
-		RequestLeaveMultiplayerMatch();
-		return;
+		if (WasInputKeyJustPressed(EKeys::LeftMouseButton))
+		{
+			HandlePrimaryPress();
+		}
+		if (PressedBetActionButton.Get())
+		{
+			UpdatePressedBetActionButton();
+		}
+		if (WasInputKeyJustReleased(EKeys::LeftMouseButton))
+		{
+			HandlePrimaryRelease();
+		}
 	}
-
-	if (bEnablePrimaryClickTrace && WasInputKeyJustPressed(EKeys::LeftMouseButton))
+	else
 	{
-		HandlePrimaryClick();
+		CancelPressedBetActionButton();
 	}
 
 	if (bEnableLegacyKeyboardBetHotkeys)
@@ -534,6 +727,7 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 	}
 
 	UpdateCharacterPlayerCamera(DeltaTime);
+	PrimaryInteractionTraceFrame = MAX_uint64;
 	UpdateFocusedInteractable();
 	UpdateHoveredCard();
 	UpdateCenterCrosshairVisibility();
@@ -664,7 +858,7 @@ void AShowDownPlayerController::HandlePrimaryClick()
 		}
 
 		HandCard = ResolveCardFromHit(Hit);
-		if (HandCard && HandCard->IsCardSelectable())
+		if (IsCardSelectableForLocalPlayer(HandCard))
 		{
 			SelectCard(HandCard);
 			if (bSubmitCardsOnSingleClick)
@@ -676,7 +870,7 @@ void AShowDownPlayerController::HandlePrimaryClick()
 	}
 
 	HandCard = bUseCenterAimCardFallback ? FindSelectableCardNearCenterAim() : nullptr;
-	if (HandCard && HandCard->IsCardSelectable())
+	if (IsCardSelectableForLocalPlayer(HandCard))
 	{
 		SelectCard(HandCard);
 		if (bSubmitCardsOnSingleClick)
@@ -687,6 +881,89 @@ void AShowDownPlayerController::HandlePrimaryClick()
 	}
 
 	HandCard = nullptr;
+}
+
+void AShowDownPlayerController::HandlePrimaryPress()
+{
+	CancelPressedBetActionButton();
+
+	FHitResult Hit;
+	if (bEnableInteractableTrace && TracePrimaryInteraction(Hit))
+	{
+		if (ASDBetActionButtonActor* Button = ResolveBetActionButtonFromHit(Hit))
+		{
+			if (ISDInteractable::Execute_CanInteract(Button, this))
+			{
+				PressedBetActionButton = Button;
+				Button->BeginPointerPress();
+				return;
+			}
+		}
+	}
+
+	HandlePrimaryClick();
+}
+
+void AShowDownPlayerController::HandlePrimaryRelease()
+{
+	ASDBetActionButtonActor* Button = PressedBetActionButton.Get();
+	if (!IsValid(Button))
+	{
+		PressedBetActionButton = nullptr;
+		return;
+	}
+
+	PressedBetActionButton = nullptr;
+
+	FHitResult Hit;
+	const bool bCommit =
+		bEnableInteractableTrace
+		&& TracePrimaryInteraction(Hit)
+		&& ResolveBetActionButtonFromHit(Hit) == Button
+		&& ISDInteractable::Execute_CanInteract(Button, this);
+
+	Button->ReleasePointerPress(this, bCommit);
+}
+
+void AShowDownPlayerController::UpdatePressedBetActionButton()
+{
+	ASDBetActionButtonActor* Button = PressedBetActionButton.Get();
+	if (!IsValid(Button))
+	{
+		PressedBetActionButton = nullptr;
+		return;
+	}
+
+	if (!IsInputKeyDown(EKeys::LeftMouseButton))
+	{
+		HandlePrimaryRelease();
+		return;
+	}
+
+	FHitResult Hit;
+	const bool bStillHovering =
+		bEnableInteractableTrace
+		&& TracePrimaryInteraction(Hit)
+		&& ResolveBetActionButtonFromHit(Hit) == Button
+		&& ISDInteractable::Execute_CanInteract(Button, this);
+
+	if (!bStillHovering)
+	{
+		CancelPressedBetActionButton();
+	}
+}
+
+void AShowDownPlayerController::CancelPressedBetActionButton()
+{
+	ASDBetActionButtonActor* Button = PressedBetActionButton.Get();
+	if (!IsValid(Button))
+	{
+		PressedBetActionButton = nullptr;
+		return;
+	}
+
+	Button->CancelPointerPress();
+	PressedBetActionButton = nullptr;
 }
 
 void AShowDownPlayerController::TraceCardUnderCursor()
@@ -700,7 +977,7 @@ void AShowDownPlayerController::TraceCardUnderCursor()
 	}
 
 	HandCard = ResolveCardFromHit(Hit);
-	if (HandCard && !HandCard->IsCardSelectable())
+	if (!IsCardSelectableForLocalPlayer(HandCard))
 	{
 		HandCard = nullptr;
 	}
@@ -708,22 +985,41 @@ void AShowDownPlayerController::TraceCardUnderCursor()
 
 bool AShowDownPlayerController::TracePrimaryInteraction(FHitResult& OutHit) const
 {
-	if (bShowMouseCursor && TraceUnderCursor(OutHit))
+	if (PrimaryInteractionTraceFrame == GFrameCounter)
 	{
-		return true;
+		OutHit = CachedPrimaryInteractionTraceHit;
+		return bCachedPrimaryInteractionTraceHit;
 	}
 
-	if (bHandleShowDownGameplayInput && !bChatOpen)
+	FHitResult TraceHit;
+	bool bHasHit = false;
+	if (bShowMouseCursor)
 	{
-		return bUseCenterScreenTraceWhenCursorHidden && TraceFromScreenCenter(OutHit);
+		bHasHit = TraceUnderCursor(TraceHit);
 	}
 
-	if (TraceUnderCursor(OutHit))
+	if (!bHasHit && bHandleShowDownGameplayInput && !bChatOpen)
 	{
-		return true;
+		bHasHit = bUseCenterScreenTraceWhenCursorHidden && TraceFromScreenCenter(TraceHit);
+	}
+	else if (!bHasHit)
+	{
+		if (!bShowMouseCursor)
+		{
+			bHasHit = TraceUnderCursor(TraceHit);
+		}
+		if (!bHasHit && bUseCenterScreenTraceWhenCursorHidden)
+		{
+			bHasHit = TraceFromScreenCenter(TraceHit);
+		}
 	}
 
-	return bUseCenterScreenTraceWhenCursorHidden && TraceFromScreenCenter(OutHit);
+	PrimaryInteractionTraceFrame = GFrameCounter;
+	bCachedPrimaryInteractionTraceHit = bHasHit;
+	CachedPrimaryInteractionTraceHit = bHasHit ? TraceHit : FHitResult();
+	OutHit = CachedPrimaryInteractionTraceHit;
+
+	return bHasHit;
 }
 
 bool AShowDownPlayerController::TraceUnderCursor(FHitResult& OutHit) const
@@ -785,6 +1081,31 @@ ACard* AShowDownPlayerController::ResolveCardFromHit(const FHitResult& Hit) cons
 		{
 			return OwnerCard;
 		}
+	}
+
+	return nullptr;
+}
+
+bool AShowDownPlayerController::IsCardSelectableForLocalPlayer(const ACard* Card) const
+{
+	const ASDPlayerState* ShowDownPlayerState = GetPlayerState<ASDPlayerState>();
+	const EShowDownPlayerSlot LocalSlot = ShowDownPlayerState
+		? ShowDownPlayerState->ShowDownSlot
+		: EShowDownPlayerSlot::None;
+
+	return IsValid(Card) && Card->IsCardSelectableForSlot(LocalSlot);
+}
+
+ASDBetActionButtonActor* AShowDownPlayerController::ResolveBetActionButtonFromHit(const FHitResult& Hit) const
+{
+	if (ASDBetActionButtonActor* Button = Cast<ASDBetActionButtonActor>(Hit.GetActor()))
+	{
+		return Button;
+	}
+
+	if (const UPrimitiveComponent* HitComponent = Hit.GetComponent())
+	{
+		return Cast<ASDBetActionButtonActor>(HitComponent->GetOwner());
 	}
 
 	return nullptr;
@@ -934,7 +1255,7 @@ ACard* AShowDownPlayerController::FindSelectableCardNearCenterAim() const
 	for (TActorIterator<ACard> It(World); It; ++It)
 	{
 		ACard* Card = *It;
-		if (!IsValid(Card) || !Card->IsCardSelectable())
+		if (!IsCardSelectableForLocalPlayer(Card))
 		{
 			continue;
 		}
@@ -967,7 +1288,7 @@ ACard* AShowDownPlayerController::FindHoverPreviewCard() const
 	if (TracePrimaryInteraction(Hit))
 	{
 		ACard* HitCard = ResolveCardFromHit(Hit);
-		if (IsValid(HitCard) && HitCard->IsCardSelectable())
+		if (IsCardSelectableForLocalPlayer(HitCard))
 		{
 			return HitCard;
 		}
@@ -983,7 +1304,7 @@ void AShowDownPlayerController::UpdateHoveredCard()
 
 void AShowDownPlayerController::SetHoveredCard(ACard* NewHoveredCard)
 {
-	if (!IsValid(NewHoveredCard) || !NewHoveredCard->IsCardSelectable())
+	if (!IsCardSelectableForLocalPlayer(NewHoveredCard))
 	{
 		NewHoveredCard = nullptr;
 	}
@@ -1008,7 +1329,7 @@ void AShowDownPlayerController::SetHoveredCard(ACard* NewHoveredCard)
 
 void AShowDownPlayerController::SelectCard(ACard* SelectedCard)
 {
-	if (!IsValid(SelectedCard))
+	if (!IsCardSelectableForLocalPlayer(SelectedCard))
 	{
 		return;
 	}
@@ -1035,7 +1356,7 @@ void AShowDownPlayerController::SelectCard(ACard* SelectedCard)
 
 void AShowDownPlayerController::SubmitSelectedCard(ACard* SelectedCard)
 {
-	if (!IsValid(SelectedCard))
+	if (!IsCardSelectableForLocalPlayer(SelectedCard))
 	{
 		return;
 	}
@@ -1096,6 +1417,7 @@ void AShowDownPlayerController::OpenChat()
 
 	bChatOpen = true;
 	ChatWidget->SetVisibility(ESlateVisibility::Visible);
+	ChatWidget->SetChatInputOpen(true);
 	ApplyChatInputMode(true);
 	ChatWidget->FocusChatInput();
 
@@ -1113,7 +1435,8 @@ void AShowDownPlayerController::CloseChat()
 	bChatOpen = false;
 	if (ChatWidget)
 	{
-		ChatWidget->SetVisibility(ESlateVisibility::Collapsed);
+		ChatWidget->SetChatInputOpen(false);
+		ChatWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
 	}
 	ApplyChatInputMode(false);
 }
@@ -1135,7 +1458,7 @@ void AShowDownPlayerController::SubmitDialogueInput(const FString& Text)
 		return;
 	}
 
-	ServerSubmitDialogueInput(TrimmedText, GetChatSenderName());
+	ServerSubmitDialogueInput(TrimmedText);
 }
 
 void AShowDownPlayerController::SDVoiceSubmitText(const FString& Text)
@@ -1359,6 +1682,21 @@ void AShowDownPlayerController::RequestPlayerRaiseTo(int32 BulletCount)
 	SubmitPlayerBetAction(EShowDownBetAction::Raise, BulletCount);
 }
 
+void AShowDownPlayerController::RequestRaisePreviewTarget(int32 BulletCount)
+{
+	const int32 ClampedTarget = FMath::Clamp(BulletCount, 1, 6);
+	if (HasAuthority())
+	{
+		if (AShowDownGameModeBase* GameMode = ResolveGameMode())
+		{
+			GameMode->SetMultiplayerRaisePreviewTarget(GetPlayerState<ASDPlayerState>(), ClampedTarget);
+		}
+		return;
+	}
+
+	ServerSetRaisePreviewTarget(ClampedTarget);
+}
+
 void AShowDownPlayerController::RequestPlayerFold()
 {
 	SubmitPlayerBetAction(EShowDownBetAction::Fold, 0);
@@ -1496,6 +1834,181 @@ void AShowDownPlayerController::ClearFixedCameraMouseLook()
 	UpdateCenterCrosshairVisibility();
 }
 
+bool AShowDownPlayerController::BeginGunShotCameraOverride(
+	ACameraActor* Camera,
+	float BlendInTime,
+	float BlendExponent)
+{
+	if (!IsLocalController() || !GetLocalPlayer() || !IsValid(Camera))
+	{
+		return false;
+	}
+	ClearEliminatedSpectatorViewState();
+
+	if (bGunShotCameraOverrideActive && GunShotCameraOverrideTarget.Get() != Camera)
+	{
+		CancelGunShotCameraOverride();
+	}
+
+	if (!bGunShotCameraOverrideActive)
+	{
+		AActor* CurrentViewTarget = GetViewTarget();
+		GunShotCameraReturnViewTarget = IsValid(CurrentViewTarget) && CurrentViewTarget != Camera
+			? CurrentViewTarget
+			: GetPawn();
+	}
+
+	GunShotCameraOverrideTarget = Camera;
+	bGunShotCameraOverrideActive = true;
+	bGunShotCameraBlendingOut = false;
+	GunShotCameraBlendOutTimeRemaining = 0.0f;
+	SetViewTargetWithBlend(
+		Camera,
+		FMath::Max(0.0f, BlendInTime),
+		VTBlend_EaseInOut,
+		FMath::Max(1.0f, BlendExponent));
+	return true;
+}
+
+void AShowDownPlayerController::EndGunShotCameraOverride(
+	ACameraActor* Camera,
+	float BlendOutTime,
+	float BlendExponent)
+{
+	if (!bGunShotCameraOverrideActive
+		|| (IsValid(Camera) && GunShotCameraOverrideTarget.Get() != Camera))
+	{
+		return;
+	}
+
+	ACameraActor* ActiveCamera = GunShotCameraOverrideTarget.Get();
+	if (IsValid(ActiveCamera) && GetViewTarget() != ActiveCamera)
+	{
+		// Another presentation deliberately took the view. Do not overwrite it
+		// with the gameplay pawn while releasing this override.
+		ClearGunShotCameraOverrideState();
+		return;
+	}
+
+	AActor* ReturnViewTarget = GunShotCameraReturnViewTarget.Get();
+	if (!IsValid(ReturnViewTarget))
+	{
+		ReturnViewTarget = GetPawn();
+	}
+
+	const float SafeBlendOutTime = FMath::Max(0.0f, BlendOutTime);
+	if (IsValid(ReturnViewTarget))
+	{
+		SetViewTargetWithBlend(
+			ReturnViewTarget,
+			SafeBlendOutTime,
+			VTBlend_EaseInOut,
+			FMath::Max(1.0f, BlendExponent));
+	}
+
+	if (SafeBlendOutTime <= KINDA_SMALL_NUMBER || !IsValid(ReturnViewTarget))
+	{
+		ClearGunShotCameraOverrideState();
+		return;
+	}
+
+	bGunShotCameraBlendingOut = true;
+	GunShotCameraBlendOutTimeRemaining = SafeBlendOutTime;
+}
+
+void AShowDownPlayerController::ReleaseGunShotCameraOverrideForElimination(ACameraActor* Camera)
+{
+	if (!bGunShotCameraOverrideActive
+		|| !IsValid(Camera)
+		|| GunShotCameraOverrideTarget.Get() != Camera)
+	{
+		return;
+	}
+
+	// A result/ranking presentation may have deliberately taken the view while
+	// this shot was finishing. Never steal it back just to establish the fallback
+	// spectator view.
+	if (GetViewTarget() != Camera)
+	{
+		ClearGunShotCameraOverrideState();
+		return;
+	}
+
+	// The transient camera is owned by the gun actor and remains valid after the
+	// override bookkeeping is cleared. Keep it as the view target until a rematch
+	// restores this player's lives and normal character-camera maintenance resumes.
+	EliminatedSpectatorCameraTarget = Camera;
+	bEliminatedSpectatorViewActive = true;
+	ClearGunShotCameraOverrideState();
+}
+
+void AShowDownPlayerController::CancelGunShotCameraOverride(ACameraActor* ExpectedCamera)
+{
+	if (!bGunShotCameraOverrideActive
+		|| (IsValid(ExpectedCamera) && GunShotCameraOverrideTarget.Get() != ExpectedCamera))
+	{
+		return;
+	}
+
+	ACameraActor* ActiveCamera = GunShotCameraOverrideTarget.Get();
+	AActor* ReturnViewTarget = GunShotCameraReturnViewTarget.Get();
+	if (!IsValid(ReturnViewTarget))
+	{
+		ReturnViewTarget = GetPawn();
+	}
+
+	AActor* CurrentViewTarget = GetViewTarget();
+	if (IsValid(ReturnViewTarget)
+		&& (CurrentViewTarget == ActiveCamera || CurrentViewTarget == ReturnViewTarget))
+	{
+		SetViewTarget(ReturnViewTarget);
+	}
+
+	ClearGunShotCameraOverrideState();
+}
+
+void AShowDownPlayerController::UpdateGunShotCameraOverride(float DeltaTime)
+{
+	if (!bGunShotCameraOverrideActive)
+	{
+		return;
+	}
+
+	if (!GunShotCameraOverrideTarget.IsValid())
+	{
+		CancelGunShotCameraOverride();
+		return;
+	}
+
+	if (!bGunShotCameraBlendingOut)
+	{
+		return;
+	}
+
+	GunShotCameraBlendOutTimeRemaining = FMath::Max(
+		0.0f,
+		GunShotCameraBlendOutTimeRemaining - FMath::Max(0.0f, DeltaTime));
+	if (GunShotCameraBlendOutTimeRemaining <= KINDA_SMALL_NUMBER)
+	{
+		ClearGunShotCameraOverrideState();
+	}
+}
+
+void AShowDownPlayerController::ClearGunShotCameraOverrideState()
+{
+	GunShotCameraOverrideTarget.Reset();
+	GunShotCameraReturnViewTarget.Reset();
+	GunShotCameraBlendOutTimeRemaining = 0.0f;
+	bGunShotCameraOverrideActive = false;
+	bGunShotCameraBlendingOut = false;
+}
+
+void AShowDownPlayerController::ClearEliminatedSpectatorViewState()
+{
+	EliminatedSpectatorCameraTarget.Reset();
+	bEliminatedSpectatorViewActive = false;
+}
+
 void AShowDownPlayerController::SetFixedCameraBreathingSway(
 	bool bEnable,
 	float Speed,
@@ -1580,10 +2093,10 @@ void AShowDownPlayerController::ApplyPawnCameraInput(float YawInput, float Pitch
 
 	const float PitchSign = bInvertPawnCameraMouseY ? 1.0f : -1.0f;
 	const float NewPitch = FMath::Clamp(
-		CurrentPitch + PitchInput * LookSensitivity * PitchSign,
+		CurrentPitch + PitchInput * LookSensitivity * UserMouseSensitivityMultiplier * PitchSign,
 		PawnCameraBaseRotation.Pitch + MinPitch,
 		PawnCameraBaseRotation.Pitch + MaxPitch);
-	const float NewYawOffset = FMath::Clamp(CurrentYawOffset + YawInput * LookSensitivity, MinYaw, MaxYaw);
+	const float NewYawOffset = FMath::Clamp(CurrentYawOffset + YawInput * LookSensitivity * UserMouseSensitivityMultiplier, MinYaw, MaxYaw);
 	const float NewYaw = PawnCameraBaseRotation.Yaw + NewYawOffset;
 
 	SetControlRotation(FRotator(NewPitch, NewYaw, 0.0f));
@@ -1666,6 +2179,30 @@ AShowDownCharacter* AShowDownPlayerController::FindLocalCharacterForPlayerCamera
 
 void AShowDownPlayerController::UpdateCharacterPlayerCamera(float DeltaTime)
 {
+	if (bGunShotCameraOverrideActive)
+	{
+		return;
+	}
+
+	if (bEliminatedSpectatorViewActive)
+	{
+		if (!EliminatedSpectatorCameraTarget.IsValid())
+		{
+			ClearEliminatedSpectatorViewState();
+		}
+		else
+		{
+			const bool bLivesRestored = IsValid(LocalPlayerCameraCharacterTarget)
+				&& LocalPlayerCameraCharacterTarget->GetCharacterLives() > 0
+				&& LocalPlayerCameraCharacterTarget->IsCharacterSceneActive();
+			if (!bLivesRestored)
+			{
+				return;
+			}
+			ClearEliminatedSpectatorViewState();
+		}
+	}
+
 	APlayerPawn* PlayerPawn = Cast<APlayerPawn>(GetPawn());
 	UCameraComponent* PlayerCamera = PlayerPawn ? PlayerPawn->cameraComp : nullptr;
 	if (!IsLocalController() || !bUseCharacterPlayerCamera || FixedCameraMouseLookTarget || !PlayerPawn || !PlayerCamera)
@@ -1686,6 +2223,15 @@ void AShowDownPlayerController::UpdateCharacterPlayerCamera(float DeltaTime)
 	}
 
 	if (!IsValid(LocalPlayerCameraCharacterTarget) || !LocalPlayerCameraCharacterTarget->GetMesh())
+	{
+		return;
+	}
+
+	// Final elimination deliberately leaves this controller on a detached
+	// table-overview camera. Do not snap back to the hidden character. Restoring
+	// lives for a rematch automatically allows the normal setup below to run.
+	if (LocalPlayerCameraCharacterTarget->GetCharacterLives() <= 0
+		|| !LocalPlayerCameraCharacterTarget->IsCharacterSceneActive())
 	{
 		return;
 	}
@@ -1717,9 +2263,6 @@ void AShowDownPlayerController::UpdateCharacterPlayerCamera(float DeltaTime)
 				AttachName);
 		}
 
-		PlayerCamera->SetRelativeLocation(LocalPlayerCameraCharacterTarget->GetPlayerCameraRelativeLocation());
-		PlayerCamera->SetRelativeRotation(LocalPlayerCameraCharacterTarget->GetPlayerCameraRotationOffset());
-		PlayerCamera->SetFieldOfView(LocalPlayerCameraCharacterTarget->GetPlayerCameraFOV());
 		PlayerCamera->bUsePawnControlRotation = true;
 
 		if (GetViewTarget() != PlayerPawn)
@@ -1735,6 +2278,26 @@ void AShowDownPlayerController::UpdateCharacterPlayerCamera(float DeltaTime)
 		InputMode.SetConsumeCaptureMouseDown(false);
 		SetInputMode(InputMode);
 	}
+
+	FVector CameraRelativeLocation = LocalPlayerCameraCharacterTarget->GetPlayerCameraRelativeLocation();
+	const FVector StableLocationOffset = LocalPlayerCameraCharacterTarget->GetPlayerCameraStableLocationOffset();
+	if (!StableLocationOffset.IsNearlyZero())
+	{
+		const USceneComponent* AttachParent = PlayerCamera->GetAttachParent();
+		if (AttachParent)
+		{
+			const FTransform AttachTransform = AttachParent->GetSocketTransform(
+				PlayerCamera->GetAttachSocketName(),
+				RTS_World);
+			const FVector StableWorldOffset =
+				LocalPlayerCameraCharacterTarget->GetActorTransform().TransformVectorNoScale(StableLocationOffset);
+			CameraRelativeLocation += AttachTransform.InverseTransformVectorNoScale(StableWorldOffset);
+		}
+	}
+
+	PlayerCamera->SetRelativeLocation(CameraRelativeLocation);
+	PlayerCamera->SetRelativeRotation(LocalPlayerCameraCharacterTarget->GetPlayerCameraRotationOffset());
+	PlayerCamera->SetFieldOfView(LocalPlayerCameraCharacterTarget->GetPlayerCameraFOV());
 
 	SubmitCharacterHeadLookRotation(GetControlRotation(), DeltaTime);
 }
@@ -1759,7 +2322,7 @@ void AShowDownPlayerController::UpdateFixedCameraMouseLook(float DeltaTime)
 	GetInputMouseDelta(MouseDeltaX, MouseDeltaY);
 	if (!FMath::IsNearlyZero(MouseDeltaX) || !FMath::IsNearlyZero(MouseDeltaY))
 	{
-		FixedCameraLookRotation.Yaw += MouseDeltaX * FixedCameraLookSensitivity;
+		FixedCameraLookRotation.Yaw += MouseDeltaX * FixedCameraLookSensitivity * UserMouseSensitivityMultiplier;
 
 		const float RelativeYaw = FRotator::NormalizeAxis(FixedCameraLookRotation.Yaw - FixedCameraBaseRotation.Yaw);
 		const float ClampedRelativeYaw = FMath::Clamp(RelativeYaw, FixedCameraMinYawOffset, FixedCameraMaxYawOffset);
@@ -1768,7 +2331,7 @@ void AShowDownPlayerController::UpdateFixedCameraMouseLook(float DeltaTime)
 		const float PitchInputSign = bFixedCameraInvertMouseY ? 1.0f : -1.0f;
 		const float CurrentPitch = FRotator::NormalizeAxis(FixedCameraLookRotation.Pitch);
 		FixedCameraLookRotation.Pitch = FMath::Clamp(
-			CurrentPitch + MouseDeltaY * FixedCameraLookSensitivity * PitchInputSign,
+			CurrentPitch + MouseDeltaY * FixedCameraLookSensitivity * UserMouseSensitivityMultiplier * PitchInputSign,
 			FixedCameraMinPitch,
 			FixedCameraMaxPitch);
 		FixedCameraLookRotation.Roll = 0.0f;
@@ -1817,7 +2380,10 @@ void AShowDownPlayerController::SubmitCharacterHeadLookRotation(const FRotator& 
 	CharacterHeadLookReplicationElapsedTime += DeltaTime;
 	const float PitchDelta = FMath::Abs(FRotator::NormalizeAxis(LookRotation.Pitch - LastSubmittedCharacterHeadLookRotation.Pitch));
 	const float YawDelta = FMath::Abs(FRotator::NormalizeAxis(LookRotation.Yaw - LastSubmittedCharacterHeadLookRotation.Yaw));
-	if (CharacterHeadLookReplicationElapsedTime < 0.05f && PitchDelta < 0.5f && YawDelta < 0.5f)
+	const bool bReplicationIntervalElapsed = CharacterHeadLookReplicationElapsedTime >= CharacterHeadLookReplicationInterval;
+	const bool bRotationChanged = PitchDelta >= CharacterHeadLookReplicationAngleThreshold
+		|| YawDelta >= CharacterHeadLookReplicationAngleThreshold;
+	if (!bReplicationIntervalElapsed || !bRotationChanged)
 	{
 		return;
 	}
@@ -1990,11 +2556,15 @@ void AShowDownPlayerController::HandleVoicePushToTalkInput()
 
 		if (WasInputKeyJustPressed(VoicePushToTalkKey))
 		{
-			EosSubsystem->BeginVoiceTransmission();
+			if (EosSubsystem->BeginVoiceTransmission())
+			{
+				SetLocalSpeakingIndicatorVisible(true);
+			}
 		}
 		if (WasInputKeyJustReleased(VoicePushToTalkKey))
 		{
 			EosSubsystem->EndVoiceTransmission();
+			SetLocalSpeakingIndicatorVisible(false);
 		}
 		return;
 	}
@@ -2009,7 +2579,7 @@ void AShowDownPlayerController::HandleVoicePushToTalkInput()
 
 	if (WasInputKeyJustPressed(VoicePushToTalkKey))
 	{
-		VoiceSubsystem->BeginPushToTalk(
+		const bool bStartedRecording = VoiceSubsystem->BeginPushToTalk(
 			FShowDownVoiceTextCallback::CreateWeakLambda(
 				this,
 				[this](bool bSuccess, const FString& Text)
@@ -2025,21 +2595,32 @@ void AShowDownPlayerController::HandleVoicePushToTalkInput()
 						SubmitDialogueInput(TrimmedText);
 					}
 				}));
+		if (bStartedRecording)
+		{
+			SetLocalSpeakingIndicatorVisible(true);
+		}
 	}
 
 	if (WasInputKeyJustReleased(VoicePushToTalkKey))
 	{
 		VoiceSubsystem->EndPushToTalk();
+		SetLocalSpeakingIndicatorVisible(false);
 	}
+}
+
+bool AShowDownPlayerController::CanCreateLocalPlayerWidgets() const
+{
+	return IsLocalController() && GetLocalPlayer() != nullptr;
 }
 
 void AShowDownPlayerController::EnsureChatWidget()
 {
-	if (ChatWidget)
+	if (!CanCreateLocalPlayerWidgets() || !bGameplayChatEnabled || ChatWidget)
 	{
 		return;
 	}
 
+	ChatWidgetClass = UShowDownChatWidget::StaticClass();
 	if (!ChatWidgetClass)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("ChatWidgetClass is not assigned on %s."), *GetName());
@@ -2055,12 +2636,24 @@ void AShowDownPlayerController::EnsureChatWidget()
 
 	ChatWidget->SetOwningShowDownController(this);
 	ChatWidget->AddToViewport();
-	ChatWidget->SetVisibility(ESlateVisibility::Collapsed);
+	ChatWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
+	ChatWidget->SetChatInputOpen(false);
+}
+
+void AShowDownPlayerController::DisableGameplayChat()
+{
+	bGameplayChatEnabled = false;
+	bChatOpen = false;
+	if (ChatWidget)
+	{
+		ChatWidget->RemoveFromParent();
+		ChatWidget = nullptr;
+	}
 }
 
 void AShowDownPlayerController::EnsureLeaveConfirmWidget()
 {
-	if (LeaveConfirmWidget)
+	if (!CanCreateLocalPlayerWidgets() || LeaveConfirmWidget)
 	{
 		return;
 	}
@@ -2116,7 +2709,7 @@ void AShowDownPlayerController::ApplyChatInputMode(bool bOpen)
 
 void AShowDownPlayerController::CreateCenterCrosshairWidget()
 {
-	if (CenterCrosshairWidget.IsValid() || !IsLocalController())
+	if (CenterCrosshairWidget.IsValid() || !CanCreateLocalPlayerWidgets())
 	{
 		return;
 	}
@@ -2226,6 +2819,12 @@ void AShowDownPlayerController::TryBindVoiceChatEvents()
 		{
 			VoiceSubsystem->OnVoiceStatus.RemoveDynamic(this, &AShowDownPlayerController::HandleVoiceStatus);
 			VoiceSubsystem->OnVoiceStatus.AddDynamic(this, &AShowDownPlayerController::HandleVoiceStatus);
+			VoiceSubsystem->OnSpeechPlaybackStateChanged.RemoveDynamic(
+				this,
+				&AShowDownPlayerController::HandleSpeechPlaybackStateChanged);
+			VoiceSubsystem->OnSpeechPlaybackStateChanged.AddDynamic(
+				this,
+				&AShowDownPlayerController::HandleSpeechPlaybackStateChanged);
 			bVoiceSubsystemEventsBound = true;
 		}
 	}
@@ -2261,6 +2860,42 @@ void AShowDownPlayerController::BroadcastLocalCollectorStatus(bool bSuccess, con
 	}
 }
 
+void AShowDownPlayerController::SetLocalSpeakingIndicatorVisible(bool bVisible)
+{
+	if (!ChatWidget)
+	{
+		EnsureChatWidget();
+	}
+	if (ChatWidget)
+	{
+		ChatWidget->SetLocalSpeakingIndicatorVisible(bVisible);
+	}
+}
+
+void AShowDownPlayerController::SetSingleOpponentSpeakingIndicatorVisible(bool bVisible) const
+{
+	if (!IsLocalController() || IsMultiplayerGameMap(GetWorld()))
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	for (TActorIterator<AShowDownCharacter> It(World); It; ++It)
+	{
+		AShowDownCharacter* ShowDownCharacter = *It;
+		if (IsValid(ShowDownCharacter) && ShowDownCharacter->GetCharacterRole() == EShowDownCharacterRole::Opponent)
+		{
+			ShowDownCharacter->SetVoiceTalking(bVisible);
+			return;
+		}
+	}
+}
+
 void AShowDownPlayerController::HandleChatMessageReceived(const FString& SenderName, const FString& Message)
 {
 	if (!IsLocalController() || !SenderName.Equals(TEXT("Collector"), ESearchCase::IgnoreCase))
@@ -2285,8 +2920,14 @@ void AShowDownPlayerController::HandleLocalVoiceTalkingChanged(bool bIsTalking)
 {
 	if (IsLocalController() && IsMultiplayerGameMap(GetWorld()))
 	{
+		SetLocalSpeakingIndicatorVisible(bIsTalking);
 		ServerSetMultiplayerVoiceTalking(bIsTalking);
 	}
+}
+
+void AShowDownPlayerController::HandleSpeechPlaybackStateChanged(bool bIsSpeaking)
+{
+	SetSingleOpponentSpeakingIndicatorVisible(bIsSpeaking);
 }
 
 void AShowDownPlayerController::SubmitLocalMultiplayerDisplayName()
@@ -2326,6 +2967,47 @@ void AShowDownPlayerController::SubmitLocalMultiplayerDisplayName()
 	}
 }
 
+void AShowDownPlayerController::SubmitLocalEquippedCharacterSkin()
+{
+	if (!IsLocalController() || !IsMultiplayerGameMap(GetWorld()))
+	{
+		return;
+	}
+
+	if (const UWorld* World = GetWorld())
+	{
+		const float CurrentTime = World->GetTimeSeconds();
+		if (CurrentTime - LastEquippedCharacterSkinSubmitTime < 1.0f)
+		{
+			return;
+		}
+		LastEquippedCharacterSkinSubmitTime = CurrentTime;
+	}
+
+	FString SkinId = AShowDownCharacter::GetDefaultCharacterSkinId();
+	if (const USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
+		: nullptr)
+	{
+		const FString EquippedSkinId = SupabaseSubsystem->GetEquippedSkinId(TEXT("character"));
+		if (!EquippedSkinId.TrimStartAndEnd().IsEmpty())
+		{
+			SkinId = EquippedSkinId;
+		}
+	}
+	SkinId = NormalizeSubmittedCharacterSkinId(SkinId);
+
+	const ASDPlayerState* ShowDownPlayerState = GetPlayerState<ASDPlayerState>();
+	const bool bReplicatedStateMatches = ShowDownPlayerState
+		&& ShowDownPlayerState->GetEquippedCharacterSkinId().Equals(SkinId, ESearchCase::CaseSensitive);
+	if (!SkinId.Equals(LastSubmittedEquippedCharacterSkinId, ESearchCase::CaseSensitive)
+		|| !bReplicatedStateMatches)
+	{
+		LastSubmittedEquippedCharacterSkinId = SkinId;
+		ServerSetEquippedCharacterSkinId(SkinId);
+	}
+}
+
 AShowDownGameModeBase* AShowDownPlayerController::ResolveGameMode() const
 {
 	return GetWorld() ? GetWorld()->GetAuthGameMode<AShowDownGameModeBase>() : nullptr;
@@ -2342,14 +3024,20 @@ void AShowDownPlayerController::ServerSubmitSelectedCard_Implementation(ACard* S
 	}
 }
 
-void AShowDownPlayerController::ServerSubmitDialogueInput_Implementation(const FString& Text, const FString& SenderName)
+void AShowDownPlayerController::ServerSubmitDialogueInput_Implementation(const FString& Text)
 {
-	const FString TrimmedText = Text.TrimStartAndEnd();
+	const FString TrimmedText = Text.TrimStartAndEnd().Left(240);
 	if (!TrimmedText.IsEmpty())
 	{
 		if (AShowDownGameModeBase* GameMode = ResolveGameMode())
 		{
-			GameMode->SubmitPlayerDialogueInputFromPlayer(TrimmedText, SenderName);
+			FString SenderName = PlayerState ? PlayerState->GetPlayerName().TrimStartAndEnd() : FString();
+			if (SenderName.IsEmpty() || SenderName.StartsWith(TEXT("DESKTOP-")))
+			{
+				SenderName = TEXT("Player");
+			}
+
+			GameMode->SubmitPlayerDialogueInputFromPlayer(TrimmedText, SenderName.Left(32));
 		}
 	}
 }
@@ -2375,6 +3063,16 @@ void AShowDownPlayerController::ServerPlayerRaise_Implementation()
 void AShowDownPlayerController::ServerPlayerRaiseTo_Implementation(int32 BulletCount)
 {
 	SubmitPlayerBetAction(EShowDownBetAction::Raise, BulletCount);
+}
+
+void AShowDownPlayerController::ServerSetRaisePreviewTarget_Implementation(int32 BulletCount)
+{
+	if (AShowDownGameModeBase* GameMode = ResolveGameMode())
+	{
+		GameMode->SetMultiplayerRaisePreviewTarget(
+			GetPlayerState<ASDPlayerState>(),
+			FMath::Clamp(BulletCount, 1, 6));
+	}
 }
 
 void AShowDownPlayerController::ServerPlayerFold_Implementation()
@@ -2413,6 +3111,27 @@ void AShowDownPlayerController::ServerSetMultiplayerDisplayName_Implementation(c
 	}
 }
 
+void AShowDownPlayerController::ServerSetEquippedCharacterSkinId_Implementation(const FString& SkinId)
+{
+	ASDPlayerState* ShowDownPlayerState = GetPlayerState<ASDPlayerState>();
+	if (!ShowDownPlayerState)
+	{
+		return;
+	}
+
+	const FString PreviousSkinId = ShowDownPlayerState->GetEquippedCharacterSkinId();
+	ShowDownPlayerState->SetEquippedCharacterSkinId(SkinId);
+	if (!PreviousSkinId.Equals(
+		ShowDownPlayerState->GetEquippedCharacterSkinId(),
+		ESearchCase::CaseSensitive))
+	{
+		if (AShowDownGameModeBase* GameMode = ResolveGameMode())
+		{
+			GameMode->RefreshMultiplayerLobbyPlayers();
+		}
+	}
+}
+
 void AShowDownPlayerController::ClientShowStatusMessage_Implementation(const FString& Message)
 {
 	UE_LOG(LogTemp, Log, TEXT("ShowDown status: %s"), *Message);
@@ -2426,11 +3145,41 @@ void AShowDownPlayerController::ClientShowStatusMessage_Implementation(const FSt
 	}
 }
 
+void AShowDownPlayerController::ClientReportLobbyKickResult_Implementation(bool bSuccess)
+{
+	if (AShowDownHubFlowManager* HubFlowManager = Cast<AShowDownHubFlowManager>(
+		UGameplayStatics::GetActorOfClass(this, AShowDownHubFlowManager::StaticClass())))
+	{
+		HubFlowManager->ShowLobbyKickResult(bSuccess);
+	}
+
+	ClientShowStatusMessage_Implementation(bSuccess
+		? TEXT("참가자를 방에서 내보냈습니다.")
+		: TEXT("참가자를 강퇴할 수 없습니다."));
+}
+
 void AShowDownPlayerController::ServerRequestMultiplayerRestart_Implementation()
 {
 	if (AShowDownGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AShowDownGameModeBase>() : nullptr)
 	{
 		GameMode->RequestMultiplayerRestartFromController(this);
+	}
+}
+
+void AShowDownPlayerController::ServerRequestLobbyKick_Implementation(const FString& TargetPlayerId)
+{
+	AShowDownGameModeBase* GameMode = GetWorld()
+		? GetWorld()->GetAuthGameMode<AShowDownGameModeBase>()
+		: nullptr;
+	const bool bKicked = GameMode && GameMode->RequestLobbyKickFromController(this, TargetPlayerId);
+	ClientReportLobbyKickResult(bKicked);
+}
+
+void AShowDownPlayerController::ServerNotifyInitialCardDealCameraReady_Implementation()
+{
+	if (AShowDownGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AShowDownGameModeBase>() : nullptr)
+	{
+		GameMode->NotifyInitialCardDealCameraReady(this);
 	}
 }
 
@@ -2444,6 +3193,16 @@ void AShowDownPlayerController::ServerUpdateCharacterHeadLookRotation_Implementa
 
 void AShowDownPlayerController::ClientShowMultiplayerRank_Implementation(const TArray<FString>& PlayerNames)
 {
+	if (!CanCreateLocalPlayerWidgets())
+	{
+		return;
+	}
+
+	bGameplayChatEnabled = false;
+	if (bPauseMenuOpen)
+	{
+		ResumeFromPauseMenu();
+	}
 	RemoveCenterCrosshairWidget();
 	if (ChatWidget)
 	{
@@ -2477,6 +3236,7 @@ void AShowDownPlayerController::ClientShowMultiplayerRank_Implementation(const T
 	MultiplayerRankWidget->OnMainMenuRequested.AddDynamic(this, &AShowDownPlayerController::HandleMultiRankMainMenuRequested);
 	MultiplayerRankWidget->SetRanking(PlayerNames);
 	MultiplayerRankWidget->AddToViewport(100);
+	MultiplayerRankWidget->SetIsFocusable(true);
 
 	FInputModeUIOnly InputMode;
 	InputMode.SetWidgetToFocus(MultiplayerRankWidget->TakeWidget());
@@ -2502,3 +3262,79 @@ void AShowDownPlayerController::HandleMultiRankMainMenuRequested()
 {
 	ConfirmLeaveMultiplayerMatch();
 }
+void AShowDownPlayerController::TogglePauseMenu()
+{
+	if (!CanCreateLocalPlayerWidgets()) return;
+	if (bPauseMenuOpen) { ResumeFromPauseMenu(); return; }
+	if (!PauseMenuWidgetClass) PauseMenuWidgetClass = LoadClass<UShowDownPauseMenuWidget>(nullptr, TEXT("/Game/UI/WBP_PauseMenu.WBP_PauseMenu_C"));
+	if (!PauseMenuWidgetClass) return;
+	PauseMenuWidget = CreateWidget<UShowDownPauseMenuWidget>(this, PauseMenuWidgetClass);
+	if (!PauseMenuWidget) return;
+	PauseMenuWidget->OnResume.AddUniqueDynamic(this,&AShowDownPlayerController::ResumeFromPauseMenu);
+	PauseMenuWidget->OnMainMenu.AddUniqueDynamic(this,&AShowDownPlayerController::ReturnToMainMenuFromPause);
+	PauseMenuWidget->OnSettings.AddUniqueDynamic(this,&AShowDownPlayerController::OpenSettingsFromPause);
+	PauseMenuWidget->OnQuit.AddUniqueDynamic(this,&AShowDownPlayerController::QuitFromPauseMenu);
+	PauseMenuWidget->AddToViewport(100);
+	PauseMenuWidget->SetIsFocusable(true);
+	bPauseMenuOpen=true; bGameplayInputBeforePause=bHandleShowDownGameplayInput; bHandleShowDownGameplayInput=false;
+	bShowMouseCursor=true; FInputModeUIOnly Mode; Mode.SetWidgetToFocus(PauseMenuWidget->TakeWidget()); SetInputMode(Mode);
+	if (GetWorld() && GetWorld()->GetNetMode()==NM_Standalone) UGameplayStatics::SetGamePaused(this,true);
+}
+
+void AShowDownPlayerController::SetUserMouseSensitivity(float Multiplier)
+{
+	UserMouseSensitivityMultiplier = FMath::Clamp(Multiplier, 0.2f, 2.0f);
+}
+
+void AShowDownPlayerController::ResumeFromPauseMenu()
+{
+	if(PauseSettingsWidget){PauseSettingsWidget->RemoveFromParent();PauseSettingsWidget=nullptr;}
+	if(PauseMenuWidget){PauseMenuWidget->RemoveFromParent();PauseMenuWidget=nullptr;}
+	if(GetWorld()&&GetWorld()->GetNetMode()==NM_Standalone) UGameplayStatics::SetGamePaused(this,false);
+	bPauseMenuOpen=false;bHandleShowDownGameplayInput=bGameplayInputBeforePause;bShowMouseCursor=false;SetInputMode(FInputModeGameOnly());
+}
+
+void AShowDownPlayerController::ReturnToMainMenuFromPause()
+{
+	if(GetWorld()&&GetWorld()->GetNetMode()!=NM_Standalone){ResumeFromPauseMenu();RequestLeaveMultiplayerMatch();return;}
+	ResumeFromPauseMenu();
+	DisableGameplayChat();
+	TArray<AActor*> Managers; UGameplayStatics::GetAllActorsOfClass(this,AShowDownHubFlowManager::StaticClass(),Managers);
+	if(Managers.Num()>0)
+	{
+		// Returning from an active single-player match must stop the match before
+		// swapping the camera/UI. This clears gameplay timers, pending reveals,
+		// cards, gun callbacks, and the current reward context.
+		CastChecked<AShowDownHubFlowManager>(Managers[0])->FinishResultAndReturnToHub();
+	}
+}
+
+void AShowDownPlayerController::OpenSettingsFromPause()
+{
+	if(!CanCreateLocalPlayerWidgets() || !PauseMenuWidget || PauseSettingsWidget)return;
+	UClass* SettingsClass=LoadClass<UShowDownSettingsWidget>(nullptr,TEXT("/Game/UI/WBP_Settings.WBP_Settings_C"));
+	PauseSettingsWidget=SettingsClass?CreateWidget<UShowDownSettingsWidget>(this,SettingsClass):nullptr;
+	if(PauseSettingsWidget)
+	{
+		PauseMenuWidget->SetVisibility(ESlateVisibility::Collapsed);
+		PauseSettingsWidget->OnBackRequested.AddUniqueDynamic(this,&AShowDownPlayerController::ReturnToPauseFromSettings);
+		PauseSettingsWidget->OnQuitRequested.AddUniqueDynamic(this,&AShowDownPlayerController::QuitFromPauseMenu);
+		PauseSettingsWidget->AddToViewport(101);
+		PauseSettingsWidget->SetIsFocusable(true);
+		FInputModeUIOnly Mode;
+		Mode.SetWidgetToFocus(PauseSettingsWidget->TakeWidget());
+		SetInputMode(Mode);
+	}
+}
+void AShowDownPlayerController::ReturnToPauseFromSettings()
+{
+	if(PauseSettingsWidget){PauseSettingsWidget->RemoveFromParent();PauseSettingsWidget=nullptr;}
+	if(PauseMenuWidget)
+	{
+		PauseMenuWidget->SetVisibility(ESlateVisibility::Visible);
+		FInputModeUIOnly Mode;
+		Mode.SetWidgetToFocus(PauseMenuWidget->TakeWidget());
+		SetInputMode(Mode);
+	}
+}
+void AShowDownPlayerController::QuitFromPauseMenu(){UKismetSystemLibrary::QuitGame(this,this,EQuitPreference::Quit,false);}

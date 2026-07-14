@@ -25,11 +25,11 @@ void UShowDownLeaveConfirmWidget::NativeConstruct()
 
 	if (Button_Confirm)
 	{
-		Button_Confirm->OnClicked.AddDynamic(this, &UShowDownLeaveConfirmWidget::HandleConfirmClicked);
+		Button_Confirm->OnClicked.AddUniqueDynamic(this, &UShowDownLeaveConfirmWidget::HandleConfirmClicked);
 	}
 	if (Button_Cancel)
 	{
-		Button_Cancel->OnClicked.AddDynamic(this, &UShowDownLeaveConfirmWidget::HandleCancelClicked);
+		Button_Cancel->OnClicked.AddUniqueDynamic(this, &UShowDownLeaveConfirmWidget::HandleCancelClicked);
 	}
 }
 

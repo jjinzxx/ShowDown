@@ -16,8 +16,21 @@ class UShowDownMainMenuWidget;
 class UShowDownMultiplayerWidget;
 class UShowDownShopWidget;
 class UShowDownRankWidget;
+class UShowDownSettingsWidget;
+class UShowDownTransitionWidget;
 class UUserWidget;
 class AShowDownGameStateBase;
+class AShowDownShopPreviewActor;
+class UShowDownCharacterSkinCatalog;
+
+enum class EShowDownHubTransitionOperation : uint8
+{
+	None,
+	CreateRoom,
+	JoinRoom,
+	StartGame,
+	LeaveRoom
+};
 
 UENUM(BlueprintType)
 enum class EShowDownHubFlowScreen : uint8
@@ -28,6 +41,7 @@ enum class EShowDownHubFlowScreen : uint8
 	Ranking,
 	Multiplayer,
 	Lobby,
+	Settings,
 	SinglePlayPreview
 };
 
@@ -66,6 +80,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Flow")
 	void ShowLobby();
 
+	void ShowLobbyKickResult(bool bSuccess);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Flow")
+	void ShowSettings();
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Flow")
 	void ShowSinglePlayPreview();
 
@@ -89,6 +108,7 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
 	// Login WBP shown when the player has no active session.
@@ -113,6 +133,12 @@ private:
 	UPROPERTY(EditAnywhere, Category = "ShowDown|UI")
 	TSubclassOf<UShowDownLobbyWidget> LobbyWidgetClass;
 
+	UPROPERTY(EditAnywhere, Category = "ShowDown|UI")
+	TSubclassOf<UShowDownSettingsWidget> SettingsWidgetClass;
+
+	UPROPERTY(EditDefaultsOnly, Category = "ShowDown|UI")
+	TSubclassOf<UShowDownTransitionWidget> TransitionWidgetClass;
+
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera")
 	ACameraActor* LoginCamera;
 
@@ -121,6 +147,40 @@ private:
 
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera")
 	ACameraActor* ShopCamera;
+
+	// Optional data asset for future character skins. Robot, hoodman, and micu
+	// still resolve in code when this is left empty.
+	UPROPERTY(EditDefaultsOnly, Category = "ShowDown|Shop Preview")
+	TObjectPtr<UShowDownCharacterSkinCatalog> CharacterSkinCatalog;
+
+	UPROPERTY(EditDefaultsOnly, Category = "ShowDown|Shop Preview")
+	TSubclassOf<AShowDownShopPreviewActor> ShopPreviewActorClass;
+
+	UPROPERTY(
+		EditAnywhere,
+		Category = "ShowDown|Shop Preview",
+		meta = (ClampMin = "50.0", UIMin = "100.0", UIMax = "1000.0"))
+	float ShopPreviewDistance = 450.0f;
+
+	UPROPERTY(
+		EditAnywhere,
+		Category = "ShowDown|Shop Preview",
+		meta = (UIMin = "-300.0", UIMax = "300.0"))
+	float ShopPreviewHeight = -120.0f;
+
+	UPROPERTY(
+		EditAnywhere,
+		Category = "ShowDown|Shop Preview",
+		meta = (UIMin = "-180.0", UIMax = "180.0"))
+	float ShopPreviewYawOffset = 0.0f;
+
+	// Camera used by the multiplayer browser and lobby. Falls back to MainMenuCamera.
+	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera", meta = (DisplayName = "Multiplayer Camera"))
+	ACameraActor* MultiplayerCamera;
+
+	// Camera used by the options/settings screen. Falls back to MainMenuCamera.
+	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera", meta = (DisplayName = "Options Camera"))
+	ACameraActor* OptionsCamera;
 
 	// 랭킹 화면용 카메라. 비워두면 메뉴 카메라(MainMenuCamera) 시점을 사용합니다.
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera")
@@ -166,6 +226,7 @@ private:
 	FString CurrentRewardMatchId;
 	bool bPendingMultiplayerOpenAfterEosLogin = false;
 	bool bCurrentMatchAllowsOnlineReward = false;
+	TWeakObjectPtr<AShowDownGameStateBase> BoundGameState;
 
 	UPROPERTY()
 	UShowDownLoginWidget* LoginWidget;
@@ -186,10 +247,33 @@ private:
 	UShowDownLobbyWidget* LobbyWidget;
 
 	UPROPERTY()
+	UShowDownSettingsWidget* SettingsWidget;
+
+	UPROPERTY()
 	UUserWidget* ActiveWidget;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UShowDownTransitionWidget> TransitionWidget;
+
+	UPROPERTY(Transient)
+	TObjectPtr<AShowDownShopPreviewActor> ShopPreviewActor;
+
+	EShowDownHubTransitionOperation TransitionOperation = EShowDownHubTransitionOperation::None;
+
 	void SetActiveWidget(UUserWidget* NextWidget);
+	void ShowTransitionOverlay(
+		EShowDownHubTransitionOperation Operation,
+		const FString& Title,
+		const FString& Detail);
+	void HideTransitionOverlay();
+	void BindTopNavigation(UUserWidget* Widget);
 	void SetUiOnlyInput(UUserWidget* FocusWidget);
+
+	UFUNCTION() void HandleTopNavSinglePlay();
+	UFUNCTION() void HandleTopNavMultiplayer();
+	UFUNCTION() void HandleTopNavShop();
+	UFUNCTION() void HandleTopNavRanking();
+	UFUNCTION() void HandleTopNavSettings();
 	void StartDeveloperSinglePlayPreview();
 	void ShowSinglePlayPreviewInternal(bool bAllowOnlineReward);
 	void ApplySinglePlayerVoiceSettings();
@@ -197,6 +281,11 @@ private:
 	bool PlayViewTarget(AActor* ViewTarget, bool bCut = false);
 	void ClearGameplayCameraLook();
 	APlayerController* GetPrimaryPlayerController() const;
+	void SpawnShopPreviewActor();
+	void DestroyShopPreviewActor();
+
+	UFUNCTION()
+	void HandleShopPreviewSkinChanged(const FString& SkinId);
 
 	UFUNCTION()
 	void HandleLoginSucceeded();
@@ -211,10 +300,10 @@ private:
 	void HandleEosLoginForMultiplayer(bool bSuccess, const FString& Message);
 
 	UFUNCTION()
-	void HandleHostMultiplayerRequested();
+	void HandleHostMultiplayerRequested(const FString& RoomName);
 
 	UFUNCTION()
-	void HandleHostPrivateMultiplayerRequested();
+	void HandleHostPrivateMultiplayerRequested(const FString& RoomName);
 
 	UFUNCTION()
 	void HandleJoinMultiplayerRequested(const FString& RoomCode);
@@ -235,10 +324,22 @@ private:
 	void HandleEosSessionResult(bool bSuccess, const FString& Message);
 
 	UFUNCTION()
+	void HandleManagedTravelFailed(const FString& Message, bool bReopenMultiplayerMenu);
+
+	UFUNCTION()
 	void HandleLobbyStartRequested();
 
 	UFUNCTION()
+	void HandleSettingsBackRequested();
+
+	UFUNCTION()
+	void HandleSettingsQuitRequested();
+
+	UFUNCTION()
 	void HandleLobbyLeaveRequested();
+
+	UFUNCTION()
+	void HandleLobbyKickRequested(const FString& PlayerId);
 
 	UFUNCTION()
 	void HandleShopRequested();

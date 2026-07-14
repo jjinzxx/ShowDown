@@ -16,6 +16,7 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Sound/SoundWaveProcedural.h"
+#include "TimerManager.h"
 
 #if __has_include("SDLLMSecrets.h")
 #include "SDLLMSecrets.h"
@@ -226,11 +227,35 @@ FString UShowDownVoiceSubsystem::GetVoiceDebugSummary() const
 void UShowDownVoiceSubsystem::Deinitialize()
 {
 	CancelPushToTalk();
+	if (ActiveTranscriptionRequest.IsValid())
+	{
+		ActiveTranscriptionRequest->OnProcessRequestComplete().Unbind();
+		ActiveTranscriptionRequest->CancelRequest();
+		ActiveTranscriptionRequest.Reset();
+	}
+	if (ActiveSpeechRequest.IsValid())
+	{
+		ActiveSpeechRequest->OnProcessRequestComplete().Unbind();
+		ActiveSpeechRequest->CancelRequest();
+		ActiveSpeechRequest.Reset();
+	}
+	bTranscriptionInFlight = false;
+	bSpeechInFlight = false;
+	PendingTranscriptionCallback.Unbind();
+	PendingSpeechText.Empty();
+	bHasPendingSpeech = false;
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(SpeechPlaybackFallbackTimerHandle);
+	}
 	if (ActiveSpeechComponent)
 	{
+		ActiveSpeechComponent->OnAudioFinished.RemoveDynamic(this, &UShowDownVoiceSubsystem::HandleSpeechAudioFinished);
 		ActiveSpeechComponent->Stop();
+		ActiveSpeechComponent->DestroyComponent();
 		ActiveSpeechComponent = nullptr;
 	}
+	BroadcastSpeechPlaybackState(false);
 	Super::Deinitialize();
 }
 
@@ -406,8 +431,10 @@ void UShowDownVoiceSubsystem::CancelPushToTalk()
 		AudioCapture.Reset();
 	}
 
-	FScopeLock Lock(&CaptureCriticalSection);
-	CapturedSamples.Reset();
+	{
+		FScopeLock Lock(&CaptureCriticalSection);
+		CapturedSamples.Reset();
+	}
 	PendingTranscriptionCallback.Unbind();
 	LastVoiceError = TEXT("Recording canceled.");
 	BroadcastVoiceStatus(false, TEXT("녹음 취소."));
@@ -510,10 +537,39 @@ void UShowDownVoiceSubsystem::SetOpenAIVoiceEnabled(bool bInEnableOpenAIVoice)
 	if (!bEnableOpenAIVoice)
 	{
 		CancelPushToTalk();
+		if (ActiveTranscriptionRequest.IsValid())
+		{
+			ActiveTranscriptionRequest->OnProcessRequestComplete().Unbind();
+			ActiveTranscriptionRequest->CancelRequest();
+			ActiveTranscriptionRequest.Reset();
+		}
+		if (ActiveSpeechRequest.IsValid())
+		{
+			ActiveSpeechRequest->OnProcessRequestComplete().Unbind();
+			ActiveSpeechRequest->CancelRequest();
+			ActiveSpeechRequest.Reset();
+		}
+		bTranscriptionInFlight = false;
+		bSpeechInFlight = false;
+		PendingTranscriptionCallback.ExecuteIfBound(false, FString());
+		PendingTranscriptionCallback.Unbind();
 		PendingSpeechText.Empty();
 		bHasPendingSpeech = false;
 		LastAcceptedSpeechText.Empty();
 		LastAcceptedSpeechTimeSeconds = -1.0;
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().ClearTimer(SpeechPlaybackFallbackTimerHandle);
+		}
+		if (ActiveSpeechComponent)
+		{
+			ActiveSpeechComponent->OnAudioFinished.RemoveDynamic(this, &UShowDownVoiceSubsystem::HandleSpeechAudioFinished);
+			ActiveSpeechComponent->Stop();
+			ActiveSpeechComponent->DestroyComponent();
+			ActiveSpeechComponent = nullptr;
+		}
+		ActiveSpeechWave = nullptr;
+		BroadcastSpeechPlaybackState(false);
 	}
 }
 
@@ -534,6 +590,25 @@ FString UShowDownVoiceSubsystem::ResolveApiKey() const
 void UShowDownVoiceSubsystem::BroadcastVoiceStatus(bool bSuccess, const FString& Message)
 {
 	OnVoiceStatus.Broadcast(bSuccess, Message);
+}
+
+void UShowDownVoiceSubsystem::BroadcastSpeechPlaybackState(bool bIsSpeaking)
+{
+	if (!bIsSpeaking)
+	{
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().ClearTimer(SpeechPlaybackFallbackTimerHandle);
+		}
+	}
+
+	if (bSpeechPlaybackActive == bIsSpeaking)
+	{
+		return;
+	}
+
+	bSpeechPlaybackActive = bIsSpeaking;
+	OnSpeechPlaybackStateChanged.Broadcast(bIsSpeaking);
 }
 
 void UShowDownVoiceSubsystem::OpenAndStartCaptureStream()
@@ -720,6 +795,7 @@ void UShowDownVoiceSubsystem::RequestTranscription(TArray<uint8>&& WavData)
 	AppendUtf8(Body, FString::Printf(TEXT("--%s--\r\n"), *Boundary));
 
 	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
+	ActiveTranscriptionRequest = Request;
 	Request->SetURL(TranscriptionUrl);
 	Request->SetVerb(TEXT("POST"));
 	Request->SetHeader(TEXT("Authorization"), FString::Printf(TEXT("Bearer %s"), *ResolveApiKey()));
@@ -731,6 +807,10 @@ void UShowDownVoiceSubsystem::RequestTranscription(TArray<uint8>&& WavData)
 		this,
 		[this](FShowDownVoiceHttpRequestPtr RequestPtr, FShowDownVoiceHttpResponsePtr ResponsePtr, bool bWasSuccessful)
 		{
+			if (ActiveTranscriptionRequest == RequestPtr)
+			{
+				ActiveTranscriptionRequest.Reset();
+			}
 			bTranscriptionInFlight = false;
 			if (!bEnableOpenAIVoice)
 			{
@@ -765,6 +845,7 @@ void UShowDownVoiceSubsystem::RequestTranscription(TArray<uint8>&& WavData)
 
 	if (!Request->ProcessRequest())
 	{
+		ActiveTranscriptionRequest.Reset();
 		bTranscriptionInFlight = false;
 		LastVoiceError = TEXT("Could not start STT request.");
 		BroadcastVoiceStatus(false, TEXT("음성 인식 요청 실패."));
@@ -805,6 +886,7 @@ void UShowDownVoiceSubsystem::RequestSpeech(const FString& Text)
 	FJsonSerializer::Serialize(RootObject, Writer);
 
 	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
+	ActiveSpeechRequest = Request;
 	Request->SetURL(SpeechUrl);
 	Request->SetVerb(TEXT("POST"));
 	Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
@@ -816,6 +898,10 @@ void UShowDownVoiceSubsystem::RequestSpeech(const FString& Text)
 		this,
 		[this](FShowDownVoiceHttpRequestPtr RequestPtr, FShowDownVoiceHttpResponsePtr ResponsePtr, bool bWasSuccessful)
 		{
+			if (ActiveSpeechRequest == RequestPtr)
+			{
+				ActiveSpeechRequest.Reset();
+			}
 			bSpeechInFlight = false;
 			if (!bEnableOpenAIVoice)
 			{
@@ -845,6 +931,7 @@ void UShowDownVoiceSubsystem::RequestSpeech(const FString& Text)
 
 	if (!Request->ProcessRequest())
 	{
+		ActiveSpeechRequest.Reset();
 		bSpeechInFlight = false;
 		LastVoiceError = TEXT("Could not start TTS request.");
 		RequestPendingSpeech();
@@ -1021,8 +1108,11 @@ void UShowDownVoiceSubsystem::PlaySpeechWav(const TArray<uint8>& WavData)
 
 	if (ActiveSpeechComponent)
 	{
+		ActiveSpeechComponent->OnAudioFinished.RemoveDynamic(this, &UShowDownVoiceSubsystem::HandleSpeechAudioFinished);
 		ActiveSpeechComponent->Stop();
+		ActiveSpeechComponent->DestroyComponent();
 		ActiveSpeechComponent = nullptr;
+		BroadcastSpeechPlaybackState(false);
 	}
 
 	ActiveSpeechWave->NumChannels = NumChannels;
@@ -1046,6 +1136,38 @@ void UShowDownVoiceSubsystem::PlaySpeechWav(const TArray<uint8>& WavData)
 	if (UWorld* World = GetWorld())
 	{
 		const float SafePlaybackPitch = FMath::Clamp(TTSPlaybackPitch, 0.5f, 2.0f);
-		ActiveSpeechComponent = UGameplayStatics::SpawnSound2D(World, ActiveSpeechWave, 1.0f, SafePlaybackPitch);
+		ActiveSpeechComponent = UGameplayStatics::SpawnSound2D(
+			World,
+			ActiveSpeechWave,
+			1.0f,
+			SafePlaybackPitch,
+			0.0f,
+			nullptr,
+			false,
+			false);
+		if (ActiveSpeechComponent)
+		{
+			ActiveSpeechComponent->OnAudioFinished.AddDynamic(this, &UShowDownVoiceSubsystem::HandleSpeechAudioFinished);
+			BroadcastSpeechPlaybackState(true);
+			const float ExpectedPlaybackSeconds = FMath::Max(0.05f, ActiveSpeechWave->Duration / SafePlaybackPitch);
+			World->GetTimerManager().SetTimer(
+				SpeechPlaybackFallbackTimerHandle,
+				this,
+				&UShowDownVoiceSubsystem::HandleSpeechAudioFinished,
+				ExpectedPlaybackSeconds + 0.25f,
+				false);
+		}
 	}
+}
+
+void UShowDownVoiceSubsystem::HandleSpeechAudioFinished()
+{
+	if (ActiveSpeechComponent)
+	{
+		ActiveSpeechComponent->OnAudioFinished.RemoveDynamic(this, &UShowDownVoiceSubsystem::HandleSpeechAudioFinished);
+		ActiveSpeechComponent->DestroyComponent();
+		ActiveSpeechComponent = nullptr;
+	}
+
+	BroadcastSpeechPlaybackState(false);
 }

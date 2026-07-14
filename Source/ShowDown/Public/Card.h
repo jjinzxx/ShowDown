@@ -4,6 +4,7 @@
 #include "GameFramework/Actor.h"
 #include "Interaction/SDInteractable.h"
 #include "ShowDownTypes.h"
+#include "TimerManager.h"
 #include "Card.generated.h"
 
 class UBoxComponent;
@@ -25,6 +26,30 @@ struct FSDCardMovementTarget
 
 	UPROPERTY()
 	bool bUseSlotAttachMotion = false;
+
+	UPROPERTY()
+	float MotionDuration = 0.85f;
+
+	UPROPERTY()
+	float ArcHeight = 55.0f;
+
+	UPROPERTY()
+	float OvershootDistance = 8.0f;
+
+	UPROPERTY()
+	bool bUseSettleMotion = true;
+
+	UPROPERTY()
+	float SettleStrength = 1.0f;
+
+	UPROPERTY()
+	bool bOrientToLocalViewer = false;
+
+	UPROPERTY()
+	float VisualScaleMultiplier = 1.0f;
+
+	UPROPERTY()
+	float ServerStartTime = -1.0f;
 
 	UPROPERTY()
 	uint8 Revision = 0;
@@ -56,7 +81,7 @@ public:
 	UPROPERTY(ReplicatedUsing = OnRep_CardVisual, EditAnywhere, BlueprintReadWrite, Category = "Card", meta = (ClampMin = "1", ClampMax = "7"))
 	int32 Rank = 1;
 
-	UPROPERTY(Replicated, EditAnywhere, BlueprintReadWrite, Category = "Card")
+	UPROPERTY(ReplicatedUsing = OnRep_Selectable, EditAnywhere, BlueprintReadWrite, Category = "Card")
 	bool bSelectable = true;
 
 	UPROPERTY(ReplicatedUsing = OnRep_CardVisual, EditAnywhere, BlueprintReadWrite, Category = "Card")
@@ -91,6 +116,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Card|Slot Attach Motion", meta = (ClampMin = "0.1"))
 	float SlotAttachTargetScale = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Card|Slot Attach Motion", meta = (ClampMin = "0.1"))
+	float ForeheadSlotAttachTargetScale = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Card|Slot Attach Motion")
 	FRotator SlotAttachFlightRotationAmplitude = FRotator(8.0f, 0.0f, 16.0f);
@@ -143,6 +171,9 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Card")
 	bool IsCardSelectable() const;
 
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Card")
+	bool IsCardSelectableForSlot(EShowDownPlayerSlot PlayerSlot) const;
+
 	UFUNCTION(BlueprintCallable, Category = "Card")
 	void MoveToSlot(USceneComponent* Slot, bool bNewFaceUp);
 
@@ -153,7 +184,26 @@ public:
 	float GetSlotAttachMotionTotalSeconds() const;
 
 	UFUNCTION(BlueprintCallable, Category = "Card")
+	void MoveToRevealTransform(const FTransform& RevealTransform, float VisualScaleMultiplier);
+
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Card")
+	float GetRevealMotionTotalSeconds() const;
+
+	UFUNCTION(BlueprintCallable, Category = "Card")
 	void MoveToHandTransform(const FTransform& NewTransform);
+
+	// Moves the physical card without changing which side is logically visible.
+	// Opening/deal presentations use this so the authored front and back are
+	// revealed only by the card's world rotation.
+	UFUNCTION(BlueprintCallable, Category = "Card|Presentation")
+	void MoveToPresentationTransform(
+		const FTransform& NewTransform,
+		float VisualScaleMultiplier,
+		float MotionDuration,
+		float ArcHeight,
+		bool bUseSettleMotion = false,
+		bool bOrientToLocalViewer = false,
+		float SettleStrength = 1.0f);
 
 	virtual bool CanInteract_Implementation(AActor* Interactor) const override;
 	virtual void Interact_Implementation(AActor* Interactor) override;
@@ -167,7 +217,7 @@ protected:
 	void OnRep_CardVisual();
 
 	UFUNCTION()
-	void OnRep_TargetVisualScaleMultiplier();
+	void OnRep_Selectable();
 
 	UFUNCTION()
 	void OnRep_MovementTarget();
@@ -177,18 +227,44 @@ public:
 
 private:
 	void ConfigureInteractionComponents();
+	void ScheduleVisualRefreshRetry();
+	void HandleVisualRefreshRetry();
 	void UpdateTargetTransform();
 	void EnableMotionTick();
-	void MoveToSlotTransform(const FTransform& SlotTransform, bool bNewFaceUp);
-	void PublishMovementTarget(const FTransform& NewTransform, bool bPlaySlotAttachMotion);
-	void ApplyMovementTarget(const FTransform& NewTransform, bool bPlaySlotAttachMotion);
+	void MoveToSlotComponent(USceneComponent* Slot, bool bNewFaceUp, FRotator RotationOffset);
+	void MoveToSlotTransform(const FTransform& SlotTransform, bool bNewFaceUp, float VisualScaleMultiplier);
+	void PublishMovementTarget(
+		const FTransform& NewTransform,
+		bool bPlaySlotAttachMotion,
+		float MotionDuration = -1.0f,
+		float ArcHeight = -1.0f,
+		float OvershootDistance = -1.0f,
+		bool bUseSettleMotion = true,
+		bool bOrientToLocalViewer = false,
+		float SettleStrength = 1.0f,
+		float ServerStartTime = -1.0f);
+	void ApplyMovementTarget(
+		const FTransform& NewTransform,
+		bool bPlaySlotAttachMotion,
+		float MotionDuration = -1.0f,
+		float ArcHeight = -1.0f,
+		float OvershootDistance = -1.0f,
+		bool bUseSettleMotion = true,
+		bool bOrientToLocalViewer = false,
+		float SettleStrength = 1.0f,
+		float ServerStartTime = -1.0f);
+	void AttachToPendingSlot();
+	void ClearPendingSlotAttachment();
 	void ResetTravelMotionState();
 	void StartSlotAttachMotion(const FTransform& TargetTransform);
 	void UpdateSlotAttachMotion(float DeltaTime);
 	void UpdateSlotAttachSettle(float DeltaTime, FVector& InOutVisualWorldOffset, FRotator& OutVisualRelativeRotation);
 	void SetTargetVisualScaleMultiplier(float NewTargetScaleMultiplier);
 	void StartVisualScaleMotion(float NewTargetScaleMultiplier);
+	void ApplySynchronizedVisualScale(float NewTargetScaleMultiplier, float ServerStartTime, float MotionDuration);
 	void UpdateVisualScale(float DeltaTime);
+	FQuat BuildLocalViewerVisualRotation() const;
+	void UpdateLocalViewerOrientation(float DeltaTime);
 	FRotator ScaleRotator(const FRotator& Rotator, float Scale) const;
 
 	UPROPERTY(VisibleAnywhere, Category = "Card")
@@ -204,23 +280,35 @@ private:
 	FRotator DefaultRotation = FRotator::ZeroRotator;
 	FRotator TargetRotation = FRotator::ZeroRotator;
 	FVector BaseVisualRootScale = FVector::OneVector;
+	FQuat BaseCardTextRelativeRotation = FQuat::Identity;
 	FVector SlotAttachStartLocation = FVector::ZeroVector;
 	FVector SlotAttachTargetLocation = FVector::ZeroVector;
 	FVector SlotAttachTravelDirection = FVector::ForwardVector;
 	FQuat SlotAttachStartRotation = FQuat::Identity;
 	FQuat SlotAttachTargetRotation = FQuat::Identity;
+	TWeakObjectPtr<USceneComponent> PendingSlotAttachComponent;
+	FRotator PendingSlotAttachRotationOffset = FRotator::ZeroRotator;
 	float CurrentVisualScaleMultiplier = 1.0f;
 	float VisualScaleStartMultiplier = 1.0f;
 	float VisualScaleElapsedTime = 0.0f;
 	float SlotAttachElapsedTime = 0.0f;
 	float SlotAttachSettleElapsedTime = 0.0f;
-	UPROPERTY(ReplicatedUsing = OnRep_TargetVisualScaleMultiplier)
+	float ActiveSlotAttachDuration = 0.85f;
+	float ActiveSlotAttachArcHeight = 55.0f;
+	float ActiveSlotAttachOvershootDistance = 8.0f;
+	float ActiveSlotAttachSettleStrength = 1.0f;
+	float CurrentLocalViewerOrientationAlpha = 0.0f;
+	float TargetLocalViewerOrientationAlpha = 0.0f;
+	bool bActiveSlotAttachSettleMotion = true;
+	bool bActiveOrientToLocalViewer = false;
 	float TargetVisualScaleMultiplier = 1.0f;
 	UPROPERTY(ReplicatedUsing = OnRep_MovementTarget)
 	FSDCardMovementTarget ReplicatedMovementTarget;
 	int32 CachedVisualRank = INDEX_NONE;
 	bool bCachedVisualVisible = false;
 	bool bHasCachedVisual = false;
+	FTimerHandle VisualRefreshRetryTimerHandle;
+	uint8 VisualRefreshRetryAttempts = 0;
 
 	bool bVisualScaleMotionActive = false;
 	bool bSlotAttachMotionActive = false;

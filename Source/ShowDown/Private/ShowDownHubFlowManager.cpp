@@ -3,7 +3,9 @@
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Blueprint/UserWidget.h"
+#include "Components/Button.h"
 #include "Engine/GameInstance.h"
+#include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetSystemLibrary.h"
@@ -12,6 +14,7 @@
 #include "ShowDownGameModeBase.h"
 #include "ShowDownGameStateBase.h"
 #include "ShowDownCameraAspect.h"
+#include "ShowDownCharacterSkinCatalog.h"
 #include "ShowDownEosSubsystem.h"
 #include "ShowDownLobbyWidget.h"
 #include "ShowDownLoginWidget.h"
@@ -19,24 +22,44 @@
 #include "ShowDownMultiplayerWidget.h"
 #include "ShowDownPlayerController.h"
 #include "ShowDownRankWidget.h"
+#include "ShowDownShopPreviewActor.h"
 #include "ShowDownShopWidget.h"
+#include "ShowDownSettingsWidget.h"
+#include "ShowDownTransitionWidget.h"
 #include "ShowDownVoiceSubsystem.h"
 #include "SupabaseSubsystem.h"
+#include "UObject/ConstructorHelpers.h"
 
 AShowDownHubFlowManager::AShowDownHubFlowManager()
 {
 	PrimaryActorTick.bCanEverTick = false;
 	ShopWidgetClass = UShowDownShopWidget::StaticClass();
+	ShopPreviewActorClass = AShowDownShopPreviewActor::StaticClass();
+	TransitionWidgetClass = UShowDownTransitionWidget::StaticClass();
+	static ConstructorHelpers::FClassFinder<UShowDownMultiplayerWidget> MultiplayerWidgetBlueprint(TEXT("/Game/UI/WBP_Multiplayer"));
 	MultiplayerWidgetClass = UShowDownMultiplayerWidget::StaticClass();
+	if (MultiplayerWidgetBlueprint.Succeeded()) MultiplayerWidgetClass = MultiplayerWidgetBlueprint.Class;
+	static ConstructorHelpers::FClassFinder<UShowDownLobbyWidget> LobbyWidgetBlueprint(TEXT("/Game/UI/WBP_Lobby"));
 	LobbyWidgetClass = UShowDownLobbyWidget::StaticClass();
+	if (LobbyWidgetBlueprint.Succeeded()) LobbyWidgetClass = LobbyWidgetBlueprint.Class;
+	static ConstructorHelpers::FClassFinder<UShowDownSettingsWidget> SettingsWidgetBlueprint(TEXT("/Game/UI/WBP_Settings"));
+	SettingsWidgetClass = UShowDownSettingsWidget::StaticClass();
+	if (SettingsWidgetBlueprint.Succeeded()) SettingsWidgetClass = SettingsWidgetBlueprint.Class;
 }
 
 void AShowDownHubFlowManager::BeginPlay()
 {
 	Super::BeginPlay();
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
+		{
+			EosSubsystem->OnManagedTravelFailed.RemoveDynamic(this, &AShowDownHubFlowManager::HandleManagedTravelFailed);
+			EosSubsystem->OnManagedTravelFailed.AddDynamic(this, &AShowDownHubFlowManager::HandleManagedTravelFailed);
+		}
+	}
 	ApplySinglePlayerVoiceSettings();
 
-	// GameInstanceSubsystem survives level travel, so returning players can skip login.
 	bool bHasSession = false;
 	bool bInMultiplayerLobby = false;
 	if (UGameInstance* GameInstance = GetGameInstance())
@@ -76,7 +99,8 @@ void AShowDownHubFlowManager::BeginPlay()
 	{
 		if (AShowDownGameStateBase* ShowDownGameState = World->GetGameState<AShowDownGameStateBase>())
 		{
-			ShowDownGameState->OnGameOver.AddDynamic(this, &AShowDownHubFlowManager::HandleGameOver);
+			BoundGameState = ShowDownGameState;
+			ShowDownGameState->OnGameOver.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleGameOver);
 		}
 	}
 
@@ -101,8 +125,57 @@ void AShowDownHubFlowManager::BeginPlay()
 	}
 }
 
+void AShowDownHubFlowManager::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(ReturnToHubTimerHandle);
+	}
+
+	if (AShowDownGameStateBase* ShowDownGameState = BoundGameState.Get())
+	{
+		ShowDownGameState->OnGameOver.RemoveDynamic(this, &AShowDownHubFlowManager::HandleGameOver);
+	}
+	BoundGameState.Reset();
+
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
+		{
+			EosSubsystem->OnEosLoginResult.RemoveDynamic(this, &AShowDownHubFlowManager::HandleEosLoginForMultiplayer);
+			EosSubsystem->OnSessionResult.RemoveDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
+			EosSubsystem->OnPublicRoomsUpdated.RemoveDynamic(this, &AShowDownHubFlowManager::HandlePublicRoomsUpdated);
+			EosSubsystem->OnManagedTravelFailed.RemoveDynamic(this, &AShowDownHubFlowManager::HandleManagedTravelFailed);
+			EosSubsystem->StopLobbyStartPolling();
+		}
+	}
+
+	bPendingMultiplayerOpenAfterEosLogin = false;
+	DestroyShopPreviewActor();
+	if (TransitionWidget)
+	{
+		TransitionWidget->RemoveFromParent();
+		TransitionWidget = nullptr;
+	}
+	TransitionOperation = EShowDownHubTransitionOperation::None;
+	SetActiveWidget(nullptr);
+	LoginWidget = nullptr;
+	MainMenuWidget = nullptr;
+	ShopWidget = nullptr;
+	RankWidget = nullptr;
+	MultiplayerWidget = nullptr;
+	LobbyWidget = nullptr;
+	SettingsWidget = nullptr;
+
+	Super::EndPlay(EndPlayReason);
+}
+
 void AShowDownHubFlowManager::ShowLogin()
 {
+	if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(GetPrimaryPlayerController()))
+	{
+		PlayerController->DisableGameplayChat();
+	}
 	PlayCamera(LoginCamera);
 
 	if (!LoginWidgetClass)
@@ -123,7 +196,7 @@ void AShowDownHubFlowManager::ShowLogin()
 	}
 
 	LoginWidget->SetUseLegacyNavigation(false);
-	LoginWidget->OnLoginSucceeded.AddDynamic(this, &AShowDownHubFlowManager::HandleLoginSucceeded);
+	LoginWidget->OnLoginSucceeded.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleLoginSucceeded);
 
 	SetActiveWidget(LoginWidget);
 	SetUiOnlyInput(LoginWidget);
@@ -132,6 +205,10 @@ void AShowDownHubFlowManager::ShowLogin()
 
 void AShowDownHubFlowManager::ShowMainMenu()
 {
+	if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(GetPrimaryPlayerController()))
+	{
+		PlayerController->DisableGameplayChat();
+	}
 	PlayCamera(MainMenuCamera);
 
 	if (!MainMenuWidgetClass)
@@ -152,11 +229,11 @@ void AShowDownHubFlowManager::ShowMainMenu()
 	}
 
 	MainMenuWidget->SetUseLegacyNavigation(false);
-	MainMenuWidget->OnSinglePlayRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleSinglePlayRequested);
-	MainMenuWidget->OnMultiplayerRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleMultiplayerRequested);
-	MainMenuWidget->OnShopRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleShopRequested);
-	MainMenuWidget->OnRankingRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleRankingRequested);
-	MainMenuWidget->OnQuitRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleQuitRequested);
+	MainMenuWidget->OnSinglePlayRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleSinglePlayRequested);
+	MainMenuWidget->OnMultiplayerRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleMultiplayerRequested);
+	MainMenuWidget->OnShopRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleShopRequested);
+	MainMenuWidget->OnRankingRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleRankingRequested);
+	MainMenuWidget->OnQuitRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleQuitRequested);
 
 	SetActiveWidget(MainMenuWidget);
 	SetUiOnlyInput(MainMenuWidget);
@@ -165,7 +242,7 @@ void AShowDownHubFlowManager::ShowMainMenu()
 
 void AShowDownHubFlowManager::ShowShop()
 {
-	PlayCamera(ShopCamera);
+	PlayCamera(ShopCamera ? ShopCamera : MainMenuCamera);
 
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
@@ -194,7 +271,12 @@ void AShowDownHubFlowManager::ShowShop()
 	}
 
 	ShopWidget->SetUseLegacyBackNavigation(false);
-	ShopWidget->OnBackRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleShopBackRequested);
+	ShopWidget->OnBackRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleShopBackRequested);
+	ShopWidget->OnPreviewSkinChanged.AddUniqueDynamic(
+		this,
+		&AShowDownHubFlowManager::HandleShopPreviewSkinChanged);
+
+	SpawnShopPreviewActor();
 
 	SetActiveWidget(ShopWidget);
 	SetUiOnlyInput(ShopWidget);
@@ -228,7 +310,7 @@ void AShowDownHubFlowManager::ShowRanking()
 	}
 
 	// 랭킹 화면의 "뒤로" 버튼을 메인메뉴 복귀에 연결합니다.
-	RankWidget->OnBackRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleRankBackRequested);
+	RankWidget->OnBackRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleRankBackRequested);
 
 	SetActiveWidget(RankWidget);
 	SetUiOnlyInput(RankWidget);
@@ -238,7 +320,10 @@ void AShowDownHubFlowManager::ShowRanking()
 void AShowDownHubFlowManager::ShowMultiplayerMenu()
 {
 	UE_LOG(LogTemp, Log, TEXT("Showing multiplayer menu."));
-	PlayCamera(MainMenuCamera);
+	if (!PlayCamera(MultiplayerCamera))
+	{
+		PlayCamera(MainMenuCamera);
+	}
 
 	TSubclassOf<UShowDownMultiplayerWidget> WidgetClass = MultiplayerWidgetClass;
 	if (!WidgetClass)
@@ -257,12 +342,12 @@ void AShowDownHubFlowManager::ShowMultiplayerMenu()
 		return;
 	}
 
-	MultiplayerWidget->OnHostRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleHostMultiplayerRequested);
-	MultiplayerWidget->OnPrivateHostRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleHostPrivateMultiplayerRequested);
-	MultiplayerWidget->OnJoinRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleJoinMultiplayerRequested);
-	MultiplayerWidget->OnRefreshRoomsRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleRefreshPublicRoomsRequested);
-	MultiplayerWidget->OnJoinPublicRoomRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleJoinPublicRoomRequested);
-	MultiplayerWidget->OnBackRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleMultiplayerBackRequested);
+	MultiplayerWidget->OnHostRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleHostMultiplayerRequested);
+	MultiplayerWidget->OnPrivateHostRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleHostPrivateMultiplayerRequested);
+	MultiplayerWidget->OnJoinRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleJoinMultiplayerRequested);
+	MultiplayerWidget->OnRefreshRoomsRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleRefreshPublicRoomsRequested);
+	MultiplayerWidget->OnJoinPublicRoomRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleJoinPublicRoomRequested);
+	MultiplayerWidget->OnBackRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleMultiplayerBackRequested);
 
 	SetActiveWidget(MultiplayerWidget);
 	SetUiOnlyInput(MultiplayerWidget);
@@ -273,7 +358,10 @@ void AShowDownHubFlowManager::ShowMultiplayerMenu()
 void AShowDownHubFlowManager::ShowLobby()
 {
 	UE_LOG(LogTemp, Log, TEXT("Showing multiplayer lobby."));
-	PlayCamera(MainMenuCamera);
+	if (!PlayCamera(MultiplayerCamera))
+	{
+		PlayCamera(MainMenuCamera);
+	}
 
 	TSubclassOf<UShowDownLobbyWidget> WidgetClass = LobbyWidgetClass;
 	if (!WidgetClass)
@@ -296,7 +384,7 @@ void AShowDownHubFlowManager::ShowLobby()
 	{
 		if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
 		{
-			LobbyWidget->SetLobbyInfo(EosSubsystem->GetLobbyCode(), EosSubsystem->IsLobbyHost());
+			LobbyWidget->SetLobbyInfo(EosSubsystem->GetLobbyRoomName(), EosSubsystem->GetLobbyCode(), EosSubsystem->IsLobbyHost());
 			EosSubsystem->OnSessionResult.RemoveDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
 			EosSubsystem->OnSessionResult.AddDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
 			EosSubsystem->OnPublicRoomsUpdated.RemoveDynamic(this, &AShowDownHubFlowManager::HandlePublicRoomsUpdated);
@@ -311,12 +399,45 @@ void AShowDownHubFlowManager::ShowLobby()
 		}
 	}
 
-	LobbyWidget->OnStartRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleLobbyStartRequested);
-	LobbyWidget->OnLeaveRequested.AddDynamic(this, &AShowDownHubFlowManager::HandleLobbyLeaveRequested);
+	LobbyWidget->OnStartRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleLobbyStartRequested);
+	LobbyWidget->OnLeaveRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleLobbyLeaveRequested);
+	LobbyWidget->OnKickRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleLobbyKickRequested);
 
 	SetActiveWidget(LobbyWidget);
 	SetUiOnlyInput(LobbyWidget);
 	OnScreenChanged.Broadcast(EShowDownHubFlowScreen::Lobby);
+}
+
+void AShowDownHubFlowManager::ShowLobbyKickResult(bool bSuccess)
+{
+	if (!LobbyWidget)
+	{
+		return;
+	}
+
+	LobbyWidget->SetInteractionPending(false);
+	LobbyWidget->ShowStatusMessage(
+		bSuccess
+			? TEXT("참가자를 방에서 내보냈습니다.")
+			: TEXT("참가자를 강퇴할 수 없습니다."),
+		bSuccess ? FLinearColor::Green : FLinearColor::Red);
+}
+
+void AShowDownHubFlowManager::ShowSettings()
+{
+	if (!PlayCamera(OptionsCamera))
+	{
+		PlayCamera(MainMenuCamera);
+	}
+	TSubclassOf<UShowDownSettingsWidget> WidgetClass = SettingsWidgetClass;
+	if (!WidgetClass) WidgetClass = UShowDownSettingsWidget::StaticClass();
+	SettingsWidget = CreateWidget<UShowDownSettingsWidget>(GetPrimaryPlayerController(), WidgetClass);
+	if (!SettingsWidget) return;
+	SettingsWidget->OnBackRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleSettingsBackRequested);
+	SettingsWidget->OnQuitRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleSettingsQuitRequested);
+	SetActiveWidget(SettingsWidget);
+	SetUiOnlyInput(SettingsWidget);
+	OnScreenChanged.Broadcast(EShowDownHubFlowScreen::Settings);
 }
 
 void AShowDownHubFlowManager::ShowSinglePlayPreview()
@@ -461,6 +582,14 @@ void AShowDownHubFlowManager::QuitGame()
 
 void AShowDownHubFlowManager::SetActiveWidget(UUserWidget* NextWidget)
 {
+	if (ActiveWidget
+		&& ActiveWidget != NextWidget
+		&& Cast<UShowDownShopWidget>(ActiveWidget)
+		&& !Cast<UShowDownShopWidget>(NextWidget))
+	{
+		DestroyShopPreviewActor();
+	}
+
 	if (ActiveWidget)
 	{
 		ActiveWidget->RemoveFromParent();
@@ -471,8 +600,102 @@ void AShowDownHubFlowManager::SetActiveWidget(UUserWidget* NextWidget)
 	if (ActiveWidget)
 	{
 		ActiveWidget->AddToViewport();
+		BindTopNavigation(ActiveWidget);
 	}
 }
+
+void AShowDownHubFlowManager::ShowTransitionOverlay(
+	EShowDownHubTransitionOperation Operation,
+	const FString& Title,
+	const FString& Detail)
+{
+	TransitionOperation = Operation;
+	if (MultiplayerWidget)
+	{
+		MultiplayerWidget->SetInteractionPending(true);
+	}
+	if (LobbyWidget)
+	{
+		LobbyWidget->SetInteractionPending(true);
+	}
+
+	if (!TransitionWidget)
+	{
+		TSubclassOf<UShowDownTransitionWidget> WidgetClass = TransitionWidgetClass;
+		if (!WidgetClass)
+		{
+			WidgetClass = UShowDownTransitionWidget::StaticClass();
+		}
+		TransitionWidget = CreateWidget<UShowDownTransitionWidget>(GetPrimaryPlayerController(), WidgetClass);
+	}
+
+	if (!TransitionWidget)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Failed to create multiplayer transition overlay."));
+		TransitionOperation = EShowDownHubTransitionOperation::None;
+		if (MultiplayerWidget)
+		{
+			MultiplayerWidget->SetInteractionPending(false);
+		}
+		if (LobbyWidget)
+		{
+			LobbyWidget->SetInteractionPending(false);
+		}
+		return;
+	}
+
+	TransitionWidget->SetTransitionText(Title, Detail);
+	if (!TransitionWidget->IsInViewport())
+	{
+		TransitionWidget->AddToViewport(10000);
+	}
+}
+
+void AShowDownHubFlowManager::HideTransitionOverlay()
+{
+	if (TransitionWidget)
+	{
+		TransitionWidget->Dismiss();
+		TransitionWidget = nullptr;
+	}
+
+	TransitionOperation = EShowDownHubTransitionOperation::None;
+	if (MultiplayerWidget)
+	{
+		MultiplayerWidget->SetInteractionPending(false);
+	}
+	if (LobbyWidget)
+	{
+		LobbyWidget->SetInteractionPending(false);
+	}
+}
+
+void AShowDownHubFlowManager::BindTopNavigation(UUserWidget* Widget)
+{
+	// Lobby navigation is intentionally handled by its leave flow so the EOS
+	// session is closed cleanly before another hub screen is opened.
+	if (!Widget || Cast<UShowDownLobbyWidget>(Widget)) return;
+	auto Bind = [Widget](const TCHAR* Name, UObject* Object, FName FunctionName)
+	{
+		if (UButton* Button = Cast<UButton>(Widget->GetWidgetFromName(Name)))
+		{
+			FScriptDelegate Delegate;
+			Delegate.BindUFunction(Object, FunctionName);
+			Button->OnClicked.AddUnique(Delegate);
+		}
+	};
+	Bind(TEXT("Nav_0"), this, GET_FUNCTION_NAME_CHECKED(AShowDownHubFlowManager, HandleTopNavSinglePlay));
+	Bind(TEXT("Nav_1"), this, GET_FUNCTION_NAME_CHECKED(AShowDownHubFlowManager, HandleTopNavMultiplayer));
+	Bind(TEXT("Nav_2"), this, GET_FUNCTION_NAME_CHECKED(AShowDownHubFlowManager, HandleTopNavShop));
+	Bind(TEXT("Nav_3"), this, GET_FUNCTION_NAME_CHECKED(AShowDownHubFlowManager, HandleTopNavRanking));
+	Bind(TEXT("Nav_4"), this, GET_FUNCTION_NAME_CHECKED(AShowDownHubFlowManager, HandleTopNavSettings));
+}
+
+void AShowDownHubFlowManager::HandleTopNavSinglePlay() { HandleSinglePlayRequested(); }
+void AShowDownHubFlowManager::HandleTopNavMultiplayer() { ShowMultiplayerMenu(); }
+void AShowDownHubFlowManager::HandleTopNavShop() { ShowShop(); }
+void AShowDownHubFlowManager::HandleTopNavRanking() { ShowRanking(); }
+void AShowDownHubFlowManager::HandleTopNavSettings() { ShowSettings(); }
 
 void AShowDownHubFlowManager::SetUiOnlyInput(UUserWidget* FocusWidget)
 {
@@ -491,6 +714,7 @@ void AShowDownHubFlowManager::SetUiOnlyInput(UUserWidget* FocusWidget)
 
 		if (FocusWidget)
 		{
+			FocusWidget->SetIsFocusable(true);
 			InputMode.SetWidgetToFocus(FocusWidget->TakeWidget());
 		}
 
@@ -547,6 +771,79 @@ void AShowDownHubFlowManager::ClearGameplayCameraLook()
 APlayerController* AShowDownHubFlowManager::GetPrimaryPlayerController() const
 {
 	return UGameplayStatics::GetPlayerController(this, 0);
+}
+
+void AShowDownHubFlowManager::SpawnShopPreviewActor()
+{
+	DestroyShopPreviewActor();
+
+	UWorld* World = GetWorld();
+	ACameraActor* PreviewCamera = ShopCamera ? ShopCamera : MainMenuCamera;
+	if (!World || !PreviewCamera)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Shop preview needs a shop or main menu camera."));
+		return;
+	}
+
+	const FVector CameraLocation = PreviewCamera->GetActorLocation();
+	const FVector PreviewLocation = CameraLocation
+		+ PreviewCamera->GetActorForwardVector() * ShopPreviewDistance
+		+ FVector::UpVector * ShopPreviewHeight;
+
+	FRotator PreviewRotation = (CameraLocation - PreviewLocation).Rotation();
+	PreviewRotation.Pitch = 0.0f;
+	PreviewRotation.Roll = 0.0f;
+	PreviewRotation.Yaw += ShopPreviewYawOffset;
+
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.Owner = this;
+	SpawnParameters.SpawnCollisionHandlingOverride =
+		ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	TSubclassOf<AShowDownShopPreviewActor> PreviewClass = ShopPreviewActorClass;
+	if (!PreviewClass)
+	{
+		PreviewClass = AShowDownShopPreviewActor::StaticClass();
+	}
+
+	ShopPreviewActor = World->SpawnActor<AShowDownShopPreviewActor>(
+		PreviewClass,
+		PreviewLocation,
+		PreviewRotation,
+		SpawnParameters);
+
+	if (!ShopPreviewActor)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Failed to spawn shop character preview."));
+		return;
+	}
+
+	ShopPreviewActor->SetFlags(RF_Transient);
+	ShopPreviewActor->SetSkinCatalog(CharacterSkinCatalog);
+	ShopPreviewActor->SetPreviewSkin(UShowDownCharacterSkinCatalog::GetDefaultSkinId());
+}
+
+void AShowDownHubFlowManager::DestroyShopPreviewActor()
+{
+	if (IsValid(ShopPreviewActor))
+	{
+		ShopPreviewActor->Destroy();
+	}
+
+	ShopPreviewActor = nullptr;
+}
+
+void AShowDownHubFlowManager::HandleShopPreviewSkinChanged(const FString& SkinId)
+{
+	if (!IsValid(ShopPreviewActor))
+	{
+		SpawnShopPreviewActor();
+	}
+
+	if (IsValid(ShopPreviewActor))
+	{
+		ShopPreviewActor->SetPreviewSkin(SkinId);
+	}
 }
 
 void AShowDownHubFlowManager::HandleLoginSucceeded()
@@ -638,15 +935,20 @@ void AShowDownHubFlowManager::HandleEosLoginForMultiplayer(bool bSuccess, const 
 	}
 }
 
-void AShowDownHubFlowManager::HandleHostMultiplayerRequested()
+void AShowDownHubFlowManager::HandleHostMultiplayerRequested(const FString& RoomName)
 {
+	ShowTransitionOverlay(
+		EShowDownHubTransitionOperation::CreateRoom,
+		TEXT("방을 만드는 중"),
+		TEXT("네트워크 로비를 안전하게 준비하고 있습니다."));
+
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
 		if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
 		{
 			EosSubsystem->OnSessionResult.RemoveDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
 			EosSubsystem->OnSessionResult.AddDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
-			EosSubsystem->HostLobby(MultiplayerLobbyLevelName, MultiplayerLevelName);
+			EosSubsystem->HostLobby(MultiplayerLobbyLevelName, MultiplayerLevelName, RoomName);
 			return;
 		}
 	}
@@ -655,17 +957,23 @@ void AShowDownHubFlowManager::HandleHostMultiplayerRequested()
 	{
 		MultiplayerWidget->ShowStatusMessage(TEXT("EOS subsystem is unavailable."), FLinearColor::Red);
 	}
+	HideTransitionOverlay();
 }
 
-void AShowDownHubFlowManager::HandleHostPrivateMultiplayerRequested()
+void AShowDownHubFlowManager::HandleHostPrivateMultiplayerRequested(const FString& RoomName)
 {
+	ShowTransitionOverlay(
+		EShowDownHubTransitionOperation::CreateRoom,
+		TEXT("비공개방을 만드는 중"),
+		TEXT("초대용 네트워크 로비를 준비하고 있습니다."));
+
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
 		if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
 		{
 			EosSubsystem->OnSessionResult.RemoveDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
 			EosSubsystem->OnSessionResult.AddDynamic(this, &AShowDownHubFlowManager::HandleEosSessionResult);
-			EosSubsystem->HostPrivateLobby(MultiplayerLobbyLevelName, MultiplayerLevelName);
+			EosSubsystem->HostPrivateLobby(MultiplayerLobbyLevelName, MultiplayerLevelName, RoomName);
 			return;
 		}
 	}
@@ -674,10 +982,16 @@ void AShowDownHubFlowManager::HandleHostPrivateMultiplayerRequested()
 	{
 		MultiplayerWidget->ShowStatusMessage(TEXT("EOS subsystem is unavailable."), FLinearColor::Red);
 	}
+	HideTransitionOverlay();
 }
 
 void AShowDownHubFlowManager::HandleJoinMultiplayerRequested(const FString& RoomCode)
 {
+	ShowTransitionOverlay(
+		EShowDownHubTransitionOperation::JoinRoom,
+		TEXT("방에 연결하는 중"),
+		TEXT("호스트를 찾고 참가 준비를 진행하고 있습니다."));
+
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
 		if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
@@ -693,6 +1007,7 @@ void AShowDownHubFlowManager::HandleJoinMultiplayerRequested(const FString& Room
 	{
 		MultiplayerWidget->ShowStatusMessage(TEXT("EOS subsystem is unavailable."), FLinearColor::Red);
 	}
+	HideTransitionOverlay();
 }
 
 void AShowDownHubFlowManager::HandleRefreshPublicRoomsRequested()
@@ -719,6 +1034,11 @@ void AShowDownHubFlowManager::HandleRefreshPublicRoomsRequested()
 
 void AShowDownHubFlowManager::HandleJoinPublicRoomRequested(int32 SearchResultIndex)
 {
+	ShowTransitionOverlay(
+		EShowDownHubTransitionOperation::JoinRoom,
+		TEXT("방에 입장하는 중"),
+		TEXT("호스트와 연결하고 플레이어 정보를 동기화하고 있습니다."));
+
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
 		if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
@@ -734,6 +1054,7 @@ void AShowDownHubFlowManager::HandleJoinPublicRoomRequested(int32 SearchResultIn
 	{
 		MultiplayerWidget->ShowStatusMessage(TEXT("EOS subsystem is unavailable."), FLinearColor::Red);
 	}
+	HideTransitionOverlay();
 }
 
 void AShowDownHubFlowManager::HandlePublicRoomsUpdated(bool bSuccess, const TArray<FShowDownPublicRoomInfo>& Rooms)
@@ -766,9 +1087,22 @@ void AShowDownHubFlowManager::HandleEosSessionResult(bool bSuccess, const FStrin
 {
 	UE_LOG(LogTemp, Log, TEXT("EOS session result: %s"), *Message);
 
+	bool bSessionOperationInProgress = false;
+	if (const UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (const UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
+		{
+			bSessionOperationInProgress = EosSubsystem->IsInteractiveSessionOperationInProgress();
+		}
+	}
+
 	if (bSuccess && Message == TEXT("EOS game joined."))
 	{
 		SetActiveWidget(nullptr);
+		ShowTransitionOverlay(
+			EShowDownHubTransitionOperation::StartGame,
+			TEXT("게임을 준비하는 중"),
+			TEXT("참가자 상태와 플레이 좌석을 동기화하고 있습니다."));
 		LobbyWidget = nullptr;
 		MultiplayerWidget = nullptr;
 
@@ -782,7 +1116,9 @@ void AShowDownHubFlowManager::HandleEosSessionResult(bool bSuccess, const FStrin
 
 			if (AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(PlayerController))
 			{
-				ShowDownController->bHandleShowDownGameplayInput = true;
+				// Keep gameplay input locked until ClientEnterMultiplayerGameplay and
+				// the authoritative seat camera are both ready.
+				ShowDownController->bHandleShowDownGameplayInput = false;
 			}
 		}
 		return;
@@ -790,28 +1126,71 @@ void AShowDownHubFlowManager::HandleEosSessionResult(bool bSuccess, const FStrin
 
 	if (MultiplayerWidget)
 	{
-		MultiplayerWidget->ShowStatusMessage(Message, bSuccess ? FLinearColor::Green : FLinearColor::Yellow);
+		MultiplayerWidget->ShowStatusMessage(
+			Message,
+			bSuccess ? FLinearColor::Green : (bSessionOperationInProgress ? FLinearColor::Yellow : FLinearColor::Red));
 	}
 
 	if (LobbyWidget)
 	{
-		LobbyWidget->ShowStatusMessage(Message, bSuccess ? FLinearColor::Green : FLinearColor::Yellow);
+		LobbyWidget->ShowStatusMessage(
+			Message,
+			bSuccess ? FLinearColor::Green : (bSessionOperationInProgress ? FLinearColor::Yellow : FLinearColor::Red));
+	}
+
+	if (!bSuccess
+		&& !bSessionOperationInProgress
+		&& TransitionOperation != EShowDownHubTransitionOperation::None
+		&& TransitionOperation != EShowDownHubTransitionOperation::LeaveRoom)
+	{
+		HideTransitionOverlay();
+	}
+}
+
+void AShowDownHubFlowManager::HandleManagedTravelFailed(const FString& Message, bool bReopenMultiplayerMenu)
+{
+	HideTransitionOverlay();
+	if (bReopenMultiplayerMenu)
+	{
+		ShowMultiplayerMenu();
+	}
+
+	if (MultiplayerWidget)
+	{
+		MultiplayerWidget->ShowStatusMessage(Message, FLinearColor::Red);
+	}
+	else if (LobbyWidget)
+	{
+		LobbyWidget->ShowStatusMessage(Message, FLinearColor::Red);
 	}
 }
 
 void AShowDownHubFlowManager::HandleLobbyStartRequested()
 {
+	ShowTransitionOverlay(
+		EShowDownHubTransitionOperation::StartGame,
+		TEXT("게임을 시작하는 중"),
+		TEXT("모든 참가자의 상태와 카메라를 준비하고 있습니다."));
+
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
 		if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
 		{
 			EosSubsystem->StartHostedGame();
+			return;
 		}
 	}
+
+	HideTransitionOverlay();
 }
 
 void AShowDownHubFlowManager::HandleLobbyLeaveRequested()
 {
+	ShowTransitionOverlay(
+		EShowDownHubTransitionOperation::LeaveRoom,
+		TEXT("로비에서 나가는 중"),
+		TEXT("세션을 정리하고 메인 화면으로 돌아갑니다."));
+
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
 		if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
@@ -821,7 +1200,33 @@ void AShowDownHubFlowManager::HandleLobbyLeaveRequested()
 		}
 	}
 
+	HideTransitionOverlay();
 	ShowMainMenu();
+}
+
+void AShowDownHubFlowManager::HandleLobbyKickRequested(const FString& PlayerId)
+{
+	if (PlayerId.IsEmpty())
+	{
+		if (LobbyWidget)
+		{
+			LobbyWidget->SetInteractionPending(false);
+			LobbyWidget->ShowStatusMessage(TEXT("강퇴할 참가자를 확인할 수 없습니다."), FLinearColor::Red);
+		}
+		return;
+	}
+
+	if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(GetPrimaryPlayerController()))
+	{
+		PlayerController->ServerRequestLobbyKick(PlayerId);
+		return;
+	}
+
+	if (LobbyWidget)
+	{
+		LobbyWidget->SetInteractionPending(false);
+		LobbyWidget->ShowStatusMessage(TEXT("강퇴 요청을 보낼 수 없습니다."), FLinearColor::Red);
+	}
 }
 
 void AShowDownHubFlowManager::HandleShopRequested()
@@ -835,6 +1240,16 @@ void AShowDownHubFlowManager::HandleRankingRequested()
 }
 
 void AShowDownHubFlowManager::HandleQuitRequested()
+{
+	ShowSettings();
+}
+
+void AShowDownHubFlowManager::HandleSettingsBackRequested()
+{
+	ShowMainMenu();
+}
+
+void AShowDownHubFlowManager::HandleSettingsQuitRequested()
 {
 	QuitGame();
 }

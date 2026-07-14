@@ -9,6 +9,7 @@
 class ACard;
 class ACameraActor;
 class APostProcessVolume;
+class ASDBetActionButtonActor;
 class AShowDownCharacter;
 class AShowDownGameModeBase;
 class SWidget;
@@ -20,6 +21,9 @@ class UShowDownChatWidget;
 class UShowDownLeaveConfirmWidget;
 class UShowDownMultiRankWidget;
 class UShowDownVoiceSubsystem;
+class UShowDownPauseMenuWidget;
+class UShowDownSettingsWidget;
+class UShowDownTransitionWidget;
 
 struct FSDPrimitiveCustomDepthState
 {
@@ -40,6 +44,7 @@ public:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void OnPossess(APawn* InPawn) override;
 	virtual void PlayerTick(float DeltaTime) override;
+	virtual void ClientWasKicked_Implementation(const FText& KickReason) override;
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Input")
 	void HandlePrimaryClick();
@@ -58,6 +63,8 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Chat")
 	void SubmitDialogueInput(const FString& Text);
+
+	FString GetChatSenderName() const;
 
 	UFUNCTION(Exec)
 	void SDVoiceSubmitText(const FString& Text);
@@ -100,6 +107,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Betting")
 	void RequestPlayerRaiseTo(int32 BulletCount);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Betting")
+	void RequestRaisePreviewTarget(int32 BulletCount);
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Betting")
 	void RequestPlayerFold();
@@ -148,6 +158,16 @@ public:
 		FVector LocationAmplitude,
 		float StepInterval);
 
+	// Local-only view override used by the roulette hit presentation. Keeping
+	// ownership in the controller prevents the normal character-camera update
+	// from replacing the cinematic view on the next tick.
+	bool BeginGunShotCameraOverride(ACameraActor* Camera, float BlendInTime, float BlendExponent);
+	void EndGunShotCameraOverride(ACameraActor* Camera, float BlendOutTime, float BlendExponent);
+	// Final-elimination shots leave the local player on the independent gun-shot
+	// camera instead of returning to a character that is about to be hidden.
+	void ReleaseGunShotCameraOverrideForElimination(ACameraActor* Camera);
+	void CancelGunShotCameraOverride(ACameraActor* ExpectedCamera = nullptr);
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Camera")
 	void SetFixedCameraComponentMouseLook(
 		USceneComponent* CameraComponent,
@@ -160,6 +180,12 @@ public:
 
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "ShowDown|Input")
 	bool HandlesShowDownGameplayInput() const { return bHandleShowDownGameplayInput; }
+
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "ShowDown|UI")
+	bool IsGameplayChatEnabled() const { return bGameplayChatEnabled; }
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|UI")
+	void DisableGameplayChat();
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Input")
 	bool bHandleShowDownGameplayInput = true;
@@ -290,11 +316,17 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Multiplayer")
 	FKey LeaveMatchKey = EKeys::Escape;
 
+	UPROPERTY(EditDefaultsOnly, Category="ShowDown|Pause")
+	TSubclassOf<UShowDownPauseMenuWidget> PauseMenuWidgetClass;
+
+	UFUNCTION(BlueprintCallable, Category="ShowDown|Pause") void TogglePauseMenu();
+	UFUNCTION(BlueprintCallable, Category="ShowDown|Settings") void SetUserMouseSensitivity(float Multiplier);
+
 	UFUNCTION(Server, Reliable)
 	void ServerSubmitSelectedCard(ACard* SelectedCard);
 
 	UFUNCTION(Server, Reliable)
-	void ServerSubmitDialogueInput(const FString& Text, const FString& SenderName);
+	void ServerSubmitDialogueInput(const FString& Text);
 
 	UFUNCTION(Server, Reliable)
 	void ServerPlayerCheck();
@@ -305,6 +337,9 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerPlayerRaiseTo(int32 BulletCount);
 
+	UFUNCTION(Server, Unreliable)
+	void ServerSetRaisePreviewTarget(int32 BulletCount);
+
 	UFUNCTION(Server, Reliable)
 	void ServerPlayerFold();
 
@@ -312,10 +347,19 @@ public:
 	void ServerSetMultiplayerDisplayName(const FString& DisplayName);
 
 	UFUNCTION(Server, Reliable)
+	void ServerSetEquippedCharacterSkinId(const FString& SkinId);
+
+	UFUNCTION(Server, Reliable)
 	void ServerSetMultiplayerVoiceTalking(bool bIsTalking);
 
 	UFUNCTION(Server, Reliable)
 	void ServerRequestMultiplayerRestart();
+
+	UFUNCTION(Server, Reliable)
+	void ServerRequestLobbyKick(const FString& TargetPlayerId);
+
+	UFUNCTION(Server, Reliable)
+	void ServerNotifyInitialCardDealCameraReady();
 
 	UFUNCTION(Server, Unreliable)
 	void ServerUpdateCharacterHeadLookRotation(FRotator LookRotation);
@@ -324,11 +368,17 @@ public:
 	void ClientShowStatusMessage(const FString& Message);
 
 	UFUNCTION(Client, Reliable)
+	void ClientReportLobbyKickResult(bool bSuccess);
+
+	UFUNCTION(Client, Reliable)
 	void ClientShowMultiplayerRank(const TArray<FString>& PlayerNames);
 
 	// Restores gameplay input after travelling from the UI-only multiplayer lobby.
 	UFUNCTION(Client, Reliable)
 	void ClientEnterMultiplayerGameplay();
+
+	UFUNCTION(Client, Reliable)
+	void ClientSetInitialCardDealInputLocked(bool bLocked);
 
 	// Applies the local multiplayer player's character head camera by zero-based seat index.
 	UFUNCTION(Client, Reliable)
@@ -350,13 +400,21 @@ public:
 	void ClientLeaveMultiplayerRoomToHub();
 
 private:
+	bool bInitialCardDealInputLocked = false;
+	bool bInitialCardDealIgnoreMoveInputApplied = false;
 	void InitializeFromPossessedPawn();
 	void InitializeInteractableOutlinePostProcess();
 	void TraceCardUnderCursor();
+	void HandlePrimaryPress();
+	void HandlePrimaryRelease();
+	void UpdatePressedBetActionButton();
+	void CancelPressedBetActionButton();
 	bool TracePrimaryInteraction(FHitResult& OutHit) const;
 	bool TraceUnderCursor(FHitResult& OutHit) const;
 	bool TraceFromScreenCenter(FHitResult& OutHit) const;
 	ACard* ResolveCardFromHit(const FHitResult& Hit) const;
+	bool IsCardSelectableForLocalPlayer(const ACard* Card) const;
+	ASDBetActionButtonActor* ResolveBetActionButtonFromHit(const FHitResult& Hit) const;
 	AActor* ResolveInteractableFromHit(const FHitResult& Hit) const;
 	AActor* FindFocusedInteractable() const;
 	void UpdateFocusedInteractable();
@@ -373,6 +431,9 @@ private:
 	void ApplyPawnCameraInput(float YawInput, float PitchInput);
 	AShowDownCharacter* FindLocalCharacterForPlayerCamera() const;
 	void UpdateCharacterPlayerCamera(float DeltaTime);
+	void UpdateGunShotCameraOverride(float DeltaTime);
+	void ClearGunShotCameraOverrideState();
+	void ClearEliminatedSpectatorViewState();
 	void UpdateFixedCameraMouseLook(float DeltaTime);
 	void SubmitCharacterHeadLookRotation(const FRotator& LookRotation, float DeltaTime);
 	void RestoreFixedCameraBaseTransform();
@@ -382,6 +443,7 @@ private:
 	FVector GetCameraSteppedShakeLocationOffset(const FRotator& CameraRotation) const;
 	void HandleBettingHotkeys();
 	void HandleVoicePushToTalkInput();
+	bool CanCreateLocalPlayerWidgets() const;
 	void EnsureChatWidget();
 	void EnsureLeaveConfirmWidget();
 	bool TryApplyPendingMultiplayerSeatCamera();
@@ -392,9 +454,11 @@ private:
 	void UpdateCenterCrosshairVisibility();
 	void RemoveCenterCrosshairWidget();
 	void SubmitLocalMultiplayerDisplayName();
-	FString GetChatSenderName() const;
+	void SubmitLocalEquippedCharacterSkin();
 	void TryBindVoiceChatEvents();
 	void BroadcastLocalCollectorStatus(bool bSuccess, const FString& Message) const;
+	void SetLocalSpeakingIndicatorVisible(bool bVisible);
+	void SetSingleOpponentSpeakingIndicatorVisible(bool bVisible) const;
 	UFUNCTION()
 	void HandleMultiRankRestartRequested();
 	UFUNCTION()
@@ -405,6 +469,8 @@ private:
 	void HandleVoiceStatus(bool bSuccess, const FString& Message);
 	UFUNCTION()
 	void HandleLocalVoiceTalkingChanged(bool bIsTalking);
+	UFUNCTION()
+	void HandleSpeechPlaybackStateChanged(bool bIsSpeaking);
 	AShowDownGameModeBase* ResolveGameMode() const;
 
 	UPROPERTY()
@@ -420,7 +486,11 @@ private:
 	TObjectPtr<AActor> FocusedInteractable = nullptr;
 
 	UPROPERTY()
+	TObjectPtr<ASDBetActionButtonActor> PressedBetActionButton = nullptr;
+
+	UPROPERTY()
 	UShowDownChatWidget* ChatWidget = nullptr;
+	bool bGameplayChatEnabled = false;
 
 	UPROPERTY(VisibleAnywhere, Category = "ShowDown|Input|Interactable Outline")
 	TObjectPtr<APostProcessVolume> InteractionOutlinePostProcessVolume;
@@ -435,10 +505,33 @@ private:
 	UShowDownMultiRankWidget* MultiplayerRankWidget = nullptr;
 
 	UPROPERTY()
+	UShowDownTransitionWidget* MultiplayerLoadingWidget = nullptr;
+	float MultiplayerLoadingElapsedTime = 0.0f;
+	bool bMultiplayerLoadingDelayMessageShown = false;
+
+	UPROPERTY() UShowDownPauseMenuWidget* PauseMenuWidget = nullptr;
+	UPROPERTY() UShowDownSettingsWidget* PauseSettingsWidget = nullptr;
+	bool bPauseMenuOpen = false;
+	bool bGameplayInputBeforePause = true;
+	UFUNCTION() void ResumeFromPauseMenu();
+	UFUNCTION() void ReturnToMainMenuFromPause();
+	UFUNCTION() void OpenSettingsFromPause();
+	UFUNCTION() void ReturnToPauseFromSettings();
+	UFUNCTION() void QuitFromPauseMenu();
+
+	UPROPERTY()
 	TObjectPtr<USceneComponent> FixedCameraMouseLookTarget = nullptr;
 
 	UPROPERTY()
 	TObjectPtr<AShowDownCharacter> LocalPlayerCameraCharacterTarget = nullptr;
+
+	TWeakObjectPtr<ACameraActor> GunShotCameraOverrideTarget;
+	TWeakObjectPtr<AActor> GunShotCameraReturnViewTarget;
+	TWeakObjectPtr<ACameraActor> EliminatedSpectatorCameraTarget;
+	float GunShotCameraBlendOutTimeRemaining = 0.0f;
+	bool bGunShotCameraOverrideActive = false;
+	bool bGunShotCameraBlendingOut = false;
+	bool bEliminatedSpectatorViewActive = false;
 
 	TSharedPtr<SWidget> CenterCrosshairWidget;
 	TArray<FSDPrimitiveCustomDepthState> FocusedPrimitiveStates;
@@ -446,6 +539,8 @@ private:
 	bool bChatOpen = false;
 	FString LastSubmittedMultiplayerDisplayName;
 	float LastMultiplayerDisplayNameSubmitTime = -1000.0f;
+	FString LastSubmittedEquippedCharacterSkinId;
+	float LastEquippedCharacterSkinSubmitTime = -1000.0f;
 	bool bPendingMultiplayerSeatCamera = false;
 	int32 PendingMultiplayerSeatIndex = INDEX_NONE;
 	float PendingMultiplayerSeatCameraLookSensitivity = 0.08f;
@@ -465,6 +560,7 @@ private:
 	FRotator FixedCameraLookRotation = FRotator::ZeroRotator;
 	FVector FixedCameraBaseLocation = FVector::ZeroVector;
 	float FixedCameraLookSensitivity = 0.2f;
+	float UserMouseSensitivityMultiplier = 1.0f;
 	float FixedCameraMinPitch = -35.0f;
 	float FixedCameraMaxPitch = 35.0f;
 	float FixedCameraMinYawOffset = -45.0f;
@@ -481,6 +577,9 @@ private:
 	float CharacterPlayerCameraRetryElapsedTime = 0.0f;
 	float CharacterHeadLookReplicationElapsedTime = 0.0f;
 	FRotator LastSubmittedCharacterHeadLookRotation = FRotator::ZeroRotator;
+	mutable uint64 PrimaryInteractionTraceFrame = MAX_uint64;
+	mutable bool bCachedPrimaryInteractionTraceHit = false;
+	mutable FHitResult CachedPrimaryInteractionTraceHit;
 	bool bFixedCameraInvertMouseY = true;
 	bool bVoiceChatEventsBound = false;
 	bool bVoiceSubsystemEventsBound = false;

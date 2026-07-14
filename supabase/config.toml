@@ -382,6 +382,11 @@ inspector_port = 8083
 # The Deno major version to use.
 deno_version = 2
 
+# Username/password login happens before a user JWT exists. The function
+# validates the credentials itself and accepts the publishable key via apikey.
+[functions.login-with-id]
+verify_jwt = false
+
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 

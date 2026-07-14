@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "Engine/TimerHandle.h"
 #include "ShowDownEosSubsystem.h"
 #include "ShowDownMultiplayerWidget.generated.h"
 
@@ -11,6 +12,7 @@ class UScrollBox;
 class UTextBlock;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShowDownMultiplayerRequest);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnShowDownHostRoomRequest, const FString&, RoomName);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnShowDownJoinRoomRequest, const FString&, RoomCode);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnShowDownJoinPublicRoomRequest, int32, SearchResultIndex);
 
@@ -36,6 +38,20 @@ private:
 	UPROPERTY()
 	UButton* Button_Join = nullptr;
 
+	UPROPERTY()
+	UTextBlock* Text_RoomName = nullptr;
+
+	UPROPERTY()
+	UTextBlock* Text_RoomCode = nullptr;
+
+	UPROPERTY()
+	UTextBlock* Text_PlayerCount = nullptr;
+
+	UPROPERTY()
+	UTextBlock* Text_Join = nullptr;
+
+	void RefreshRoomInfo();
+
 	UFUNCTION()
 	void HandleJoinClicked();
 };
@@ -47,10 +63,10 @@ class SHOWDOWN_API UShowDownMultiplayerWidget : public UUserWidget
 
 public:
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Multiplayer")
-	FOnShowDownMultiplayerRequest OnHostRequested;
+	FOnShowDownHostRoomRequest OnHostRequested;
 
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Multiplayer")
-	FOnShowDownMultiplayerRequest OnPrivateHostRequested;
+	FOnShowDownHostRoomRequest OnPrivateHostRequested;
 
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Multiplayer")
 	FOnShowDownJoinRoomRequest OnJoinRequested;
@@ -70,43 +86,58 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Multiplayer")
 	void SetPublicRooms(const TArray<FShowDownPublicRoomInfo>& Rooms);
 
+	/** Blocks duplicate actions while an EOS create/join request is pending. */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Multiplayer")
+	void SetInteractionPending(bool bPending);
+
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
 
 private:
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
 	UTextBlock* Text_Status;
 
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
 	UButton* Button_Host;
 
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
 	UButton* Button_PrivateHost;
 	
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
 	UButton* Button_Join;
 
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
 	UButton* Button_RefreshRooms;
 
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
 	UButton* Button_Back;
 
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
 	UEditableTextBox* EditableTextBox_RoomCode;
 
-	UPROPERTY()
+	UPROPERTY(meta=(BindWidget))
+	UEditableTextBox* EditableTextBox_RoomName;
+
+	UPROPERTY(meta=(BindWidget))
 	UScrollBox* ScrollBox_PublicRooms;
 
 	UPROPERTY()
 	TArray<UShowDownPublicRoomEntryWidget*> PublicRoomEntries;
+	TArray<FShowDownPublicRoomInfo> CachedPublicRooms;
+	bool bHasPublicRoomSnapshot = false;
+
+	FTimerHandle PublicRoomAutoRefreshTimerHandle;
+	bool bInteractionPending = false;
 
 	void BuildDefaultLayout();
 	UButton* CreateMenuButton(const FString& Label);
 	UTextBlock* CreateTextBlock(const FString& Text, int32 FontSize, const FLinearColor& Color, ETextJustify::Type Justification = ETextJustify::Left);
 	void SetButtonColor(UButton* Button, const FLinearColor& Color);
+	void StartPublicRoomAutoRefresh();
+	void StopPublicRoomAutoRefresh();
+	void HandlePublicRoomAutoRefresh();
 
 	UFUNCTION()
 	void HandleHostClicked();

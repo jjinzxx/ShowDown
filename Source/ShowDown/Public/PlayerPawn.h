@@ -163,6 +163,8 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Chat")
 	void SubmitDialogueInput(const FString& Text);
 
+	FString GetChatSenderName() const;
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Betting")
 	void RequestPlayerCheck();
 
@@ -176,7 +178,7 @@ public:
 	void RequestPlayerFold();
 
 	UFUNCTION(Server, Reliable)
-	void ServerSubmitDialogueInput(const FString& Text, const FString& SenderName);
+	void ServerSubmitDialogueInput(const FString& Text);
 
 	UFUNCTION(Server, Reliable)
 	void ServerSubmitSelectedCard(ACard* SelectedCard);
@@ -231,5 +233,4 @@ private:
 	void HandleVoicePushToTalkInput();
 	void EnsureChatWidget();
 	void ApplyChatInputMode(bool bOpen);
-	FString GetChatSenderName() const;
 };

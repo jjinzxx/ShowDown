@@ -1,6 +1,7 @@
 #include "Presentation/SDSelfShotGunActor.h"
 
 #include "Camera/CameraActor.h"
+#include "Camera/CameraComponent.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Components/AudioComponent.h"
 #include "Components/BoxComponent.h"
@@ -8,12 +9,15 @@
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/WidgetComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
 #include "Kismet/GameplayStatics.h"
+#include "Net/UnrealNetwork.h"
 #include "ShowDownCharacter.h"
 #include "ShowDownCameraAspect.h"
+#include "ShowDownAmmoStatusWidget.h"
 #include "ShowDownGameStateBase.h"
 #include "ShowDownPlayerController.h"
 #include "SDPlayerState.h"
@@ -65,9 +69,26 @@ namespace
 ASDSelfShotGunActor::ASDSelfShotGunActor()
 {
 	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bStartWithTickEnabled = false;
+	bReplicates = true;
+	bAlwaysRelevant = true;
 
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
+
+	AmmoStatusAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("AmmoStatusAnchor"));
+	AmmoStatusAnchor->SetupAttachment(SceneRoot);
+
+	AmmoStatusWidgetComponent = CreateDefaultSubobject<UWidgetComponent>(TEXT("AmmoStatusWidget"));
+	AmmoStatusWidgetComponent->SetupAttachment(AmmoStatusAnchor);
+	AmmoStatusWidgetComponent->SetWidgetClass(UShowDownAmmoStatusWidget::StaticClass());
+	AmmoStatusWidgetComponent->SetWidgetSpace(EWidgetSpace::Screen);
+	AmmoStatusWidgetComponent->SetDrawAtDesiredSize(false);
+	AmmoStatusWidgetComponent->SetPivot(FVector2D(0.5f, 0.5f));
+	AmmoStatusWidgetComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	AmmoStatusWidgetComponent->SetGenerateOverlapEvents(false);
+	AmmoStatusWidgetComponent->SetVisibility(false);
+	AmmoStatusWidgetComponent->SetHiddenInGame(true);
 
 	GunMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("GunMesh"));
 	GunMesh->SetupAttachment(SceneRoot);
@@ -191,6 +212,18 @@ ASDSelfShotGunActor::ASDSelfShotGunActor()
 	RecoveryHitEffectSettings.BloomThreshold = 0.3f;
 }
 
+void ASDSelfShotGunActor::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+	ApplyAmmoStatusDisplaySettings();
+#if WITH_EDITOR
+	if (!GetWorld() || !GetWorld()->IsGameWorld())
+	{
+		SetActorTickEnabled(bEnableRevolverPlacementDevMode || bRevolverPlacementDevPreviewActive);
+	}
+#endif
+}
+
 #if WITH_EDITOR
 bool ASDSelfShotGunActor::ShouldTickIfViewportsOnly() const
 {
@@ -201,10 +234,17 @@ bool ASDSelfShotGunActor::ShouldTickIfViewportsOnly() const
 void ASDSelfShotGunActor::BeginPlay()
 {
 	Super::BeginPlay();
+	ApplyAmmoStatusDisplaySettings();
+	OnRep_TableStatus();
 
 	RestActorTransform = GetActorTransform();
 	bHasCapturedRestActorTransform = true;
 	OriginalCollisionEnabled = GunMesh->GetCollisionEnabled();
+	OriginalInteractionCollisionEnabled = InteractionBounds->GetCollisionEnabled();
+	if (bOpeningCardShowcaseStowed)
+	{
+		StageOpeningCardDrop();
+	}
 	TriggerRestRotation = TriggerPivot->GetRelativeRotation();
 	HammerRestRotation = HammerPivot->GetRelativeRotation();
 	MechanismResetStartTriggerRotation = TriggerRestRotation;
@@ -215,19 +255,39 @@ void ASDSelfShotGunActor::BeginPlay()
 	ChamberTargetRotation = ChamberCurrentRotation;
 	MuzzleFlashLight->SetAttenuationRadius(FMath::Max(0.0f, MuzzleFlashAttenuationRadius));
 	MuzzleFlashLight->SetLightColor(MuzzleFlashColor);
+	if (IsValid(SelfShotCinematicCamera))
+	{
+		GunShotCameraReferenceTransform = SelfShotCinematicCamera->GetActorTransform();
+		bHasGunShotCameraReferenceTransform = true;
+	}
 
 	if (AShowDownGameStateBase* ShowDownGameState = GetWorld() ? GetWorld()->GetGameState<AShowDownGameStateBase>() : nullptr)
 	{
+		ShowDownGameState->OnPhaseChanged.AddUniqueDynamic(
+			this,
+			&ASDSelfShotGunActor::HandleGamePhaseChanged);
 		ShowDownGameState->OnMultiplayerRoulettePresentation.AddUniqueDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
 	}
+
+	RefreshRuntimeTickState();
 }
 
 void ASDSelfShotGunActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	CancelSelfShotCinematicCamera();
+	if (IsValid(LocalGunShotCamera))
+	{
+		LocalGunShotCamera->Destroy();
+		LocalGunShotCamera = nullptr;
+	}
+
 	if (AShowDownGameStateBase* ShowDownGameState = GetWorld() ? GetWorld()->GetGameState<AShowDownGameStateBase>() : nullptr)
 	{
+		ShowDownGameState->OnPhaseChanged.RemoveDynamic(
+			this,
+			&ASDSelfShotGunActor::HandleGamePhaseChanged);
 		ShowDownGameState->OnMultiplayerRoulettePresentation.RemoveDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
@@ -239,6 +299,7 @@ void ASDSelfShotGunActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	UpdateAmmoStatusAnchorLocation();
 
 	if (MuzzleFlashElapsedTime > 0.0f)
 	{
@@ -254,11 +315,9 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 
 	if (AnimState == EGunAnimState::Idle)
 	{
-		if (UpdateRevolverPlacementDevPreview())
-		{
-			return;
-		}
-
+		UpdateOpeningCardDrop(DeltaSeconds);
+		UpdateRevolverPlacementDevPreview();
+		RefreshRuntimeTickState();
 		return;
 	}
 
@@ -284,6 +343,17 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 		{
 			AnimState = EGunAnimState::Aiming;
 			StateElapsedTime = 0.0f;
+
+			// Multiplayer and game-mode presentations provide a forced result up
+			// front. Start only the eventual victim's local blend here so it is
+			// complete by the hammer drop, without ever previewing an empty shot.
+			const bool bKnownLiveRound = ShotResultMode == ESDSelfShotRoundMode::AlwaysLive
+				|| (ShotResultMode == ESDSelfShotRoundMode::ChamberPattern
+					&& IsChamberLive(CurrentChamberIndex));
+			if (ShouldUseGunShotCamera(bKnownLiveRound, bCurrentShotTargetsLocalPlayer))
+			{
+				StartSelfShotCinematicCamera();
+			}
 		}
 		break;
 	}
@@ -340,6 +410,8 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 	default:
 		break;
 	}
+
+	RefreshRuntimeTickState();
 }
 
 void ASDSelfShotGunActor::UseGun()
@@ -350,6 +422,7 @@ void ASDSelfShotGunActor::UseGun()
 	bHasForcedShotAimLocation = false;
 	bHasForcedShotRotationOffset = false;
 	bCurrentShotTargetsLocalPlayer = true;
+	CurrentShotTargetSlot = EShowDownPlayerSlot::None;
 	StartGunUse();
 }
 
@@ -363,7 +436,8 @@ void ASDSelfShotGunActor::UseGunWithForcedResult(bool bLiveRound)
 	bHasForcedShotSourceLocation = false;
 	bHasForcedShotAimLocation = false;
 	bHasForcedShotRotationOffset = false;
-	bCurrentShotTargetsLocalPlayer = true;
+	bCurrentShotTargetsLocalPlayer = ShouldTreatTargetAsLocalPlayer(nullptr);
+	CurrentShotTargetSlot = EShowDownPlayerSlot::None;
 	StartGunUse();
 }
 
@@ -378,6 +452,9 @@ void ASDSelfShotGunActor::UseGunWithForcedResultAtTarget(bool bLiveRound, AActor
 	bHasForcedShotAimLocation = false;
 	bHasForcedShotRotationOffset = false;
 	bCurrentShotTargetsLocalPlayer = ShouldTreatTargetAsLocalPlayer(TargetActor);
+	CurrentShotTargetSlot = Cast<AShowDownCharacter>(TargetActor)
+		? CastChecked<AShowDownCharacter>(TargetActor)->GetPlayerSlot()
+		: EShowDownPlayerSlot::None;
 	StartGunUse();
 }
 
@@ -393,6 +470,9 @@ void ASDSelfShotGunActor::UseGunWithForcedResultAtTargetFromLocation(bool bLiveR
 	bHasForcedShotAimLocation = false;
 	bHasForcedShotRotationOffset = false;
 	bCurrentShotTargetsLocalPlayer = ShouldTreatTargetAsLocalPlayer(TargetActor);
+	CurrentShotTargetSlot = Cast<AShowDownCharacter>(TargetActor)
+		? CastChecked<AShowDownCharacter>(TargetActor)->GetPlayerSlot()
+		: EShowDownPlayerSlot::None;
 	StartGunUse();
 }
 
@@ -412,6 +492,9 @@ void ASDSelfShotGunActor::UseGunWithForcedResultAtTargetFromLocationAndCamera(
 	bHasForcedShotAimLocation = false;
 	bHasForcedShotRotationOffset = false;
 	bCurrentShotTargetsLocalPlayer = ShouldTreatTargetAsLocalPlayer(TargetActor);
+	CurrentShotTargetSlot = Cast<AShowDownCharacter>(TargetActor)
+		? CastChecked<AShowDownCharacter>(TargetActor)->GetPlayerSlot()
+		: EShowDownPlayerSlot::None;
 	StartGunUse();
 }
 
@@ -433,6 +516,9 @@ void ASDSelfShotGunActor::UseGunWithForcedResultAtTargetFromLocationAimAndCamera
 	bHasForcedShotAimLocation = true;
 	bHasForcedShotRotationOffset = false;
 	bCurrentShotTargetsLocalPlayer = ShouldTreatTargetAsLocalPlayer(TargetActor);
+	CurrentShotTargetSlot = Cast<AShowDownCharacter>(TargetActor)
+		? CastChecked<AShowDownCharacter>(TargetActor)->GetPlayerSlot()
+		: EShowDownPlayerSlot::None;
 	StartGunUse();
 }
 
@@ -456,12 +542,10 @@ void ASDSelfShotGunActor::UseGunWithForcedResultAtTargetFromLocationAimRotationA
 	bHasForcedShotAimLocation = true;
 	bHasForcedShotRotationOffset = true;
 	bCurrentShotTargetsLocalPlayer = ShouldTreatTargetAsLocalPlayer(TargetActor);
+	CurrentShotTargetSlot = Cast<AShowDownCharacter>(TargetActor)
+		? CastChecked<AShowDownCharacter>(TargetActor)->GetPlayerSlot()
+		: EShowDownPlayerSlot::None;
 	StartGunUse();
-}
-
-ACameraActor* ASDSelfShotGunActor::GetEnemyShotCinematicCamera() const
-{
-	return EnemyShotCinematicCamera;
 }
 
 float ASDSelfShotGunActor::GetTargetShotSourcePullDistance() const
@@ -492,9 +576,18 @@ float ASDSelfShotGunActor::GetPresentationFinishDelay(bool bLiveRound) const
 			+ FMath::Max(0.0f, ReturnTime);
 
 	float FinishDelay = ResolveDelay + GunMotionAfterResolve;
-	if (bUseSelfShotCinematicCamera)
+	if (bLiveRound && bUseSelfShotCinematicCamera)
 	{
-		FinishDelay = FMath::Max(FinishDelay, ResolveDelay + FMath::Max(0.0f, CinematicCameraHoldTime));
+		const float CameraExitDuration = bUseEliminationTableOverview
+			? FMath::Max(
+				FMath::Max(0.0f, CinematicCameraBlendOutTime),
+				FMath::Max(0.0f, EliminationOverviewMoveTime))
+			: FMath::Max(0.0f, CinematicCameraBlendOutTime);
+		FinishDelay = FMath::Max(
+			FinishDelay,
+			ResolveDelay
+				+ FMath::Max(0.0f, CinematicCameraHoldTime)
+				+ CameraExitDuration);
 	}
 
 	if (bLiveRound && bEnableHitSequence)
@@ -507,12 +600,227 @@ float ASDSelfShotGunActor::GetPresentationFinishDelay(bool bLiveRound) const
 			+ FMath::Max(0.0f, RecoveryHitShakeBlendOutTime);
 		const float HitSequenceDuration =
 			FMath::Max(0.0f, InitialHitEffectDuration)
+			+ FMath::Max(0.0f, HitBlackoutDelay)
 			+ FMath::Max(0.0f, HitBlackoutDuration)
 			+ FMath::Max(RecoveryEffectDuration, RecoveryShakeDuration);
 		FinishDelay = FMath::Max(FinishDelay, ResolveDelay + HitSequenceDuration);
 	}
 
 	return FinishDelay;
+}
+
+bool ASDSelfShotGunActor::ShouldUseGunShotCamera(bool bLiveRound, bool bTargetsLocalPlayer)
+{
+	return bLiveRound && bTargetsLocalPlayer;
+}
+
+bool ASDSelfShotGunActor::ShouldUseEliminationTableOverview(
+	bool bLiveRound,
+	bool bTargetsLocalPlayer,
+	int32 RemainingLives)
+{
+	return ShouldUseGunShotCamera(bLiveRound, bTargetsLocalPlayer) && RemainingLives <= 0;
+}
+
+bool ASDSelfShotGunActor::IsGunShotTargetLocalPlayer(
+	EShowDownPlayerSlot TargetSlot,
+	EShowDownPlayerSlot LocalPlayerSlot)
+{
+	return TargetSlot != EShowDownPlayerSlot::None
+		&& LocalPlayerSlot != EShowDownPlayerSlot::None
+		&& TargetSlot == LocalPlayerSlot;
+}
+
+FTransform ASDSelfShotGunActor::BuildSeatRelativeGunShotCameraTransform(
+	const FTransform& PlayerOneCameraTransform,
+	const FTransform& PlayerOneCharacterTransform,
+	const FTransform& TargetCharacterTransform)
+{
+	const FVector RelativeLocation = PlayerOneCharacterTransform.InverseTransformPosition(
+		PlayerOneCameraTransform.GetLocation());
+	const FQuat RelativeRotation = PlayerOneCharacterTransform.GetRotation().Inverse()
+		* PlayerOneCameraTransform.GetRotation();
+
+	FTransform Result;
+	Result.SetLocation(TargetCharacterTransform.TransformPosition(RelativeLocation));
+	Result.SetRotation((TargetCharacterTransform.GetRotation() * RelativeRotation).GetNormalized());
+	Result.SetScale3D(PlayerOneCameraTransform.GetScale3D());
+	return Result;
+}
+
+FTransform ASDSelfShotGunActor::BuildEliminationTableOverviewTransform(
+	const FVector& TableCenter,
+	const FTransform& TargetCharacterTransform,
+	float BackDistance,
+	float Height,
+	float LookAtHeight)
+{
+	const FVector SeatLocation = TargetCharacterTransform.GetLocation();
+	FVector DirectionToTable = TableCenter - SeatLocation;
+	DirectionToTable.Z = 0.0f;
+	if (!DirectionToTable.Normalize())
+	{
+		DirectionToTable = TargetCharacterTransform.GetUnitAxis(EAxis::X).GetSafeNormal2D();
+	}
+	if (DirectionToTable.IsNearlyZero())
+	{
+		DirectionToTable = FVector::ForwardVector;
+	}
+
+	const FVector CameraLocation = SeatLocation
+		- DirectionToTable * FMath::Max(0.0f, BackDistance)
+		+ FVector::UpVector * Height;
+	const FVector LookAtLocation = TableCenter + FVector::UpVector * LookAtHeight;
+	return FTransform(
+		(LookAtLocation - CameraLocation).Rotation(),
+		CameraLocation,
+		FVector::OneVector);
+}
+
+void ASDSelfShotGunActor::SetTableStatus(
+	int32 LiveRounds,
+	int32 RemainingChambers,
+	EShowDownPhase Phase,
+	EShowDownPlayerSlot TurnSlot)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	StatusLiveRounds = FMath::Clamp(LiveRounds, 0, 6);
+	StatusRemainingChambers = FMath::Clamp(RemainingChambers, 0, 6);
+	StatusPhase = Phase;
+	StatusTurnSlot = TurnSlot;
+	OnRep_TableStatus();
+	ForceNetUpdate();
+}
+
+void ASDSelfShotGunActor::OnRep_TableStatus()
+{
+	ApplyAmmoStatusDisplaySettings();
+}
+
+void ASDSelfShotGunActor::HandleGamePhaseChanged(EShowDownPhase NewPhase)
+{
+	StatusPhase = NewPhase;
+	ApplyAmmoStatusDisplaySettings();
+}
+
+void ASDSelfShotGunActor::ApplyAmmoStatusDisplaySettings()
+{
+	if (AmmoStatusAnchor)
+	{
+		AmmoStatusAnchor->SetUsingAbsoluteLocation(true);
+		AmmoStatusAnchor->SetUsingAbsoluteRotation(true);
+		AmmoStatusAnchor->SetUsingAbsoluteScale(true);
+		AmmoStatusAnchor->SetWorldRotation(FRotator::ZeroRotator);
+		AmmoStatusAnchor->SetWorldScale3D(FVector::OneVector);
+		UpdateAmmoStatusAnchorLocation();
+	}
+	if (AmmoStatusWidgetComponent)
+	{
+		const bool bShouldShowAmmoStatus =
+			!bOpeningCardShowcaseStowed
+			&& !bOpeningCardDropActive
+			&& (StatusPhase == EShowDownPhase::Betting || StatusPhase == EShowDownPhase::Roulette);
+		AmmoStatusWidgetComponent->SetDrawSize(FVector2D(
+			FMath::Max(32.0f, AmmoStatusDrawSize.X),
+			FMath::Max(32.0f, AmmoStatusDrawSize.Y)));
+		AmmoStatusWidgetComponent->InitWidget();
+		if (UShowDownAmmoStatusWidget* AmmoWidget =
+			Cast<UShowDownAmmoStatusWidget>(AmmoStatusWidgetComponent->GetUserWidgetObject()))
+		{
+			AmmoWidget->SetAmmoStatus(
+				FText::FromString(FString::Printf(TEXT("%d/%d"), StatusLiveRounds, StatusRemainingChambers)),
+				AmmoStatusFontSize,
+				AmmoStatusTextColor,
+				AmmoStatusBackgroundColor);
+		}
+		AmmoStatusWidgetComponent->SetVisibility(bShouldShowAmmoStatus, true);
+		AmmoStatusWidgetComponent->SetHiddenInGame(!bShouldShowAmmoStatus, true);
+	}
+}
+
+void ASDSelfShotGunActor::UpdateAmmoStatusAnchorLocation()
+{
+	if (!AmmoStatusAnchor)
+	{
+		return;
+	}
+
+	// Derive the label anchor from the complete visible revolver geometry rather
+	// than the actor pivot (which sits near the handle). The world-space AABB is
+	// updated as the gun moves and rotates, so the label remains centered above
+	// the actual weapon silhouette during the whole firing presentation.
+	FBox RevolverBounds(ForceInit);
+	TInlineComponentArray<UStaticMeshComponent*> MeshComponents(this);
+	for (const UStaticMeshComponent* MeshComponent : MeshComponents)
+	{
+		if (MeshComponent
+			&& MeshComponent->IsRegistered()
+			&& MeshComponent->GetStaticMesh())
+		{
+			RevolverBounds += MeshComponent->Bounds.GetBox();
+		}
+	}
+
+	if (!RevolverBounds.IsValid)
+	{
+		AmmoStatusAnchor->SetWorldLocation(GetActorLocation() + AmmoStatusWorldOffset);
+		return;
+	}
+
+	const FVector BoundsCenter = RevolverBounds.GetCenter();
+	const FVector GunTopCenter(BoundsCenter.X, BoundsCenter.Y, RevolverBounds.Max.Z);
+	AmmoStatusAnchor->SetWorldLocation(GunTopCenter + AmmoStatusWorldOffset);
+}
+
+void ASDSelfShotGunActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(ASDSelfShotGunActor, StatusLiveRounds);
+	DOREPLIFETIME(ASDSelfShotGunActor, StatusRemainingChambers);
+	DOREPLIFETIME(ASDSelfShotGunActor, StatusPhase);
+	DOREPLIFETIME(ASDSelfShotGunActor, StatusTurnSlot);
+	DOREPLIFETIME(ASDSelfShotGunActor, bOpeningCardShowcaseStowed);
+}
+
+void ASDSelfShotGunActor::SetOpeningCardShowcaseStowed(bool bStowed)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	if (bOpeningCardShowcaseStowed == bStowed)
+	{
+		if (!bStowed && bOpeningCardDropActive)
+		{
+			MulticastFinishOpeningCardDrop();
+		}
+		return;
+	}
+
+	bOpeningCardShowcaseStowed = bStowed;
+	OnRep_OpeningCardShowcaseStowed();
+	ForceNetUpdate();
+}
+
+void ASDSelfShotGunActor::OnRep_OpeningCardShowcaseStowed()
+{
+	if (bHasCapturedRestActorTransform)
+	{
+		if (bOpeningCardShowcaseStowed)
+		{
+			StageOpeningCardDrop();
+		}
+		else
+		{
+			StartOpeningCardDrop();
+		}
+	}
+	ApplyAmmoStatusDisplaySettings();
+	RefreshRuntimeTickState();
 }
 
 bool ASDSelfShotGunActor::TryResolveCharacterPresentationShot(
@@ -533,6 +841,33 @@ bool ASDSelfShotGunActor::TryResolveCharacterPresentationShot(
 	}
 
 	OutSourceLocation = RevolverAnchor->GetComponentLocation();
+
+	if (!TargetCharacter->ShouldAutoAimRevolverPresentationAtTarget())
+	{
+		FVector AimDirection = RevolverAnchor->GetForwardVector().GetSafeNormal();
+		if (AimDirection.IsNearlyZero())
+		{
+			AimDirection = TargetCharacter->GetActorForwardVector().GetSafeNormal();
+		}
+		if (AimDirection.IsNearlyZero())
+		{
+			AimDirection = FVector::ForwardVector;
+		}
+
+		OutAimLocation = OutSourceLocation + AimDirection * 100.0f;
+		if (OutRotationOffset)
+		{
+			FRotator ManualRotationOffset =
+				RevolverAnchor->GetComponentRotation()
+				- AimDirection.Rotation()
+				- TargetShotRotationOffset;
+			ManualRotationOffset.Normalize();
+			*OutRotationOffset = ManualRotationOffset;
+		}
+
+		return true;
+	}
+
 	OutAimLocation = TargetCharacter->GetActorLocation() + TargetShotAimOffset;
 	if (OutRotationOffset)
 	{
@@ -580,9 +915,9 @@ void ASDSelfShotGunActor::StartGunUse()
 	StateElapsedTime = 0.0f;
 	MechanismResetElapsedTime = 0.0f;
 	HeldGunJitterElapsedTime = 0.0f;
-	StartSelfShotCinematicCamera();
 	AnimState = EGunAnimState::Raising;
 	bPresentationFinishPending = true;
+	SetActorTickEnabled(true);
 
 	if (bDisableCollisionWhileUsing)
 	{
@@ -597,7 +932,9 @@ bool ASDSelfShotGunActor::CanInteract_Implementation(AActor* Interactor) const
 {
 	return AnimState == EGunAnimState::Idle
 		&& HitSequenceState == EHitSequenceState::Idle
-		&& !bSelfShotCinematicCameraActive;
+		&& !bSelfShotCinematicCameraActive
+		&& !bOpeningCardShowcaseStowed
+		&& !bOpeningCardDropActive;
 }
 
 void ASDSelfShotGunActor::Interact_Implementation(AActor* Interactor)
@@ -610,9 +947,15 @@ void ASDSelfShotGunActor::FireGun()
 	const bool bLiveShot = ResolveCurrentShotIsLive();
 	StateElapsedTime = 0.0f;
 	MechanismResetElapsedTime = 0.0f;
-	if (bSelfShotCinematicCameraStartPending)
+	if (ShouldUseGunShotCamera(bLiveShot, bCurrentShotTargetsLocalPlayer)
+		&& !bSelfShotCinematicCameraActive
+		&& !bSelfShotCinematicCameraStartPending)
 	{
-		ActivateSelfShotCinematicCamera();
+		StartSelfShotCinematicCamera();
+	}
+	else if (!bLiveShot || !bCurrentShotTargetsLocalPlayer)
+	{
+		CancelSelfShotCinematicCamera();
 	}
 	bSelfShotCinematicCameraHoldStarted = bSelfShotCinematicCameraActive;
 	CinematicCameraElapsedTime = 0.0f;
@@ -666,27 +1009,6 @@ void ASDSelfShotGunActor::FireEmptyRound()
 	MuzzleFlashLight->SetIntensity(0.0f);
 
 	PlayConfiguredSound(EmptyShotSound, bPlayEmptyShotSound2D, HammerPivot->GetComponentLocation());
-	if (bEnableEmptyShotShake)
-	{
-		if (bSelfShotCinematicCameraActive && ActiveSelfShotCinematicCamera)
-		{
-			PlayCinematicCameraSteppedShake(
-				EmptyShotShakeHoldTime,
-				EmptyShotShakeBlendOutTime,
-				EmptyShotShakeRotationAmplitude,
-				EmptyShotShakeLocationAmplitude,
-				EmptyShotShakeStepInterval);
-		}
-		else if (AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(UGameplayStatics::GetPlayerController(this, 0)))
-		{
-			ShowDownController->PlayFixedCameraSteppedShake(
-				EmptyShotShakeHoldTime,
-				EmptyShotShakeBlendOutTime,
-				EmptyShotShakeRotationAmplitude,
-				EmptyShotShakeLocationAmplitude,
-				EmptyShotShakeStepInterval);
-		}
-	}
 	OnGunEmptyFired.Broadcast();
 }
 
@@ -834,30 +1156,20 @@ void ASDSelfShotGunActor::ResetTriggerAndHammer()
 
 void ASDSelfShotGunActor::StartSelfShotCinematicCamera()
 {
-	bSelfShotCinematicCameraActive = false;
-	bSelfShotCinematicCameraStartPending = false;
-	bSelfShotCinematicCameraHoldStarted = false;
-	CinematicCameraStartElapsedTime = 0.0f;
+	CancelSelfShotCinematicCamera();
 	CinematicCameraElapsedTime = 0.0f;
-	PreviousViewTarget = nullptr;
-	ActiveSelfShotCinematicCamera = ForcedShotCamera.IsValid()
-		? ForcedShotCamera.Get()
-		: (bCurrentShotTargetsLocalPlayer ? SelfShotCinematicCamera.Get() : nullptr);
+	CinematicCameraBlendOutElapsedTime = 0.0f;
+	EliminationOverviewElapsedTime = 0.0f;
 
-	if (!bUseSelfShotCinematicCamera)
+	if (!bUseSelfShotCinematicCamera
+		|| !bCurrentShotTargetsLocalPlayer
+		|| !PrepareLocalGunShotCamera())
 	{
 		return;
 	}
 
-	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
-	if (PlayerController && ActiveSelfShotCinematicCamera)
-	{
-		bSelfShotCinematicCameraStartPending = true;
-		if (CinematicCameraStartDelay <= KINDA_SMALL_NUMBER)
-		{
-			ActivateSelfShotCinematicCamera();
-		}
-	}
+	bSelfShotCinematicCameraStartPending = true;
+	ActivateSelfShotCinematicCamera();
 }
 
 void ASDSelfShotGunActor::ActivateSelfShotCinematicCamera()
@@ -867,16 +1179,16 @@ void ASDSelfShotGunActor::ActivateSelfShotCinematicCamera()
 		return;
 	}
 
-	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
-	if (PlayerController && ActiveSelfShotCinematicCamera)
-	{
-		ShowDownCameraAspect::ApplyForced16By9(ActiveSelfShotCinematicCamera);
-		PreviousViewTarget = PlayerController->GetViewTarget();
-		PlayerController->SetViewTargetWithBlend(
+	AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(
+		UGameplayStatics::GetPlayerController(this, 0));
+	if (PlayerController
+		&& ActiveSelfShotCinematicCamera
+		&& PlayerController->BeginGunShotCameraOverride(
 			ActiveSelfShotCinematicCamera,
 			CinematicCameraBlendInTime,
-			VTBlend_EaseInOut,
-			CinematicCameraBlendExponent);
+			CinematicCameraBlendExponent))
+	{
+		ShowDownCameraAspect::ApplyForced16By9(ActiveSelfShotCinematicCamera);
 		bSelfShotCinematicCameraActive = true;
 	}
 
@@ -885,16 +1197,55 @@ void ASDSelfShotGunActor::ActivateSelfShotCinematicCamera()
 
 void ASDSelfShotGunActor::UpdateSelfShotCinematicCamera(float DeltaSeconds)
 {
-	if (bSelfShotCinematicCameraStartPending)
+	if (!bSelfShotCinematicCameraActive)
 	{
-		CinematicCameraStartElapsedTime += DeltaSeconds;
-		if (CinematicCameraStartElapsedTime >= CinematicCameraStartDelay)
-		{
-			ActivateSelfShotCinematicCamera();
-		}
+		return;
 	}
+	if (bEliminationTableOverviewActive)
+	{
+		EliminationOverviewElapsedTime += FMath::Max(0.0f, DeltaSeconds);
+		const float SafeMoveTime = FMath::Max(0.0f, EliminationOverviewMoveTime);
+		const float Alpha = SafeMoveTime > KINDA_SMALL_NUMBER
+			? FMath::Clamp(EliminationOverviewElapsedTime / SafeMoveTime, 0.0f, 1.0f)
+			: 1.0f;
+		const float EasedAlpha = FMath::InterpEaseInOut(
+			0.0f,
+			1.0f,
+			Alpha,
+			FMath::Max(1.0f, CinematicCameraBlendExponent));
+		FTransform BlendedTransform;
+		BlendedTransform.Blend(
+			EliminationOverviewStartTransform,
+			EliminationOverviewTargetTransform,
+			EasedAlpha);
+		if (ActiveSelfShotCinematicCamera)
+		{
+			ActiveSelfShotCinematicCamera->SetActorTransform(BlendedTransform);
+		}
 
-	if (!bSelfShotCinematicCameraActive || !bSelfShotCinematicCameraHoldStarted)
+		if (Alpha >= 1.0f)
+		{
+			FinishEliminationTableOverview();
+		}
+		return;
+	}
+	if (bSelfShotCinematicCameraBlendOutActive)
+	{
+		CinematicCameraBlendOutElapsedTime += FMath::Max(0.0f, DeltaSeconds);
+		if (CinematicCameraBlendOutElapsedTime < FMath::Max(0.0f, CinematicCameraBlendOutTime))
+		{
+			return;
+		}
+
+		bSelfShotCinematicCameraActive = false;
+		bSelfShotCinematicCameraStartPending = false;
+		bSelfShotCinematicCameraHoldStarted = false;
+		bSelfShotCinematicCameraBlendOutActive = false;
+		ActiveSelfShotCinematicCamera = nullptr;
+		BroadcastPresentationFinishedIfIdle();
+		return;
+	}
+	if (!bSelfShotCinematicCameraHoldStarted)
 	{
 		return;
 	}
@@ -905,30 +1256,262 @@ void ASDSelfShotGunActor::UpdateSelfShotCinematicCamera(float DeltaSeconds)
 		return;
 	}
 
-	if (APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0))
+	if (bCinematicCameraShakeActive && ActiveSelfShotCinematicCamera)
 	{
-		AActor* ReturnViewTarget = PreviousViewTarget.Get();
-		if (!ReturnViewTarget)
-		{
-			ReturnViewTarget = PlayerController->GetPawn();
-		}
-
-		if (ReturnViewTarget)
-		{
-			PlayerController->SetViewTargetWithBlend(
-				ReturnViewTarget,
-				CinematicCameraBlendOutTime,
-				VTBlend_EaseInOut,
-				CinematicCameraBlendExponent);
-		}
+		ActiveSelfShotCinematicCamera->SetActorTransform(CinematicCameraShakeBaseTransform);
+		bCinematicCameraShakeActive = false;
+	}
+	if (TryStartEliminationTableOverview())
+	{
+		return;
+	}
+	if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(
+		UGameplayStatics::GetPlayerController(this, 0)))
+	{
+		PlayerController->EndGunShotCameraOverride(
+			ActiveSelfShotCinematicCamera,
+			CinematicCameraBlendOutTime,
+			CinematicCameraBlendExponent);
 	}
 
-	PreviousViewTarget = nullptr;
+	bSelfShotCinematicCameraHoldStarted = false;
+	bSelfShotCinematicCameraBlendOutActive = true;
+	CinematicCameraBlendOutElapsedTime = 0.0f;
+	if (CinematicCameraBlendOutTime <= KINDA_SMALL_NUMBER)
+	{
+		bSelfShotCinematicCameraActive = false;
+		bSelfShotCinematicCameraBlendOutActive = false;
+		ActiveSelfShotCinematicCamera = nullptr;
+		BroadcastPresentationFinishedIfIdle();
+	}
+}
+
+bool ASDSelfShotGunActor::TryStartEliminationTableOverview()
+{
+	AShowDownCharacter* TargetCharacter = ResolveCurrentGunShotCameraTarget();
+	if (!bUseEliminationTableOverview
+		|| !IsValid(ActiveSelfShotCinematicCamera)
+		|| !IsValid(TargetCharacter)
+		|| !ShouldUseEliminationTableOverview(
+			true,
+			bCurrentShotTargetsLocalPlayer,
+			TargetCharacter->GetCharacterLives()))
+	{
+		return false;
+	}
+
+	EliminationOverviewStartTransform = ActiveSelfShotCinematicCamera->GetActorTransform();
+	EliminationOverviewTargetTransform = BuildEliminationTableOverviewTransform(TargetCharacter);
+	EliminationOverviewElapsedTime = 0.0f;
+	bSelfShotCinematicCameraHoldStarted = false;
+	bSelfShotCinematicCameraBlendOutActive = false;
+	bEliminationTableOverviewActive = true;
+
+	if (EliminationOverviewMoveTime <= KINDA_SMALL_NUMBER)
+	{
+		ActiveSelfShotCinematicCamera->SetActorTransform(EliminationOverviewTargetTransform);
+		FinishEliminationTableOverview();
+	}
+	return true;
+}
+
+void ASDSelfShotGunActor::FinishEliminationTableOverview()
+{
+	ACameraActor* SpectatorCamera = ActiveSelfShotCinematicCamera;
+	if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(
+		UGameplayStatics::GetPlayerController(this, 0)))
+	{
+		PlayerController->ReleaseGunShotCameraOverrideForElimination(SpectatorCamera);
+	}
+
+	bEliminationTableOverviewActive = false;
+	EliminationOverviewElapsedTime = 0.0f;
 	bSelfShotCinematicCameraActive = false;
 	bSelfShotCinematicCameraStartPending = false;
 	bSelfShotCinematicCameraHoldStarted = false;
+	bSelfShotCinematicCameraBlendOutActive = false;
 	ActiveSelfShotCinematicCamera = nullptr;
 	BroadcastPresentationFinishedIfIdle();
+}
+
+FTransform ASDSelfShotGunActor::BuildEliminationTableOverviewTransform(
+	const AShowDownCharacter* TargetCharacter) const
+{
+	if (!IsValid(TargetCharacter))
+	{
+		return ActiveSelfShotCinematicCamera
+			? ActiveSelfShotCinematicCamera->GetActorTransform()
+			: FTransform::Identity;
+	}
+
+	return BuildEliminationTableOverviewTransform(
+		GetActorLocation(),
+		TargetCharacter->GetActorTransform(),
+		EliminationOverviewBackDistance,
+		EliminationOverviewHeight,
+		EliminationOverviewLookAtHeight);
+}
+
+void ASDSelfShotGunActor::CancelSelfShotCinematicCamera()
+{
+	if (bCinematicCameraShakeActive && ActiveSelfShotCinematicCamera)
+	{
+		ActiveSelfShotCinematicCamera->SetActorTransform(CinematicCameraShakeBaseTransform);
+	}
+	bCinematicCameraShakeActive = false;
+
+	if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(
+		UGameplayStatics::GetPlayerController(this, 0)))
+	{
+		PlayerController->CancelGunShotCameraOverride(ActiveSelfShotCinematicCamera);
+	}
+
+	bSelfShotCinematicCameraActive = false;
+	bSelfShotCinematicCameraStartPending = false;
+	bSelfShotCinematicCameraHoldStarted = false;
+	bSelfShotCinematicCameraBlendOutActive = false;
+	bEliminationTableOverviewActive = false;
+	CinematicCameraBlendOutElapsedTime = 0.0f;
+	EliminationOverviewElapsedTime = 0.0f;
+	ActiveSelfShotCinematicCamera = nullptr;
+}
+
+bool ASDSelfShotGunActor::PrepareLocalGunShotCamera()
+{
+	ACameraActor* CameraTemplate = ForcedShotCamera.IsValid()
+		? ForcedShotCamera.Get()
+		: SelfShotCinematicCamera.Get();
+	AShowDownCharacter* ReferenceCharacter = FindGunShotCameraReferenceCharacter();
+	AShowDownCharacter* TargetCharacter = ResolveCurrentGunShotCameraTarget();
+	if (!IsValid(CameraTemplate) || !IsValid(ReferenceCharacter) || !IsValid(TargetCharacter))
+	{
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("Skipping local gun-shot camera: Template=%s ReferenceP1=%s Target=%s Slot=%d"),
+			*GetNameSafe(CameraTemplate),
+			*GetNameSafe(ReferenceCharacter),
+			*GetNameSafe(TargetCharacter),
+			static_cast<int32>(CurrentShotTargetSlot));
+		return false;
+	}
+
+	FTransform CameraReferenceTransform = CameraTemplate->GetActorTransform();
+	if (CameraTemplate == SelfShotCinematicCamera.Get())
+	{
+		if (!bHasGunShotCameraReferenceTransform)
+		{
+			GunShotCameraReferenceTransform = CameraReferenceTransform;
+			bHasGunShotCameraReferenceTransform = true;
+		}
+		CameraReferenceTransform = GunShotCameraReferenceTransform;
+	}
+
+	ACameraActor* LocalCamera = GetOrCreateLocalGunShotCamera();
+	if (!IsValid(LocalCamera))
+	{
+		return false;
+	}
+
+	if (UCameraComponent* SourceCameraComponent = CameraTemplate->GetCameraComponent())
+	{
+		if (UCameraComponent* LocalCameraComponent = LocalCamera->GetCameraComponent())
+		{
+			FMinimalViewInfo ViewInfo;
+			SourceCameraComponent->GetCameraView(0.0f, ViewInfo);
+			LocalCameraComponent->SetProjectionMode(ViewInfo.ProjectionMode);
+			LocalCameraComponent->SetFieldOfView(ViewInfo.FOV);
+			LocalCameraComponent->SetOrthoWidth(ViewInfo.OrthoWidth);
+			LocalCameraComponent->SetAspectRatio(ViewInfo.AspectRatio);
+			LocalCameraComponent->SetConstraintAspectRatio(SourceCameraComponent->bConstrainAspectRatio);
+			LocalCameraComponent->PostProcessSettings = ViewInfo.PostProcessSettings;
+			LocalCameraComponent->PostProcessBlendWeight = ViewInfo.PostProcessBlendWeight;
+		}
+	}
+
+	LocalCamera->SetActorTransform(BuildSeatRelativeGunShotCameraTransform(
+		CameraReferenceTransform,
+		ReferenceCharacter->GetActorTransform(),
+		TargetCharacter->GetActorTransform()));
+	ActiveSelfShotCinematicCamera = LocalCamera;
+	return true;
+}
+
+ACameraActor* ASDSelfShotGunActor::GetOrCreateLocalGunShotCamera()
+{
+	if (IsValid(LocalGunShotCamera))
+	{
+		return LocalGunShotCamera;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.Owner = this;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	SpawnParameters.ObjectFlags |= RF_Transient;
+	LocalGunShotCamera = World->SpawnActor<ACameraActor>(
+		ACameraActor::StaticClass(),
+		GunShotCameraReferenceTransform,
+		SpawnParameters);
+	if (LocalGunShotCamera)
+	{
+		LocalGunShotCamera->SetReplicates(false);
+		LocalGunShotCamera->SetActorEnableCollision(false);
+	}
+	return LocalGunShotCamera;
+}
+
+AShowDownCharacter* ASDSelfShotGunActor::FindGunShotCameraReferenceCharacter() const
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	for (TActorIterator<AShowDownCharacter> It(World); It; ++It)
+	{
+		AShowDownCharacter* Character = *It;
+		if (IsValid(Character) && Character->IsAssignedToSlot(EShowDownPlayerSlot::Player1))
+		{
+			return Character;
+		}
+	}
+	return nullptr;
+}
+
+AShowDownCharacter* ASDSelfShotGunActor::ResolveCurrentGunShotCameraTarget() const
+{
+	if (AShowDownCharacter* ForcedTargetCharacter = Cast<AShowDownCharacter>(ForcedShotTargetActor.Get()))
+	{
+		return ForcedTargetCharacter;
+	}
+
+	if (CurrentShotTargetSlot != EShowDownPlayerSlot::None)
+	{
+		return Cast<AShowDownCharacter>(FindMultiplayerShotTarget(CurrentShotTargetSlot));
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	for (TActorIterator<AShowDownCharacter> It(World); It; ++It)
+	{
+		AShowDownCharacter* Character = *It;
+		if (IsValid(Character) && Character->IsLocalPlayerCharacter())
+		{
+			return Character;
+		}
+	}
+	return nullptr;
 }
 
 FTransform ASDSelfShotGunActor::ApplyHeldGunJitter(const FTransform& BaseTransform) const
@@ -1063,7 +1646,7 @@ void ASDSelfShotGunActor::StartHitSequence()
 	HitSequenceElapsedTime = 0.0f;
 	if (InitialHitEffectDuration <= KINDA_SMALL_NUMBER)
 	{
-		EnterHitSequenceBlackout();
+		EnterHitSequencePreBlackoutHold();
 	}
 }
 
@@ -1080,6 +1663,12 @@ void ASDSelfShotGunActor::UpdateHitSequence(float DeltaSeconds)
 	{
 	case EHitSequenceState::InitialHit:
 		if (HitSequenceElapsedTime >= InitialHitEffectDuration)
+		{
+			EnterHitSequencePreBlackoutHold();
+		}
+		break;
+	case EHitSequenceState::PreBlackoutHold:
+		if (HitSequenceElapsedTime >= HitBlackoutDelay)
 		{
 			EnterHitSequenceBlackout();
 		}
@@ -1123,6 +1712,18 @@ void ASDSelfShotGunActor::UpdateHitSequence(float DeltaSeconds)
 	default:
 		break;
 	}
+}
+
+void ASDSelfShotGunActor::EnterHitSequencePreBlackoutHold()
+{
+	if (HitBlackoutDelay <= KINDA_SMALL_NUMBER)
+	{
+		EnterHitSequenceBlackout();
+		return;
+	}
+
+	HitSequenceState = EHitSequenceState::PreBlackoutHold;
+	HitSequenceElapsedTime = 0.0f;
 }
 
 void ASDSelfShotGunActor::EnterHitSequenceBlackout()
@@ -1270,6 +1871,142 @@ void ASDSelfShotGunActor::StopTinnitusSound()
 
 	TinnitusElapsedTime = 0.0f;
 	bTinnitusFadeOutStarted = false;
+}
+
+bool ASDSelfShotGunActor::IsRuntimeTickRequired() const
+{
+	const bool bPresentationActive = AnimState != EGunAnimState::Idle
+		|| HitSequenceState != EHitSequenceState::Idle
+		|| MuzzleFlashElapsedTime > 0.0f
+		|| bSelfShotCinematicCameraActive
+		|| bSelfShotCinematicCameraStartPending
+		|| bCinematicCameraShakeActive
+		|| TinnitusAudioComponent != nullptr
+		|| bOpeningCardDropActive;
+
+#if WITH_EDITOR
+	return bPresentationActive || bEnableRevolverPlacementDevMode || bRevolverPlacementDevPreviewActive;
+#else
+	return bPresentationActive;
+#endif
+}
+
+void ASDSelfShotGunActor::RefreshRuntimeTickState()
+{
+	SetActorTickEnabled(IsRuntimeTickRequired());
+}
+
+void ASDSelfShotGunActor::StageOpeningCardDrop()
+{
+	if (!bHasCapturedRestActorTransform)
+	{
+		return;
+	}
+
+	bOpeningCardDropActive = false;
+	OpeningCardDropVelocityZ = 0.0f;
+	FTransform StagedTransform = RestActorTransform;
+	StagedTransform.AddToTranslation(FVector::UpVector * FMath::Max(0.0f, OpeningCardDropHeight));
+	SetActorTransform(StagedTransform);
+	SetActorHiddenInGame(true);
+	if (GunMesh)
+	{
+		GunMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+	if (InteractionBounds)
+	{
+		InteractionBounds->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+}
+
+void ASDSelfShotGunActor::StartOpeningCardDrop()
+{
+	if (!bHasCapturedRestActorTransform)
+	{
+		return;
+	}
+
+	FTransform DropTransform = RestActorTransform;
+	DropTransform.AddToTranslation(FVector::UpVector * FMath::Max(0.0f, OpeningCardDropHeight));
+	SetActorTransform(DropTransform);
+	SetActorHiddenInGame(false);
+	OpeningCardDropVelocityZ = 0.0f;
+	bOpeningCardDropActive = OpeningCardDropHeight > KINDA_SMALL_NUMBER;
+	if (GunMesh)
+	{
+		GunMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+	if (InteractionBounds)
+	{
+		InteractionBounds->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+
+	if (!bOpeningCardDropActive)
+	{
+		FinishOpeningCardDrop();
+	}
+}
+
+void ASDSelfShotGunActor::UpdateOpeningCardDrop(float DeltaSeconds)
+{
+	if (!bOpeningCardDropActive || !bHasCapturedRestActorTransform)
+	{
+		return;
+	}
+
+	const float RestZ = RestActorTransform.GetLocation().Z;
+	const float Gravity = FMath::Max(1.0f, OpeningCardDropGravity);
+	const float Restitution = FMath::Clamp(OpeningCardDropRestitution, 0.0f, 0.8f);
+	const float StopSpeed = FMath::Max(1.0f, OpeningCardDropStopSpeed);
+	float RemainingTime = FMath::Clamp(DeltaSeconds, 0.0f, 0.10f);
+	while (RemainingTime > KINDA_SMALL_NUMBER && bOpeningCardDropActive)
+	{
+		const float Step = FMath::Min(RemainingTime, 1.0f / 60.0f);
+		RemainingTime -= Step;
+		OpeningCardDropVelocityZ -= Gravity * Step;
+
+		FVector Location = GetActorLocation();
+		Location.Z += OpeningCardDropVelocityZ * Step;
+		if (Location.Z <= RestZ)
+		{
+			Location.Z = RestZ;
+			const float ReboundSpeed = FMath::Abs(OpeningCardDropVelocityZ) * Restitution;
+			if (ReboundSpeed < StopSpeed)
+			{
+				SetActorLocation(Location);
+				FinishOpeningCardDrop();
+				break;
+			}
+			OpeningCardDropVelocityZ = ReboundSpeed;
+		}
+		SetActorLocation(Location);
+	}
+}
+
+void ASDSelfShotGunActor::FinishOpeningCardDrop()
+{
+	bOpeningCardDropActive = false;
+	OpeningCardDropVelocityZ = 0.0f;
+	SetActorTransform(RestActorTransform);
+	SetActorHiddenInGame(false);
+	if (GunMesh)
+	{
+		GunMesh->SetCollisionEnabled(OriginalCollisionEnabled);
+	}
+	if (InteractionBounds)
+	{
+		InteractionBounds->SetCollisionEnabled(OriginalInteractionCollisionEnabled);
+	}
+	ApplyAmmoStatusDisplaySettings();
+	RefreshRuntimeTickState();
+}
+
+void ASDSelfShotGunActor::MulticastFinishOpeningCardDrop_Implementation()
+{
+	if (bHasCapturedRestActorTransform)
+	{
+		FinishOpeningCardDrop();
+	}
 }
 
 void ASDSelfShotGunActor::SetBlackoutInstant(float Alpha, bool bHoldWhenFinished)
@@ -1436,31 +2173,36 @@ AActor* ASDSelfShotGunActor::FindMultiplayerShotTarget(EShowDownPlayerSlot Targe
 void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(EShowDownPlayerSlot TargetSlot, bool bHit)
 {
 	AActor* TargetActor = FindMultiplayerShotTarget(TargetSlot);
-	if (!IsValid(TargetActor))
-	{
-		UseGunWithForcedResult(bHit);
-		bCurrentShotTargetsLocalPlayer = ShouldTreatSlotAsLocalPlayer(TargetSlot);
-		return;
-	}
+	ShotResultMode = bHit
+		? ESDSelfShotRoundMode::AlwaysLive
+		: ESDSelfShotRoundMode::AlwaysEmpty;
+	ForcedShotTargetActor = TargetActor;
+	ForcedShotCamera = nullptr;
+	bHasForcedShotSourceLocation = false;
+	bHasForcedShotAimLocation = false;
+	bHasForcedShotRotationOffset = false;
+	bCurrentShotTargetsLocalPlayer = ShouldTreatSlotAsLocalPlayer(TargetSlot);
+	CurrentShotTargetSlot = TargetSlot;
 
 	FVector SourceLocation = FVector::ZeroVector;
 	FVector AimLocation = FVector::ZeroVector;
 	FRotator RotationOffset = FRotator::ZeroRotator;
-	if (TryResolveCharacterPresentationShot(Cast<AShowDownCharacter>(TargetActor), SourceLocation, AimLocation, &RotationOffset))
-	{
-		UseGunWithForcedResultAtTargetFromLocationAimRotationAndCamera(
-			bHit,
-			TargetActor,
+	if (IsValid(TargetActor)
+		&& TryResolveCharacterPresentationShot(
+			Cast<AShowDownCharacter>(TargetActor),
 			SourceLocation,
 			AimLocation,
-			RotationOffset,
-			nullptr);
-		bCurrentShotTargetsLocalPlayer = ShouldTreatSlotAsLocalPlayer(TargetSlot);
-		return;
+			&RotationOffset))
+	{
+		ForcedShotSourceLocation = SourceLocation;
+		ForcedShotAimLocation = AimLocation;
+		ForcedShotRotationOffset = RotationOffset;
+		bHasForcedShotSourceLocation = true;
+		bHasForcedShotAimLocation = true;
+		bHasForcedShotRotationOffset = true;
 	}
 
-	UseGunWithForcedResultAtTarget(bHit, TargetActor);
-	bCurrentShotTargetsLocalPlayer = ShouldTreatSlotAsLocalPlayer(TargetSlot);
+	StartGunUse();
 }
 
 bool ASDSelfShotGunActor::ShouldTreatSlotAsLocalPlayer(EShowDownPlayerSlot TargetSlot) const
@@ -1472,20 +2214,31 @@ bool ASDSelfShotGunActor::ShouldTreatSlotAsLocalPlayer(EShowDownPlayerSlot Targe
 
 	const UWorld* World = GetWorld();
 	const APlayerController* LocalPlayerController = World ? World->GetFirstPlayerController() : nullptr;
+	if (!LocalPlayerController
+		|| !LocalPlayerController->IsLocalController()
+		|| !LocalPlayerController->GetLocalPlayer())
+	{
+		return false;
+	}
 	const ASDPlayerState* LocalPlayerState = LocalPlayerController
 		? Cast<ASDPlayerState>(LocalPlayerController->PlayerState)
 		: nullptr;
 
 	return LocalPlayerState
-		&& LocalPlayerState->ShowDownSlot != EShowDownPlayerSlot::None
-		&& LocalPlayerState->ShowDownSlot == TargetSlot;
+		&& IsGunShotTargetLocalPlayer(TargetSlot, LocalPlayerState->ShowDownSlot);
 }
 
 bool ASDSelfShotGunActor::ShouldTreatTargetAsLocalPlayer(AActor* TargetActor) const
 {
 	if (!IsValid(TargetActor))
 	{
-		return true;
+		const UWorld* World = GetWorld();
+		const APlayerController* LocalPlayerController = World ? World->GetFirstPlayerController() : nullptr;
+		return World
+			&& World->GetNetMode() == NM_Standalone
+			&& LocalPlayerController
+			&& LocalPlayerController->IsLocalController()
+			&& LocalPlayerController->GetLocalPlayer();
 	}
 
 	const AShowDownCharacter* TargetCharacter = Cast<AShowDownCharacter>(TargetActor);

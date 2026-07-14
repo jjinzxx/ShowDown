@@ -49,8 +49,13 @@ protected:
 	// 이벤트가 남아 있으면 위젯이 사라진 뒤에도 함수가 호출될 수 있습니다.
 	virtual void NativeDestruct() override;
 
+	// Rebuilds the presentation layer at runtime while preserving the existing
+	// Blueprint class and all C++ menu bindings.
+	void BuildFigmaLayout();
+
 private:
 	bool bUseLegacyNavigation = true;
+	bool bEditingNickname = false;
 
 	// 현재 닉네임을 표시하는 텍스트입니다.
 	// WBP_MainMenu 안의 위젯 이름과 정확히 같아야 자동 연결됩니다.
@@ -73,7 +78,7 @@ private:
 	UEditableTextBox* EditableTextBox_Nickname;
 
 	// 닉네임 변경 버튼입니다.
-	UPROPERTY(meta = (BindWidget))
+	UPROPERTY(meta = (BindWidgetOptional))
 	UButton* Button_ChangeNickname;
 
 	// 싱글 플레이 시작 버튼입니다.
@@ -103,6 +108,7 @@ private:
 	// SupabaseSubsystem에 저장된 nickname, coin, score를 화면에 반영합니다.
 	void RefreshPlayerInfo();
 	void SetStatusMessage(const FString& Message, const FLinearColor& Color);
+	void SetNicknameEditing(bool bEditing);
 
 	// Change Nickname 버튼을 눌렀을 때 실행됩니다.
 	UFUNCTION()

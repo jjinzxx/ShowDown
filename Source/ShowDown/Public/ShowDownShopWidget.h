@@ -14,6 +14,10 @@ class UVerticalBox;
 
 // Shop에서 상위 흐름으로 돌아가야 한다는 요청입니다.
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShowDownShopBackRequested);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
+	FOnShowDownShopPreviewSkinChanged,
+	const FString&,
+	SkinId);
 
 UCLASS()
 class SHOWDOWN_API UShowDownShopWidget : public UUserWidget
@@ -23,6 +27,11 @@ class SHOWDOWN_API UShowDownShopWidget : public UUserWidget
 public:
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Flow")
 	FOnShowDownShopBackRequested OnBackRequested;
+
+	// Concrete character skins.id selected by the carousel. The hub uses this
+	// to update its world-space preview without coupling the widget to actors.
+	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Shop")
+	FOnShowDownShopPreviewSkinChanged OnPreviewSkinChanged;
 
 	// Shop 화면에서 Back을 눌렀을 때 다시 보여줄 MainMenu 위젯을 넘겨받습니다.
 	void SetMainMenuWidget(UShowDownMainMenuWidget* InMainMenuWidget);
@@ -78,6 +87,7 @@ private:
 	TArray<FString> OrderedSkinOptions;
 	FString SelectedOption;
 	int32 SelectedSkinIndex = INDEX_NONE;
+	bool bUpdatingSelection = false;
 
 	// WBP 없이 C++에서 데모 UI 트리를 구성합니다.
 	void BuildWidgetTreeIfNeeded();
@@ -99,6 +109,8 @@ private:
 
 	// ComboBox 선택과 내부 SelectedIndex를 같은 값으로 맞춥니다.
 	void SelectSkinOption(const FString& OptionText);
+
+	void BroadcastSelectedPreviewSkin();
 
 	UFUNCTION()
 	void HandleSkinSelectionChanged(FString SelectedItem, ESelectInfo::Type SelectionType);

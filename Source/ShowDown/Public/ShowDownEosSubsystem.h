@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/EngineBaseTypes.h"
 #include "Engine/TimerHandle.h"
 #include "Interfaces/OnlineIdentityInterface.h"
 #include "Interfaces/OnlineSessionInterface.h"
@@ -9,6 +10,7 @@
 #include "ShowDownEosSubsystem.generated.h"
 
 class IVoiceChatUser;
+class UNetDriver;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	FOnShowDownEosResult,
@@ -53,12 +55,21 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	Rooms
 );
 
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
+	FOnShowDownManagedTravelFailed,
+	const FString&,
+	Message,
+	bool,
+	bReopenMultiplayerMenu
+);
+
 UCLASS()
 class SHOWDOWN_API UShowDownEosSubsystem : public UGameInstanceSubsystem
 {
 	GENERATED_BODY()
 
 public:
+	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|EOS")
@@ -70,11 +81,19 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|EOS")
 	FOnShowDownPublicRoomsUpdated OnPublicRoomsUpdated;
 
+	UPROPERTY(BlueprintAssignable, Category = "ShowDown|EOS")
+	FOnShowDownManagedTravelFailed OnManagedTravelFailed;
+
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|EOS|Voice")
 	FOnShowDownLocalVoiceTalkingChanged OnLocalVoiceTalkingChanged;
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|EOS")
 	bool IsEosLoggedIn() const;
+
+	/** True while a create, update, destroy, find, or join request owns an EOS delegate. */
+	bool IsSessionOperationInProgress() const;
+	/** Excludes passive public-room browsing so UI failures can unlock correctly. */
+	bool IsInteractiveSessionOperationInProgress() const;
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|EOS")
 	void LoginWithSupabaseSession();
@@ -86,10 +105,10 @@ public:
 	void FindAndJoinFirstSession();
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|EOS")
-	void HostLobby(FName LobbyMapName = TEXT("L_MultiplayerLobby"), FName GameMapName = TEXT("L_MultiplayerGame"));
+	void HostLobby(FName LobbyMapName = TEXT("L_MultiplayerLobby"), FName GameMapName = TEXT("L_MultiplayerGame"), const FString& RoomName = TEXT(""));
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|EOS")
-	void HostPrivateLobby(FName LobbyMapName = TEXT("L_MultiplayerLobby"), FName GameMapName = TEXT("L_MultiplayerGame"));
+	void HostPrivateLobby(FName LobbyMapName = TEXT("L_MultiplayerLobby"), FName GameMapName = TEXT("L_MultiplayerGame"), const FString& RoomName = TEXT(""));
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|EOS")
 	void JoinLobbyByCode(const FString& RoomCode);
@@ -102,6 +121,7 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|EOS")
 	void StartHostedGame();
+	void AbortHostedGameStart(const FString& Reason);
 
 	// Leaves the current room and tears down the local EOS session before returning
 	// to the hub. A host leaving closes its listen-server room for the other clients.
@@ -124,6 +144,7 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|EOS")
 	FString GetLobbyCode() const;
+	FString GetLobbyRoomName() const { return LobbyRoomName; }
 
 	int32 GetExpectedLobbyPlayerCount() const { return ExpectedLobbyPlayerCount; }
 
@@ -132,6 +153,16 @@ public:
 	void EndVoiceTransmission();
 
 private:
+	enum class EManagedTravel : uint8
+	{
+		None,
+		HostLobby,
+		JoinLobby,
+		JoinGame,
+		LeaveHub,
+		HostGame
+	};
+
 	enum class ESessionFlow
 	{
 		None,
@@ -152,17 +183,23 @@ private:
 	FDelegateHandle DestroySessionCompleteDelegateHandle;
 	FDelegateHandle FindSessionsCompleteDelegateHandle;
 	FDelegateHandle JoinSessionCompleteDelegateHandle;
+	FDelegateHandle NetworkFailureDelegateHandle;
+	FDelegateHandle TravelFailureDelegateHandle;
+	FDelegateHandle PostLoadMapDelegateHandle;
 
 	TSharedPtr<FOnlineSessionSearch> SessionSearch;
 	FOnlineSessionSearchResult PendingStartedGameSearchResult;
 	TArray<FOnlineSessionSearchResult> PublicLobbySearchResults;
 	FTimerHandle LobbyStartPollTimerHandle;
 	FName PendingHostMapName = TEXT("L_MultiplayerLobby");
+	FString PendingHostRoomName;
 	FName PendingGameMapName = TEXT("L_MultiplayerGame");
 	FString PendingJoinCode;
 	FString LobbyCode;
+	FString LobbyRoomName;
 	int32 ExpectedLobbyPlayerCount = 4;
 	ESessionFlow PendingSessionFlow = ESessionFlow::None;
+	EManagedTravel PendingManagedTravel = EManagedTravel::None;
 	bool bLobbyStartPollInFlight = false;
 	bool bInMultiplayerLobby = false;
 	bool bLobbyHost = false;
@@ -187,9 +224,15 @@ private:
 	void TravelHostedGame();
 	void CompleteLobbyLeave(bool bSessionDestroyed);
 	bool TravelToSearchResult(const FOnlineSessionSearchResult& SearchResult, const FString& StatusMessage);
-	void HostLobbyWithVisibility(FName LobbyMapName, FName GameMapName, bool bPublicRoom);
+	void HostLobbyWithVisibility(FName LobbyMapName, FName GameMapName, bool bPublicRoom, const FString& RoomName);
 	void ClearOnlineDelegateHandles();
 	void ClearTransientSearchState(bool bClearPublicRooms);
+	void CancelPublicLobbyBrowse();
+	void BeginManagedTravel(EManagedTravel Travel);
+	void HandlePostLoadMap(UWorld* LoadedWorld);
+	void HandleNetworkFailure(UWorld* World, UNetDriver* NetDriver, ENetworkFailure::Type FailureType, const FString& ErrorString);
+	void HandleTravelFailure(UWorld* World, ETravelFailure::Type FailureType, const FString& ErrorString);
+	void FailManagedTravel(const FString& Message);
 	void UnbindVoiceChat();
 	void HandleVoicePlayerTalkingUpdated(const FString& ChannelName, const FString& PlayerName, bool bIsTalking);
 };

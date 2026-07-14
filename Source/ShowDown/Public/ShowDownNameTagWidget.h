@@ -7,6 +7,7 @@
 
 class UTextBlock;
 class UBorder;
+class UHorizontalBox;
 class UVerticalBox;
 
 USTRUCT()
@@ -35,6 +36,9 @@ public:
 	void SetDisplayName(const FText& NewDisplayName);
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Name Tag")
+	void SetLives(int32 NewLives);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Name Tag")
 	void SetStatusText(const FText& NewStatusText);
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Name Tag")
@@ -43,14 +47,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Name Tag")
 	void ShowOverheadChatMessage(const FText& NewChatText);
 
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Name Tag")
+	void SetSpeakingIndicatorVisible(bool bVisible);
+
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
+	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
 private:
 	void BuildDefaultWidget();
 	void RefreshNameBackgroundColor();
+	void UpdateSpeakingIndicatorAnimation(float InDeltaTime);
 	void UpdateChatBubbleAnimation();
 	void HideOverheadChatMessage();
 	void TrimOverheadChatBubbleCount();
@@ -63,6 +72,9 @@ private:
 	TObjectPtr<UTextBlock> StatusText;
 
 	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> SpeakingIndicatorText;
+
+	UPROPERTY(Transient)
 	TObjectPtr<UBorder> NameBackground;
 
 	UPROPERTY(Transient)
@@ -73,6 +85,9 @@ private:
 
 	FText CachedDisplayName;
 	FText CachedStatusText;
+	int32 CachedLives = 3;
 	FTimerHandle ChatBubbleAnimationTimerHandle;
+	float CurrentSpeakingIndicatorOpacity = 0.0f;
 	bool bCachedTurnActive = false;
+	bool bCachedSpeakingIndicatorVisible = false;
 };

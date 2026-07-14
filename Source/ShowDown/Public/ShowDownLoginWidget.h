@@ -36,6 +36,10 @@ protected:
 	// 이벤트 연결을 해제해서 중복 호출이나 잘못된 접근을 막습니다.
 	virtual void NativeDestruct() override;
 
+	// Rebuilds the presentation layer at runtime while preserving the existing
+	// Blueprint class and all C++ login bindings.
+	void BuildFigmaLayout();
+
 private:
 	bool bUseLegacyNavigation = true;
 	bool bLoginRequestInFlight = false;

@@ -26,23 +26,23 @@ public:
 	FShowDownBetChangedSignature OnBetChanged;
 
 	//베팅 상태 초기화
-	UFUNCTION(BlueprintCallable, Category = "ShowDown|Betting")
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "ShowDown|Betting")
 	void ResetBetting(int32 MinimumBet = 0);
 
 	//체크 처리
-	UFUNCTION(BlueprintCallable, Category = "ShowDown|Betting")
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "ShowDown|Betting")
 	void Check(EShowDownSide Side);
 
 	//콜 처리
-	UFUNCTION(BlueprintCallable, Category = "ShowDown|Betting")
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "ShowDown|Betting")
 	void Call(EShowDownSide Side);
 
 	//지정한 총알 수로 레이즈
-	UFUNCTION(BlueprintCallable, Category = "ShowDown|Betting")
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "ShowDown|Betting")
 	bool RaiseTo(EShowDownSide Side, int32 BulletCount);
 
 	//폴드 처리
-	UFUNCTION(BlueprintCallable, Category = "ShowDown|Betting")
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "ShowDown|Betting")
 	void Fold(EShowDownSide Side);
 
 	//현재 베팅 총알 수 반환
