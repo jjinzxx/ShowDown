@@ -362,7 +362,7 @@ protected:
 	TObjectPtr<ACameraActor> SelfShotCinematicCamera;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera", meta = (ClampMin = "0.0"))
-	float CinematicCameraBlendInTime = 0.55f;
+	float CinematicCameraBlendInTime = 0.25f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera", meta = (ClampMin = "0.0"))
 	float CinematicCameraHoldTime = 2.4f;
@@ -467,7 +467,7 @@ protected:
 	float TinnitusVolumeMultiplier = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Muzzle Flash", meta = (ClampMin = "0.0"))
-	float MuzzleFlashIntensity = 120000.0f;
+	float MuzzleFlashIntensity = 80000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Muzzle Flash", meta = (ClampMin = "0.01"))
 	float MuzzleFlashDuration = 0.035f;
@@ -578,6 +578,7 @@ private:
 	void UpdateMechanismReset();
 	void ResetTriggerAndHammer();
 	void StartSelfShotCinematicCamera();
+	void TryStartKnownLiveLocalShotCamera();
 	void ActivateSelfShotCinematicCamera();
 	void UpdateSelfShotCinematicCamera(float DeltaSeconds);
 	bool TryStartEliminationTableOverview();

@@ -14,6 +14,7 @@
 #include "ShowDownCharacter.h"
 #include "ShowDownCharacterSkinCatalog.h"
 #include "ShowDownGameModeBase.h"
+#include "ShowDownTypes.h"
 #include "Sound/SoundWave.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -96,6 +97,20 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FShowDownMultiplayerRoundFlowTest::RunTest(const FString& Parameters)
 {
 	using namespace ShowDownMultiplayerRoundFlow;
+	using namespace ShowDownTableCinematics;
+
+	TestEqual(TEXT("No player slot has no cinematic mask bit"),
+		PlayerSlotToMask(EShowDownPlayerSlot::None), static_cast<uint8>(0));
+	TestEqual(TEXT("Player one uses the first cinematic mask bit"),
+		PlayerSlotToMask(EShowDownPlayerSlot::Player1), static_cast<uint8>(1));
+	TestEqual(TEXT("Player four uses the fourth cinematic mask bit"),
+		PlayerSlotToMask(EShowDownPlayerSlot::Player4), static_cast<uint8>(8));
+	const uint8 AlternatingPlayerMask = PlayerSlotToMask(EShowDownPlayerSlot::Player2)
+		| PlayerSlotToMask(EShowDownPlayerSlot::Player4);
+	TestTrue(TEXT("Cinematic mask includes its selected player"),
+		IsPlayerSlotInMask(AlternatingPlayerMask, EShowDownPlayerSlot::Player2));
+	TestFalse(TEXT("Cinematic mask excludes an unselected player"),
+		IsPlayerSlotInMask(AlternatingPlayerMask, EShowDownPlayerSlot::Player3));
 
 	TestEqual(
 		TEXT("No active player ends the round"),
@@ -789,6 +804,44 @@ bool FShowDownVisionDirectorBlendTest::RunTest(const FString& Parameters)
 	VisionDirector->CompleteDarknessStrengthBlend();
 	TestFalse(TEXT("Completing darkness clears the active transition"), VisionDirector->IsDarknessStrengthBlending());
 	TestEqual(TEXT("Completing darkness applies its destination"), VisionDirector->GetDarknessStrength(), 0.2f);
+
+	VisionDirector->SetVisionRange(-100.0f, -10.0f);
+	TestEqual(TEXT("Immediate range clamps radius to zero"), VisionDirector->GetVisionRadius(), 0.0f);
+	TestEqual(TEXT("Immediate range keeps a nonzero feather"), VisionDirector->GetVisionFeather(), 1.0f);
+	VisionDirector->SetDarknessStrength(0.5f);
+	VisionDirector->BlendToVisionRange(
+		1000.0f,
+		201.0f,
+		2.0f,
+		ESDVisionBlendEase::Linear,
+		2.0f);
+	VisionDirector->BlendToDarknessStrength(
+		1.0f,
+		1.0f,
+		ESDVisionBlendEase::Linear,
+		2.0f);
+	TestTrue(TEXT("Range and darkness can blend at the same time"),
+		VisionDirector->IsVisionRangeBlending() && VisionDirector->IsDarknessStrengthBlending());
+	VisionDirector->Tick(0.5f);
+	TestTrue(TEXT("Independent range advances on its own duration"),
+		FMath::IsNearlyEqual(VisionDirector->GetVisionRadius(), 250.0f));
+	TestTrue(TEXT("Independent feather advances with range"),
+		FMath::IsNearlyEqual(VisionDirector->GetVisionFeather(), 51.0f));
+	TestTrue(TEXT("Darkness keeps advancing while range moves"),
+		FMath::IsNearlyEqual(VisionDirector->GetDarknessStrength(), 0.75f));
+	VisionDirector->CompleteVisionRangeBlend();
+	TestFalse(TEXT("Completing range clears only its transition"), VisionDirector->IsVisionRangeBlending());
+	TestTrue(TEXT("Completing range leaves darkness active"), VisionDirector->IsDarknessStrengthBlending());
+	TestEqual(TEXT("Completing range applies its radius destination"), VisionDirector->GetVisionRadius(), 1000.0f);
+	TestEqual(TEXT("Completing range applies its feather destination"), VisionDirector->GetVisionFeather(), 201.0f);
+
+	VisionDirector->BlendToVisionAlpha(1.0f, 1.0f, ESDVisionBlendEase::Linear, 2.0f);
+	VisionDirector->BlendToVisionRange(400.0f, 80.0f, 1.0f, ESDVisionBlendEase::Linear, 2.0f);
+	TestFalse(TEXT("Starting direct range cancels the alpha-owned geometry transition"),
+		VisionDirector->IsVisionBlending());
+	VisionDirector->BlendToDarknessStrength(0.4f, 1.0f, ESDVisionBlendEase::Linear, 2.0f);
+	TestTrue(TEXT("Starting direct darkness preserves the independent range transition"),
+		VisionDirector->IsVisionRangeBlending());
 	return true;
 }
 

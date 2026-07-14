@@ -79,6 +79,14 @@ private:
 		AwaitingFinish
 	};
 
+	enum class EIntroSequenceState : uint8
+	{
+		Idle,
+		Expanding,
+		Holding,
+		Collapsing
+	};
+
 	virtual bool DoesSupportWorldType(EWorldType::Type WorldType) const override;
 
 	void RefreshExistingBindings();
@@ -88,6 +96,11 @@ private:
 	void BindGameState(AShowDownGameStateBase* GameState);
 	bool HasLocalPresentationView() const;
 	void SynchronizePendingVisionDirectors();
+	void StartMatchIntro();
+	void AdvanceIntroSequence(float DeltaTime);
+	void SetVisionRangeImmediateToIntroStart();
+	void BlendVisionRangeToIntroWide(float Duration);
+	void BlendVisionRangeToTable(float Duration, ESDVisionBlendEase EaseMode);
 	void SetDarknessImmediate(float Strength);
 	void BlendDarkness(
 		float TargetStrength,
@@ -106,6 +119,9 @@ private:
 	UFUNCTION()
 	void HandlePhaseChanged(EShowDownPhase NewPhase);
 
+	UFUNCTION()
+	void HandleTableCinematicCue(ESDTableCinematicCue Cue, uint8 PlayerSlotMask);
+
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<USDGunVisionGunBinding>> GunBindings;
 
@@ -116,9 +132,11 @@ private:
 	FDelegateHandle ActorSpawnedDelegateHandle;
 
 	ESequenceState SequenceState = ESequenceState::Idle;
+	EIntroSequenceState IntroSequenceState = EIntroSequenceState::Idle;
+	float IntroSequenceElapsedTime = 0.0f;
 	float SequenceElapsedTime = 0.0f;
 	float SequenceStageDuration = 0.0f;
 	float ShotResolveDelay = 0.0f;
-	float DesiredDarknessStrength = 0.0f;
+	float DesiredDarknessStrength = 0.5f;
 	bool bWorldHasBegunPlay = false;
 };

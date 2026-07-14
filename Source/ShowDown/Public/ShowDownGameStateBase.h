@@ -31,6 +31,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FShowDownMultiplayerRouletteStart
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FShowDownMultiplayerRoulettePresentationSignature, EShowDownPlayerSlot, TargetSlot, const FString&, TargetName, int32, BulletCount, bool, bHit);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FiveParams(FShowDownMultiplayerRouletteResultSignature, EShowDownPlayerSlot, TargetSlot, const FString&, TargetName, int32, BulletCount, bool, bHit, int32, RemainingLives);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FShowDownNameTagRoundStatusChangedSignature);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FShowDownTableCinematicCueSignature, ESDTableCinematicCue, Cue, uint8, PlayerSlotMask);
 
 USTRUCT(BlueprintType)
 struct FShowDownNameTagPlayerBetState
@@ -148,6 +149,9 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Events|Name Tag")
 	FShowDownNameTagRoundStatusChangedSignature OnNameTagRoundStatusChanged;
 
+	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Events|Presentation")
+	FShowDownTableCinematicCueSignature OnTableCinematicCue;
+
 	//현재 게임 진행 단계
 	UPROPERTY(ReplicatedUsing = OnRep_CurrentPhase, BlueprintReadOnly, Category = "ShowDown|State")
 	EShowDownPhase CurrentPhase = EShowDownPhase::None;
@@ -262,6 +266,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Multiplayer|Presentation")
 	void BroadcastMultiplayerRouletteResult(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount, bool bHit, int32 RemainingLives);
 
+	/** PlayerSlotMask uses bits 0-3 for Player1-Player4. */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Presentation")
+	void BroadcastTableCinematicCue(ESDTableCinematicCue Cue, uint8 PlayerSlotMask);
+
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastCollectorLLMDecision(const FString& Dialogue, const FString& Intent, EShowDownBetAction Action, int32 TargetBet);
 
@@ -279,6 +287,9 @@ public:
 
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastMultiplayerRouletteResult(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount, bool bHit, int32 RemainingLives);
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastTableCinematicCue(ESDTableCinematicCue Cue, uint8 PlayerSlotMask);
 
 protected:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;

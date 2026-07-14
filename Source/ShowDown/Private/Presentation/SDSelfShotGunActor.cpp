@@ -29,6 +29,9 @@
 
 namespace
 {
+	constexpr float MaximumMuzzleFlashIntensity = 80000.0f;
+	constexpr float MinimumCinematicCameraHoldTime = 1.8f;
+
 	APlayerController* FindLocalPlayerController(const UObject* WorldContextObject)
 	{
 		const UWorld* World = WorldContextObject ? WorldContextObject->GetWorld() : nullptr;
@@ -376,7 +379,9 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 	{
 		MuzzleFlashElapsedTime = FMath::Max(0.0f, MuzzleFlashElapsedTime - DeltaSeconds);
 		MuzzleFlashLight->SetIntensity(
-			MuzzleFlashElapsedTime > 0.0f ? MuzzleFlashIntensity : 0.0f);
+			MuzzleFlashElapsedTime > 0.0f
+				? FMath::Clamp(MuzzleFlashIntensity, 0.0f, MaximumMuzzleFlashIntensity)
+				: 0.0f);
 	}
 
 	UpdateHitSequence(DeltaSeconds);
@@ -414,17 +419,6 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 		{
 			AnimState = EGunAnimState::Aiming;
 			StateElapsedTime = 0.0f;
-
-			// Multiplayer and game-mode presentations provide a forced result up
-			// front. Start only the eventual victim's local blend here so it is
-			// complete by the hammer drop, without ever previewing an empty shot.
-			const bool bKnownLiveRound = ShotResultMode == ESDSelfShotRoundMode::AlwaysLive
-				|| (ShotResultMode == ESDSelfShotRoundMode::ChamberPattern
-					&& IsChamberLive(CurrentChamberIndex));
-			if (ShouldUseGunShotCamera(bKnownLiveRound, bCurrentShotTargetsLocalPlayer))
-			{
-				StartSelfShotCinematicCamera();
-			}
 		}
 		break;
 	}
@@ -657,7 +651,7 @@ float ASDSelfShotGunActor::GetPresentationFinishDelay(bool bLiveRound) const
 		FinishDelay = FMath::Max(
 			FinishDelay,
 			ResolveDelay
-				+ FMath::Max(0.0f, CinematicCameraHoldTime)
+				+ FMath::Max(MinimumCinematicCameraHoldTime, CinematicCameraHoldTime)
 				+ CameraExitDuration);
 	}
 
@@ -996,6 +990,11 @@ void ASDSelfShotGunActor::StartGunUse()
 		GunMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	}
 
+	// Forced multiplayer results are known before the first raising tick. Move
+	// the victim to the third-person shot on the same frame the gun starts,
+	// instead of waiting through the authored (BP-overridden) raise duration.
+	TryStartKnownLiveLocalShotCamera();
+
 	OnGunRaised.Broadcast();
 	if (UShowDownAudioSubsystem* AudioSubsystem = FindShowDownAudioSubsystem(this))
 	{
@@ -1063,7 +1062,8 @@ void ASDSelfShotGunActor::FireLiveRound()
 	MuzzleFlashLight->SetCastShadows(true);
 	MuzzleFlashLight->SetIndirectLightingIntensity(0.0f);
 	MuzzleFlashLight->SetVolumetricScatteringIntensity(0.0f);
-	MuzzleFlashLight->SetIntensity(MuzzleFlashIntensity);
+	MuzzleFlashLight->SetIntensity(
+		FMath::Clamp(MuzzleFlashIntensity, 0.0f, MaximumMuzzleFlashIntensity));
 
 	PlayConfiguredSound(GunshotSound, bPlayGunshotSound2D, GetActorLocation());
 	if (UShowDownAudioSubsystem* AudioSubsystem = FindShowDownAudioSubsystem(this))
@@ -1255,6 +1255,22 @@ void ASDSelfShotGunActor::StartSelfShotCinematicCamera()
 	ActivateSelfShotCinematicCamera();
 }
 
+void ASDSelfShotGunActor::TryStartKnownLiveLocalShotCamera()
+{
+	if (bSelfShotCinematicCameraActive || bSelfShotCinematicCameraStartPending)
+	{
+		return;
+	}
+
+	const bool bKnownLiveRound = ShotResultMode == ESDSelfShotRoundMode::AlwaysLive
+		|| (ShotResultMode == ESDSelfShotRoundMode::ChamberPattern
+			&& IsChamberLive(CurrentChamberIndex));
+	if (ShouldUseGunShotCamera(bKnownLiveRound, bCurrentShotTargetsLocalPlayer))
+	{
+		StartSelfShotCinematicCamera();
+	}
+}
+
 void ASDSelfShotGunActor::ActivateSelfShotCinematicCamera()
 {
 	if (!bSelfShotCinematicCameraStartPending)
@@ -1268,7 +1284,9 @@ void ASDSelfShotGunActor::ActivateSelfShotCinematicCamera()
 		&& ActiveSelfShotCinematicCamera
 		&& PlayerController->BeginGunShotCameraOverride(
 			ActiveSelfShotCinematicCamera,
-			CinematicCameraBlendInTime,
+			AnimState == EGunAnimState::Raising
+				? FMath::Min(FMath::Max(0.0f, CinematicCameraBlendInTime), 0.25f)
+				: CinematicCameraBlendInTime,
 			CinematicCameraBlendExponent))
 	{
 		ShowDownCameraAspect::ApplyForced16By9(ActiveSelfShotCinematicCamera);
@@ -1334,7 +1352,8 @@ void ASDSelfShotGunActor::UpdateSelfShotCinematicCamera(float DeltaSeconds)
 	}
 
 	CinematicCameraElapsedTime += DeltaSeconds;
-	if (CinematicCameraElapsedTime < CinematicCameraHoldTime)
+	if (CinematicCameraElapsedTime
+		< FMath::Max(MinimumCinematicCameraHoldTime, CinematicCameraHoldTime))
 	{
 		return;
 	}

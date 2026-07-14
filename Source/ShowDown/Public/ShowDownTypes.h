@@ -56,6 +56,34 @@ enum class EShowDownPlayerSlot : uint8
 	Player4
 };
 
+/** Server-authored table presentation beats shared by every local view. */
+UENUM(BlueprintType)
+enum class ESDTableCinematicCue : uint8
+{
+	Reset,
+	MatchIntro,
+	PreRevealBlackout,
+	RevealStarted,
+	LoserSpotlight
+};
+
+namespace ShowDownTableCinematics
+{
+	FORCEINLINE uint8 PlayerSlotToMask(EShowDownPlayerSlot Slot)
+	{
+		const int32 SlotIndex = static_cast<int32>(Slot) - 1;
+		return SlotIndex >= 0 && SlotIndex < 4
+			? static_cast<uint8>(1u << SlotIndex)
+			: 0;
+	}
+
+	FORCEINLINE bool IsPlayerSlotInMask(uint8 Mask, EShowDownPlayerSlot Slot)
+	{
+		const uint8 SlotMask = PlayerSlotToMask(Slot);
+		return SlotMask != 0 && (Mask & SlotMask) != 0;
+	}
+}
+
 USTRUCT(BlueprintType)
 struct FShowDownNetworkPlayerSlot
 {

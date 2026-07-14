@@ -156,6 +156,7 @@ void AShowDownGameStateBase::SetNameTagRoundStatus(
 	NameTagTurnSide = TurnSide;
 	NameTagTurnSlot = TurnSlot;
 	OnNameTagRoundStatusChanged.Broadcast();
+	ForceNetUpdate();
 }
 
 void AShowDownGameStateBase::SetNameTagSingleRoundStatus(
@@ -187,6 +188,7 @@ void AShowDownGameStateBase::SetNameTagSingleRoundStatus(
 	NameTagTurnSide = TurnSide;
 	NameTagTurnSlot = TurnSlot;
 	OnNameTagRoundStatusChanged.Broadcast();
+	ForceNetUpdate();
 }
 
 void AShowDownGameStateBase::SetNameTagPlayerLoadedBulletCount(
@@ -210,6 +212,7 @@ void AShowDownGameStateBase::SetNameTagPlayerLoadedBulletCount(
 
 			PlayerBet.LoadedBulletCount = ClampedLoadedBulletCount;
 			OnNameTagRoundStatusChanged.Broadcast();
+			ForceNetUpdate();
 			return;
 		}
 	}
@@ -219,6 +222,7 @@ void AShowDownGameStateBase::SetNameTagPlayerLoadedBulletCount(
 	NewPlayerBet.LoadedBulletCount = ClampedLoadedBulletCount;
 	NameTagPlayerBets.Add(NewPlayerBet);
 	OnNameTagRoundStatusChanged.Broadcast();
+	ForceNetUpdate();
 }
 
 void AShowDownGameStateBase::SetInitialDealDeckVisualState(
@@ -484,6 +488,19 @@ void AShowDownGameStateBase::BroadcastMultiplayerRouletteResult(
 	OnMultiplayerRouletteResult.Broadcast(TargetSlot, TargetName, BulletCount, bHit, RemainingLives);
 }
 
+void AShowDownGameStateBase::BroadcastTableCinematicCue(
+	ESDTableCinematicCue Cue,
+	uint8 PlayerSlotMask)
+{
+	if (HasAuthority())
+	{
+		MulticastTableCinematicCue(Cue, PlayerSlotMask);
+		return;
+	}
+
+	OnTableCinematicCue.Broadcast(Cue, PlayerSlotMask);
+}
+
 void AShowDownGameStateBase::MulticastCollectorLLMDecision_Implementation(const FString& Dialogue, const FString& Intent, EShowDownBetAction Action, int32 TargetBet)
 {
 	OnCollectorDialogue.Broadcast(Dialogue, Intent);
@@ -526,6 +543,13 @@ void AShowDownGameStateBase::MulticastMultiplayerRouletteResult_Implementation(
 	int32 RemainingLives)
 {
 	OnMultiplayerRouletteResult.Broadcast(TargetSlot, TargetName, BulletCount, bHit, RemainingLives);
+}
+
+void AShowDownGameStateBase::MulticastTableCinematicCue_Implementation(
+	ESDTableCinematicCue Cue,
+	uint8 PlayerSlotMask)
+{
+	OnTableCinematicCue.Broadcast(Cue, PlayerSlotMask);
 }
 
 void AShowDownGameStateBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const

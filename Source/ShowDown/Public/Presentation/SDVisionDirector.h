@@ -125,6 +125,46 @@ public:
 		return bDarknessStrengthBlendActive ? TargetDarknessStrength : CurrentState.DarknessStrength;
 	}
 
+	/** Immediately changes only the visible radius and feather. */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision|Range")
+	void SetVisionRange(float Radius, float Feather);
+
+	/** Blends radius and feather independently from DarknessStrength. */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision|Range", meta = (AdvancedDisplay = "EaseMode,EaseExponent"))
+	void BlendToVisionRange(
+		float TargetRadius,
+		float TargetFeather,
+		float Duration = 0.35f,
+		ESDVisionBlendEase EaseMode = ESDVisionBlendEase::EaseInOut,
+		float EaseExponent = 2.0f);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision|Range")
+	void CancelVisionRangeBlend();
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision|Range")
+	void CompleteVisionRangeBlend();
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Vision|Range")
+	bool IsVisionRangeBlending() const { return bVisionRangeBlendActive; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Vision|Range")
+	float GetVisionRadius() const { return CurrentState.VisionRadius; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Vision|Range")
+	float GetVisionFeather() const { return CurrentState.VisionFeather; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Vision|Range")
+	float GetTableVisionRadius() const { return FMath::Max(0.0f, FocusedVision.VisionRadius); }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Vision|Range")
+	float GetTableVisionFeather() const { return FMath::Max(1.0f, FocusedVision.VisionFeather); }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Vision|Range")
+	float GetIntroWideVisionRadius() const { return FMath::Max(0.0f, IntroWideVisionRadius); }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Vision|Range")
+	float GetIntroWideVisionFeather() const { return FMath::Max(1.0f, IntroWideVisionFeather); }
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision|Center")
 	void SetVisionCenterActor(AActor* NewVisionCenterActor);
 
@@ -198,7 +238,14 @@ protected:
 
 	/** Safe startup value applied before the first rendered game frame. Runtime cues can then blend from it. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float InitialDarknessStrength = 0.0f;
+	float InitialDarknessStrength = 0.5f;
+
+	/** Large enough to carry the match-opening reveal beyond the authored table. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision|Intro", meta = (ClampMin = "0.0"))
+	float IntroWideVisionRadius = 6000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision|Intro", meta = (ClampMin = "1.0"))
+	float IntroWideVisionFeather = 900.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision")
 	bool bTrackVisionCenterEveryTick = true;
@@ -220,6 +267,7 @@ private:
 	void UpdateTickState();
 	void AdvanceVisionBlend(float DeltaSeconds);
 	void AdvanceDarknessStrengthBlend(float DeltaSeconds);
+	void AdvanceVisionRangeBlend(float DeltaSeconds);
 	void AdvanceVisionCenterBlend(float DeltaSeconds);
 	FVector GetVisionCenterBlendTargetLocation() const;
 	bool ShouldApplyPostProcessInCurrentWorld() const;
@@ -247,6 +295,15 @@ private:
 	float DarknessStrengthBlendEaseExponent = 2.0f;
 	ESDVisionBlendEase DarknessStrengthBlendEaseMode = ESDVisionBlendEase::EaseInOut;
 	bool bDarknessStrengthBlendActive = false;
+	float VisionRangeBlendStartRadius = 0.0f;
+	float VisionRangeBlendStartFeather = 1.0f;
+	float TargetVisionRangeRadius = 0.0f;
+	float TargetVisionRangeFeather = 1.0f;
+	float VisionRangeBlendDuration = 0.0f;
+	float VisionRangeBlendElapsed = 0.0f;
+	float VisionRangeBlendEaseExponent = 2.0f;
+	ESDVisionBlendEase VisionRangeBlendEaseMode = ESDVisionBlendEase::EaseInOut;
+	bool bVisionRangeBlendActive = false;
 
 	FVector ExplicitVisionCenterWorldLocation = FVector::ZeroVector;
 	FVector VisionCenterBlendStartLocation = FVector::ZeroVector;

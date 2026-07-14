@@ -374,10 +374,13 @@ public:
 	float MultiplayerBetActionIntervalSeconds = 0.8f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Multiplayer Flow", meta = (ClampMin = "0.0", DisplayName = "All Bets Complete To Reveal"))
-	float MultiplayerPreRevealDelaySeconds = 1.2f;
+	float MultiplayerPreRevealDelaySeconds = 2.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Multiplayer Flow", meta = (ClampMin = "0.0", DisplayName = "Settled Reveal To First Shot"))
-	float MultiplayerPostRevealHoldSeconds = 1.5f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Multiplayer Flow", meta = (ClampMin = "0.0", DisplayName = "Settled Reveal To Loser Spotlight"))
+	float MultiplayerRevealToLoserSpotlightSeconds = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Multiplayer Flow", meta = (ClampMin = "0.0", DisplayName = "Loser Spotlight To Gun Movement"))
+	float MultiplayerLoserSpotlightHoldSeconds = 2.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Multiplayer Flow", meta = (ClampMin = "0.0", DisplayName = "Pause After Each Shot"))
 	float MultiplayerPostShotPauseSeconds = 0.5f;
@@ -841,7 +844,10 @@ private:
 		int32 TableBet);
 	void RetireMultiplayerFoldedCard(ASDPlayerState* FoldedPlayer);
 	void FinishMultiplayerRoundByReveal();
-	void ContinueMultiplayerRoundAfterReveal(TArray<ASDPlayerState*> RevealedPlayers, TArray<ASDPlayerState*> Winners);
+	void ContinueMultiplayerRoundAfterReveal(
+		TArray<ASDPlayerState*> RevealedPlayers,
+		TArray<ASDPlayerState*> Winners,
+		bool bLoserSpotlightShown = false);
 	int32 ResolveMultiplayerFoldLoadCount(const ASDPlayerState* FoldedPlayer) const;
 	void PrepareMultiplayerFoldCylinder(int32 LoadCount);
 	void InitializeMultiplayerSharedChambers();

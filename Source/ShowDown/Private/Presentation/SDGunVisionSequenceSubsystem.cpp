@@ -9,8 +9,15 @@
 
 namespace
 {
+	constexpr float BaseDarknessStrength = 0.50f;
+	constexpr float IntroExpandDuration = 2.4f;
+	constexpr float IntroWideHoldDuration = 2.0f;
+	constexpr float IntroCollapseDuration = 1.6f;
+	constexpr float PreRevealDarkenDuration = 0.55f;
+	constexpr float LoserIsolationDarknessStrength = 0.82f;
+	constexpr float LoserIsolationBlendDuration = 0.35f;
 	constexpr float RaiseToTensionDuration = 0.45f;
-	constexpr float TensionDarknessStrength = 0.60f;
+	constexpr float TensionDarknessStrength = 0.88f;
 	constexpr float PeakDarknessStrength = 1.0f;
 	constexpr float LivePeakHoldDuration = 0.10f;
 	constexpr float LiveSettleDuration = 0.18f;
@@ -142,6 +149,9 @@ void USDGunVisionSequenceSubsystem::Deinitialize()
 		GameState->OnPhaseChanged.RemoveDynamic(
 			this,
 			&USDGunVisionSequenceSubsystem::HandlePhaseChanged);
+		GameState->OnTableCinematicCue.RemoveDynamic(
+			this,
+			&USDGunVisionSequenceSubsystem::HandleTableCinematicCue);
 	}
 	BoundGameState.Reset();
 
@@ -172,6 +182,7 @@ void USDGunVisionSequenceSubsystem::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 	SynchronizePendingVisionDirectors();
+	AdvanceIntroSequence(DeltaTime);
 
 	SequenceElapsedTime += FMath::Max(0.0f, DeltaTime);
 	switch (SequenceState)
@@ -218,7 +229,7 @@ void USDGunVisionSequenceSubsystem::Tick(float DeltaTime)
 			SequenceElapsedTime = 0.0f;
 			SequenceStageDuration = EmptyReliefDuration;
 			BlendDarkness(
-				0.0f,
+				BaseDarknessStrength,
 				EmptyReliefDuration,
 				ESDVisionBlendEase::EaseOut,
 				2.0f);
@@ -322,6 +333,9 @@ void USDGunVisionSequenceSubsystem::BindGameState(AShowDownGameStateBase* GameSt
 		PreviousGameState->OnPhaseChanged.RemoveDynamic(
 			this,
 			&USDGunVisionSequenceSubsystem::HandlePhaseChanged);
+		PreviousGameState->OnTableCinematicCue.RemoveDynamic(
+			this,
+			&USDGunVisionSequenceSubsystem::HandleTableCinematicCue);
 	}
 
 	BoundGameState = GameState;
@@ -330,6 +344,9 @@ void USDGunVisionSequenceSubsystem::BindGameState(AShowDownGameStateBase* GameSt
 		GameState->OnPhaseChanged.AddUniqueDynamic(
 			this,
 			&USDGunVisionSequenceSubsystem::HandlePhaseChanged);
+		GameState->OnTableCinematicCue.AddUniqueDynamic(
+			this,
+			&USDGunVisionSequenceSubsystem::HandleTableCinematicCue);
 		HandlePhaseChanged(GameState->CurrentPhase);
 	}
 }
@@ -370,9 +387,160 @@ void USDGunVisionSequenceSubsystem::SynchronizePendingVisionDirectors()
 		if (ASDVisionDirector* VisionDirector = PendingDirector.Get())
 		{
 			VisionDirector->SetDarknessStrength(DesiredDarknessStrength);
+			switch (IntroSequenceState)
+			{
+			case EIntroSequenceState::Expanding:
+				VisionDirector->SetVisionRange(0.0f, 1.0f);
+				VisionDirector->BlendToVisionRange(
+					VisionDirector->GetIntroWideVisionRadius(),
+					VisionDirector->GetIntroWideVisionFeather(),
+					FMath::Max(0.0f, IntroExpandDuration - IntroSequenceElapsedTime),
+					ESDVisionBlendEase::EaseIn,
+					2.0f);
+				break;
+			case EIntroSequenceState::Holding:
+				VisionDirector->SetVisionRange(
+					VisionDirector->GetIntroWideVisionRadius(),
+					VisionDirector->GetIntroWideVisionFeather());
+				break;
+			case EIntroSequenceState::Collapsing:
+				VisionDirector->SetVisionRange(
+					VisionDirector->GetIntroWideVisionRadius(),
+					VisionDirector->GetIntroWideVisionFeather());
+				VisionDirector->BlendToVisionRange(
+					VisionDirector->GetTableVisionRadius(),
+					VisionDirector->GetTableVisionFeather(),
+					FMath::Max(0.0f, IntroCollapseDuration - IntroSequenceElapsedTime),
+					ESDVisionBlendEase::EaseOut,
+					2.0f);
+				break;
+			case EIntroSequenceState::Idle:
+			default:
+				break;
+			}
 		}
 	}
 	PendingVisionDirectorSync.Reset();
+}
+
+void USDGunVisionSequenceSubsystem::StartMatchIntro()
+{
+	ResetToIdle(true);
+	IntroSequenceState = EIntroSequenceState::Expanding;
+	IntroSequenceElapsedTime = 0.0f;
+	SetDarknessImmediate(BaseDarknessStrength);
+	SetVisionRangeImmediateToIntroStart();
+	BlendVisionRangeToIntroWide(IntroExpandDuration);
+}
+
+void USDGunVisionSequenceSubsystem::AdvanceIntroSequence(float DeltaTime)
+{
+	if (IntroSequenceState == EIntroSequenceState::Idle)
+	{
+		return;
+	}
+
+	IntroSequenceElapsedTime += FMath::Max(0.0f, DeltaTime);
+	switch (IntroSequenceState)
+	{
+	case EIntroSequenceState::Expanding:
+		if (IntroSequenceElapsedTime >= IntroExpandDuration)
+		{
+			IntroSequenceState = EIntroSequenceState::Holding;
+			IntroSequenceElapsedTime = 0.0f;
+		}
+		break;
+	case EIntroSequenceState::Holding:
+		if (IntroSequenceElapsedTime >= IntroWideHoldDuration)
+		{
+			IntroSequenceState = EIntroSequenceState::Collapsing;
+			IntroSequenceElapsedTime = 0.0f;
+			BlendVisionRangeToTable(IntroCollapseDuration, ESDVisionBlendEase::EaseOut);
+		}
+		break;
+	case EIntroSequenceState::Collapsing:
+		if (IntroSequenceElapsedTime >= IntroCollapseDuration)
+		{
+			IntroSequenceState = EIntroSequenceState::Idle;
+			IntroSequenceElapsedTime = 0.0f;
+		}
+		break;
+	case EIntroSequenceState::Idle:
+	default:
+		break;
+	}
+}
+
+void USDGunVisionSequenceSubsystem::SetVisionRangeImmediateToIntroStart()
+{
+	if (!HasLocalPresentationView())
+	{
+		return;
+	}
+
+	for (int32 Index = VisionDirectors.Num() - 1; Index >= 0; --Index)
+	{
+		if (ASDVisionDirector* VisionDirector = VisionDirectors[Index].Get())
+		{
+			VisionDirector->SetVisionRange(0.0f, 1.0f);
+		}
+		else
+		{
+			VisionDirectors.RemoveAtSwap(Index);
+		}
+	}
+}
+
+void USDGunVisionSequenceSubsystem::BlendVisionRangeToIntroWide(float Duration)
+{
+	if (!HasLocalPresentationView())
+	{
+		return;
+	}
+
+	for (int32 Index = VisionDirectors.Num() - 1; Index >= 0; --Index)
+	{
+		if (ASDVisionDirector* VisionDirector = VisionDirectors[Index].Get())
+		{
+			VisionDirector->BlendToVisionRange(
+				VisionDirector->GetIntroWideVisionRadius(),
+				VisionDirector->GetIntroWideVisionFeather(),
+				Duration,
+				ESDVisionBlendEase::EaseIn,
+				2.0f);
+		}
+		else
+		{
+			VisionDirectors.RemoveAtSwap(Index);
+		}
+	}
+}
+
+void USDGunVisionSequenceSubsystem::BlendVisionRangeToTable(
+	float Duration,
+	ESDVisionBlendEase EaseMode)
+{
+	if (!HasLocalPresentationView())
+	{
+		return;
+	}
+
+	for (int32 Index = VisionDirectors.Num() - 1; Index >= 0; --Index)
+	{
+		if (ASDVisionDirector* VisionDirector = VisionDirectors[Index].Get())
+		{
+			VisionDirector->BlendToVisionRange(
+				VisionDirector->GetTableVisionRadius(),
+				VisionDirector->GetTableVisionFeather(),
+				Duration,
+				EaseMode,
+				2.0f);
+		}
+		else
+		{
+			VisionDirectors.RemoveAtSwap(Index);
+		}
+	}
 }
 
 void USDGunVisionSequenceSubsystem::SetDarknessImmediate(float Strength)
@@ -441,12 +609,12 @@ void USDGunVisionSequenceSubsystem::ResetToIdle(bool bImmediate)
 
 	if (bImmediate)
 	{
-		SetDarknessImmediate(0.0f);
+		SetDarknessImmediate(BaseDarknessStrength);
 	}
 	else
 	{
 		BlendDarkness(
-			0.0f,
+			BaseDarknessStrength,
 			PresentationFinishDuration,
 			ESDVisionBlendEase::EaseOut,
 			2.0f);
@@ -546,8 +714,49 @@ void USDGunVisionSequenceSubsystem::HandleGunUnavailable(ASDSelfShotGunActor* Gu
 
 void USDGunVisionSequenceSubsystem::HandlePhaseChanged(EShowDownPhase NewPhase)
 {
-	if (NewPhase != EShowDownPhase::Roulette)
+	if (NewPhase != EShowDownPhase::Roulette
+		&& NewPhase != EShowDownPhase::Reveal)
 	{
-		ResetToIdle(true);
+		ResetToIdle(false);
+	}
+}
+
+void USDGunVisionSequenceSubsystem::HandleTableCinematicCue(
+	ESDTableCinematicCue Cue,
+	uint8 PlayerSlotMask)
+{
+	(void)PlayerSlotMask;
+	switch (Cue)
+	{
+	case ESDTableCinematicCue::MatchIntro:
+		StartMatchIntro();
+		break;
+	case ESDTableCinematicCue::PreRevealBlackout:
+		IntroSequenceState = EIntroSequenceState::Idle;
+		IntroSequenceElapsedTime = 0.0f;
+		BlendVisionRangeToTable(0.45f, ESDVisionBlendEase::EaseOut);
+		BlendDarkness(
+			PeakDarknessStrength,
+			PreRevealDarkenDuration,
+			ESDVisionBlendEase::EaseInOut,
+			2.4f);
+		break;
+	case ESDTableCinematicCue::RevealStarted:
+		SetDarknessImmediate(PeakDarknessStrength);
+		break;
+	case ESDTableCinematicCue::LoserSpotlight:
+		BlendDarkness(
+			LoserIsolationDarknessStrength,
+			LoserIsolationBlendDuration,
+			ESDVisionBlendEase::EaseOut,
+			2.0f);
+		break;
+	case ESDTableCinematicCue::Reset:
+	default:
+		IntroSequenceState = EIntroSequenceState::Idle;
+		IntroSequenceElapsedTime = 0.0f;
+		BlendVisionRangeToTable(0.6f, ESDVisionBlendEase::EaseOut);
+		ResetToIdle(false);
+		break;
 	}
 }
