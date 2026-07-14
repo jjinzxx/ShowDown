@@ -26,6 +26,7 @@
 #include "PlayerPawn.h"
 #include "Presentation/SDCardRevealLayout.h"
 #include "Presentation/SDBetActionPanelActor.h"
+#include "Presentation/SDGunVisionSequenceSubsystem.h"
 #include "Presentation/SDSelfShotGunActor.h"
 #include "SDPlayerSeat.h"
 #include "SDPlayerState.h"
@@ -474,6 +475,10 @@ void AShowDownGameModeBase::StartSinglePlayer()
 		return;
 	}
 	bSinglePlayerMatchStarted = true;
+	bSinglePlayerGameplayCameraReady =
+		UGameplayStatics::GetActorOfClass(GetWorld(), AShowDownHubFlowManager::StaticClass()) == nullptr;
+	bSinglePlayerStageReadyForMatchIntro = false;
+	bSinglePlayerMatchIntroQueued = false;
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
 		if (UShowDownAudioSubsystem* AudioSubsystem = GameInstance->GetSubsystem<UShowDownAudioSubsystem>())
@@ -491,6 +496,55 @@ void AShowDownGameModeBase::StartSinglePlayer()
 	ConfigureSinglePlayerCharacters();
 	FindCollector();
 	PlaySinglePlayerIntroThenStartStage();
+}
+
+void AShowDownGameModeBase::NotifySinglePlayerGameplayCameraReady()
+{
+	if (!bSinglePlayerMatchStarted)
+	{
+		return;
+	}
+
+	bSinglePlayerGameplayCameraReady = true;
+	TryQueueSinglePlayerMatchIntro();
+}
+
+void AShowDownGameModeBase::TryQueueSinglePlayerMatchIntro()
+{
+	if (!bSinglePlayerMatchStarted
+		|| !bSinglePlayerStageReadyForMatchIntro
+		|| bSinglePlayerMatchIntroQueued)
+	{
+		return;
+	}
+
+	if (!bSinglePlayerGameplayCameraReady)
+	{
+		return;
+	}
+
+	if (AShowDownHubFlowManager* HubFlowManager = Cast<AShowDownHubFlowManager>(
+		UGameplayStatics::GetActorOfClass(GetWorld(), AShowDownHubFlowManager::StaticClass())))
+	{
+		APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
+		AActor* ExpectedViewTarget = PlayerController ? PlayerController->GetPawn() : nullptr;
+		if (!PlayerController
+			|| !ExpectedViewTarget
+			|| PlayerController->GetViewTarget() != ExpectedViewTarget)
+		{
+			bSinglePlayerGameplayCameraReady = false;
+			HubFlowManager->EnsureSinglePlayerGameplayCameraReady();
+			return;
+		}
+	}
+
+	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+	{
+		bSinglePlayerMatchIntroQueued = true;
+		ShowDownGameState->BroadcastTableCinematicCue(
+			ESDTableCinematicCue::MatchIntro,
+			0);
+	}
 }
 
 void AShowDownGameModeBase::StartMultiplayerGame()
@@ -694,7 +748,16 @@ void AShowDownGameModeBase::ResetForHubReturn()
 	ClearInitialCardDealPresentation();
 	bInitialCardDealPresentationPlayed = false;
 	bSinglePlayerMatchStarted = false;
+	bSinglePlayerGameplayCameraReady = false;
+	bSinglePlayerStageReadyForMatchIntro = false;
+	bSinglePlayerMatchIntroQueued = false;
 	MultiplayerStartDeadlineSeconds = 0.0;
+	if (USDGunVisionSequenceSubsystem* VisionSequence = GetWorld()
+		? GetWorld()->GetSubsystem<USDGunVisionSequenceSubsystem>()
+		: nullptr)
+	{
+		VisionSequence->ResetMatchPresentationForHub();
+	}
 	ClearBetBulletPresentation();
 	if (ActiveSelfShotGunActor)
 	{
@@ -3158,6 +3221,19 @@ void AShowDownGameModeBase::FinishSinglePlayerIntro()
 	SinglePlayerIntroPlayerCharacter = nullptr;
 	SinglePlayerIntroCollectorCharacter = nullptr;
 	bSinglePlayerIntroFallbackActive = false;
+
+	if (AShowDownHubFlowManager* HubFlowManager = Cast<AShowDownHubFlowManager>(
+		UGameplayStatics::GetActorOfClass(GetWorld(), AShowDownHubFlowManager::StaticClass())))
+	{
+		// A Level Sequence may have replaced the initial hub-to-pawn blend. Reset
+		// the gate and measure readiness from the final gameplay-camera return.
+		bSinglePlayerGameplayCameraReady = false;
+		HubFlowManager->EnsureSinglePlayerGameplayCameraReady();
+	}
+	else
+	{
+		bSinglePlayerGameplayCameraReady = true;
+	}
 
 	StartStage(0);
 }
@@ -6261,24 +6337,6 @@ void AShowDownGameModeBase::StartMultiplayerMatch(const TArray<ASDPlayerState*>&
 	}
 
 	EnsureMultiplayerPawns();
-	FTimerHandle MatchIntroTimerHandle;
-	GetWorldTimerManager().SetTimer(
-		MatchIntroTimerHandle,
-		FTimerDelegate::CreateWeakLambda(this, [this]()
-		{
-			if (bMultiplayerMatchStarted)
-			{
-				if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
-				{
-					ShowDownGameState->BroadcastTableCinematicCue(
-						ESDTableCinematicCue::MatchIntro,
-						0);
-				}
-			}
-		}),
-		0.35f,
-		false);
-	MultiplayerRoundTimerHandles.Add(MatchIntroTimerHandle);
 	auto StartFirstDuel = [this]()
 	{
 		if (MultiplayerPlayers.Num() < 2)
@@ -8873,12 +8931,11 @@ void AShowDownGameModeBase::StartStage(int32 StageIndex)
 		ShowDownGameState->CurrentStage = CurrentStageIndex + 1;
 		ShowDownGameState->CurrentRound = 1;
 		ShowDownGameState->OnStageChanged.Broadcast(CurrentStageIndex + 1);
-		if (StageIndex == 0)
-		{
-			ShowDownGameState->BroadcastTableCinematicCue(
-				ESDTableCinematicCue::MatchIntro,
-				0);
-		}
+	}
+	if (StageIndex == 0)
+	{
+		bSinglePlayerStageReadyForMatchIntro = true;
+		TryQueueSinglePlayerMatchIntro();
 	}
 
 	ShowEventDebugMessage(FString::Printf(TEXT("스테이지 %d 시작"), CurrentStageIndex + 1));

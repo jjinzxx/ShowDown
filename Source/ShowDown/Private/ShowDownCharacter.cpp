@@ -34,8 +34,11 @@ namespace
 	constexpr float ActionAnimationFallbackReturnDelay = 1.0f;
 	const FName NameTagSharedLayerName(TEXT("ShowDownCharacterNameTags"));
 	constexpr int32 NameTagLayerZOrder = 50;
-	constexpr float MaximumHitResetPulsePeakIntensity = 80000.0f;
-	constexpr float MaximumHitResetPulseRadius = 320.0f;
+	constexpr float MaximumHitResetPulsePeakIntensity = 8000.0f;
+	constexpr float MaximumHitResetPulseRadius = 240.0f;
+	constexpr float MaximumTurnSpotLightIntensity = 2500.0f;
+	constexpr float MaximumLoserSpotLightIntensity = 6000.0f;
+	constexpr float MaximumRoundStatusSpotLightRadius = 230.0f;
 	const FVector HitResetPulseRelativeLocation(0.0f, 0.0f, 220.0f);
 	const FRotator HitResetPulseRelativeRotation(-90.0f, 0.0f, 0.0f);
 	const FVector RoundStatusSpotLightRelativeLocation(0.0f, 0.0f, 250.0f);
@@ -56,8 +59,8 @@ namespace
 		// above the head and cannot be swallowed by the character's own shadow.
 		Light->SetRelativeLocation(HitResetPulseRelativeLocation);
 		Light->SetRelativeRotation(HitResetPulseRelativeRotation);
-		Light->SetInnerConeAngle(22.0f);
-		Light->SetOuterConeAngle(42.0f);
+		Light->SetInnerConeAngle(18.0f);
+		Light->SetOuterConeAngle(34.0f);
 		Light->SetIntensityUnits(ELightUnits::Lumens);
 		Light->SetUseInverseSquaredFalloff(true);
 		Light->SetAttenuationRadius(FMath::Clamp(RequestedRadius, 50.0f, MaximumHitResetPulseRadius));
@@ -76,11 +79,11 @@ namespace
 
 		Light->SetRelativeLocation(RoundStatusSpotLightRelativeLocation);
 		Light->SetRelativeRotation(RoundStatusSpotLightRelativeRotation);
-		Light->SetInnerConeAngle(20.0f);
-		Light->SetOuterConeAngle(38.0f);
+		Light->SetInnerConeAngle(14.0f);
+		Light->SetOuterConeAngle(28.0f);
 		Light->SetIntensityUnits(ELightUnits::Lumens);
 		Light->SetUseInverseSquaredFalloff(true);
-		Light->SetAttenuationRadius(FMath::Clamp(RequestedRadius, 50.0f, 420.0f));
+		Light->SetAttenuationRadius(FMath::Clamp(RequestedRadius, 50.0f, MaximumRoundStatusSpotLightRadius));
 		Light->SetCastShadows(false);
 		Light->SetIndirectLightingIntensity(0.0f);
 		Light->SetVolumetricScatteringIntensity(0.0f);
@@ -2097,8 +2100,11 @@ void AShowDownCharacter::RefreshRoundStatusSpotlight()
 	const float RequestedIntensity = bShowLoser
 		? LoserSpotLightIntensity
 		: TurnSpotLightIntensity;
+	const float MaximumIntensity = bShowLoser
+		? MaximumLoserSpotLightIntensity
+		: MaximumTurnSpotLightIntensity;
 	RoundStatusSpotLight->SetIntensity(
-		bVisible ? FMath::Clamp(RequestedIntensity, 0.0f, 90000.0f) : 0.0f);
+		bVisible ? FMath::Clamp(RequestedIntensity, 0.0f, MaximumIntensity) : 0.0f);
 	RoundStatusSpotLight->SetVisibility(bVisible, true);
 	RoundStatusSpotLight->SetHiddenInGame(!bVisible, true);
 }

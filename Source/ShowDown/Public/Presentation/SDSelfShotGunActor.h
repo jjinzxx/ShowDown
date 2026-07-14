@@ -467,13 +467,13 @@ protected:
 	float TinnitusVolumeMultiplier = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Muzzle Flash", meta = (ClampMin = "0.0"))
-	float MuzzleFlashIntensity = 80000.0f;
+	float MuzzleFlashIntensity = 8000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Muzzle Flash", meta = (ClampMin = "0.01"))
-	float MuzzleFlashDuration = 0.035f;
+	float MuzzleFlashDuration = 0.025f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Muzzle Flash", meta = (ClampMin = "0.0"))
-	float MuzzleFlashAttenuationRadius = 600.0f;
+	float MuzzleFlashAttenuationRadius = 350.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Muzzle Flash")
 	FLinearColor MuzzleFlashColor = FLinearColor(1.0f, 0.52f, 0.16f, 1.0f);

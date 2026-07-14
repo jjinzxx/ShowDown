@@ -65,6 +65,12 @@ public:
 	virtual void Tick(float DeltaTime) override;
 	virtual TStatId GetStatId() const override;
 
+	/** Starts the one-time gameplay iris one second after the local camera is ready. */
+	void QueueMatchEntryPresentation();
+
+	/** Restores a clear hub view so another match can enter cleanly in the same world. */
+	void ResetMatchPresentationForHub();
+
 private:
 	friend class USDGunVisionGunBinding;
 
@@ -82,8 +88,7 @@ private:
 	enum class EIntroSequenceState : uint8
 	{
 		Idle,
-		Expanding,
-		Holding,
+		WaitingForBeat,
 		Collapsing
 	};
 
@@ -98,8 +103,8 @@ private:
 	void SynchronizePendingVisionDirectors();
 	void StartMatchIntro();
 	void AdvanceIntroSequence(float DeltaTime);
-	void SetVisionRangeImmediateToIntroStart();
-	void BlendVisionRangeToIntroWide(float Duration);
+	void SetVisionRangeImmediateToTable();
+	void SetVisionRangeImmediateToIntroWide();
 	void BlendVisionRangeToTable(float Duration, ESDVisionBlendEase EaseMode);
 	void SetDarknessImmediate(float Strength);
 	void BlendDarkness(
@@ -137,6 +142,7 @@ private:
 	float SequenceElapsedTime = 0.0f;
 	float SequenceStageDuration = 0.0f;
 	float ShotResolveDelay = 0.0f;
-	float DesiredDarknessStrength = 0.5f;
+	float DesiredDarknessStrength = 0.0f;
+	bool bMatchPresentationActivated = false;
 	bool bWorldHasBegunPlay = false;
 };

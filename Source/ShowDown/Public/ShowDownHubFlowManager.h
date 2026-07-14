@@ -10,6 +10,7 @@
 
 class ACameraActor;
 class APlayerController;
+class APlayerCameraManager;
 class UShowDownLoginWidget;
 class UShowDownLobbyWidget;
 class UShowDownMainMenuWidget;
@@ -96,6 +97,9 @@ public:
 
 	/** Removes only hub-owned UI before gameplay, preserving screen-space world widgets. */
 	void PrepareForMultiplayerGameplay();
+
+	/** Returns to the local pawn and reports readiness only after that exact blend completes. */
+	void EnsureSinglePlayerGameplayCameraReady();
 
 	// [연출 파트용 훅] 게임이 끝나면(승/패) 호출되는 블루프린트 이벤트입니다.
 	// 여기서 결과 카메라 연출, 승/패 결과 위젯, 사운드 등을 재생하면 됩니다.
@@ -262,6 +266,12 @@ private:
 	TObjectPtr<AShowDownShopPreviewActor> ShopPreviewActor;
 
 	EShowDownHubTransitionOperation TransitionOperation = EShowDownHubTransitionOperation::None;
+	TWeakObjectPtr<APlayerController> SinglePlayerBlendPlayerController;
+	TWeakObjectPtr<APlayerCameraManager> SinglePlayerBlendCameraManager;
+	TWeakObjectPtr<AActor> SinglePlayerBlendViewTarget;
+	FDelegateHandle SinglePlayerBlendCompleteHandle;
+	FTimerHandle SinglePlayerBlendFallbackTimerHandle;
+	bool bRetrySinglePlayerGameplayCameraUntilReady = false;
 
 	void SetActiveWidget(UUserWidget* NextWidget);
 	void ShowTransitionOverlay(
@@ -279,6 +289,10 @@ private:
 	UFUNCTION() void HandleTopNavSettings();
 	void StartDeveloperSinglePlayPreview();
 	void ShowSinglePlayPreviewInternal(bool bAllowOnlineReward);
+	void ArmSinglePlayerCameraBlendCompletion(APlayerController* PlayerController, AActor* ViewTarget);
+	void HandleSinglePlayerCameraBlendComplete();
+	void HandleSinglePlayerCameraBlendFallback();
+	void ClearSinglePlayerCameraBlendCompletion();
 	void ApplySinglePlayerVoiceSettings();
 	bool PlayCamera(ACameraActor* Camera, bool bCut = false);
 	bool PlayViewTarget(AActor* ViewTarget, bool bCut = false);

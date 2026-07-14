@@ -195,6 +195,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Flow")
 	void StartSinglePlayer();
 
+	/** Called by the hub after its local pawn-camera blend really completes. */
+	void NotifySinglePlayerGameplayCameraReady();
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Flow")
 	void StartMultiplayerGame();
 
@@ -613,6 +616,9 @@ private:
 	float SinglePlayerIntroFallbackStartTime = 0.0f;
 	bool bSinglePlayerIntroFallbackActive = false;
 	bool bSinglePlayerMatchStarted = false;
+	bool bSinglePlayerGameplayCameraReady = false;
+	bool bSinglePlayerStageReadyForMatchIntro = false;
+	bool bSinglePlayerMatchIntroQueued = false;
 	bool bInitialCardDealPresentationInProgress = false;
 	bool bInitialCardDealPresentationPlayed = false;
 	bool bInitialCardDealIsMultiplayer = false;
@@ -749,6 +755,7 @@ private:
 	bool PlaySinglePlayerIntroFallback(AShowDownCharacter* PlayerCharacter, AShowDownCharacter* CollectorCharacter);
 	void UpdateSinglePlayerIntroFallback();
 	void FinishSinglePlayerIntro();
+	void TryQueueSinglePlayerMatchIntro();
 	void StartInitialCardDealPresentation(int32 DeckCopies, bool bMultiplayer, TFunction<void()>&& Continuation);
 	void StartHandRedealPresentation(bool bMultiplayer, TFunction<void()>&& Continuation);
 	void BeginInitialCardDeckShowcase();

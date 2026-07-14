@@ -27,6 +27,7 @@
 #include "Materials/MaterialInterface.h"
 #include "PlayerPawn.h"
 #include "Presentation/SDBetActionPanelActor.h"
+#include "Presentation/SDGunVisionSequenceSubsystem.h"
 #include "SDPlayerState.h"
 #include "ShowDownCameraAspect.h"
 #include "ShowDownCharacter.h"
@@ -667,6 +668,12 @@ bool AShowDownPlayerController::TryApplyPendingMultiplayerCharacterCamera()
 	{
 		MultiplayerLoadingWidget->Dismiss(0.22f);
 		MultiplayerLoadingWidget = nullptr;
+	}
+	if (USDGunVisionSequenceSubsystem* VisionSequence = GetWorld()->GetSubsystem<USDGunVisionSequenceSubsystem>())
+	{
+		// This is the first frame where the local seat camera is genuinely ready;
+		// the subsystem owns the requested one-second dramatic beat from here.
+		VisionSequence->QueueMatchEntryPresentation();
 	}
 	ClientShowStatusMessage(TEXT("Multiplayer character head camera ready."));
 	UE_LOG(

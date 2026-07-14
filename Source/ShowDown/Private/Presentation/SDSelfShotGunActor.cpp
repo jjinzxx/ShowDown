@@ -29,7 +29,8 @@
 
 namespace
 {
-	constexpr float MaximumMuzzleFlashIntensity = 80000.0f;
+	constexpr float MaximumMuzzleFlashIntensity = 8000.0f;
+	constexpr float MaximumMuzzleFlashAttenuationRadius = 350.0f;
 	constexpr float MinimumCinematicCameraHoldTime = 1.8f;
 
 	APlayerController* FindLocalPlayerController(const UObject* WorldContextObject)
@@ -241,7 +242,9 @@ ASDSelfShotGunActor::ASDSelfShotGunActor()
 	MuzzleFlashLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("MuzzleFlashLight"));
 	MuzzleFlashLight->SetupAttachment(MuzzlePoint);
 	MuzzleFlashLight->SetIntensity(0.0f);
-	MuzzleFlashLight->SetAttenuationRadius(MuzzleFlashAttenuationRadius);
+	MuzzleFlashLight->SetIntensityUnits(ELightUnits::Lumens);
+	MuzzleFlashLight->SetAttenuationRadius(
+		FMath::Clamp(MuzzleFlashAttenuationRadius, 0.0f, MaximumMuzzleFlashAttenuationRadius));
 	MuzzleFlashLight->SetLightColor(MuzzleFlashColor);
 	MuzzleFlashLight->SetCastShadows(true);
 	MuzzleFlashLight->SetIndirectLightingIntensity(0.0f);
@@ -321,7 +324,9 @@ void ASDSelfShotGunActor::BeginPlay()
 	ChamberCurrentRotation = ChamberInitialRotation;
 	ChamberStartRotation = ChamberCurrentRotation;
 	ChamberTargetRotation = ChamberCurrentRotation;
-	MuzzleFlashLight->SetAttenuationRadius(FMath::Max(0.0f, MuzzleFlashAttenuationRadius));
+	MuzzleFlashLight->SetAttenuationRadius(
+		FMath::Clamp(MuzzleFlashAttenuationRadius, 0.0f, MaximumMuzzleFlashAttenuationRadius));
+	MuzzleFlashLight->SetIntensityUnits(ELightUnits::Lumens);
 	MuzzleFlashLight->SetLightColor(MuzzleFlashColor);
 	if (IsValid(SelfShotCinematicCamera))
 	{
@@ -1056,8 +1061,10 @@ void ASDSelfShotGunActor::FireLiveRound()
 	bCurrentShotWasEmpty = false;
 	MechanismResetStartTriggerRotation = TriggerRestRotation + TriggerPulledRotationOffset;
 	MechanismResetStartHammerRotation = HammerRestRotation + HammerFiredRotationOffset;
-	MuzzleFlashElapsedTime = MuzzleFlashDuration;
-	MuzzleFlashLight->SetAttenuationRadius(FMath::Max(0.0f, MuzzleFlashAttenuationRadius));
+	MuzzleFlashElapsedTime = FMath::Clamp(MuzzleFlashDuration, 0.01f, 0.025f);
+	MuzzleFlashLight->SetAttenuationRadius(
+		FMath::Clamp(MuzzleFlashAttenuationRadius, 0.0f, MaximumMuzzleFlashAttenuationRadius));
+	MuzzleFlashLight->SetIntensityUnits(ELightUnits::Lumens);
 	MuzzleFlashLight->SetLightColor(MuzzleFlashColor);
 	MuzzleFlashLight->SetCastShadows(true);
 	MuzzleFlashLight->SetIndirectLightingIntensity(0.0f);

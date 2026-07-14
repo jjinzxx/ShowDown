@@ -715,6 +715,11 @@ bool FShowDownVisionDirectorBlendTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+	TestEqual(TEXT("Gameplay vision defaults to the requested table radius"), VisionDirector->GetTableVisionRadius(), 100.0f);
+	TestEqual(TEXT("Gameplay vision defaults to the requested feather"), VisionDirector->GetTableVisionFeather(), 200.0f);
+	TestEqual(TEXT("Match entry begins from the wide radius"), VisionDirector->GetIntroWideVisionRadius(), 5000.0f);
+	TestEqual(TEXT("Match entry keeps a consistent feather"), VisionDirector->GetIntroWideVisionFeather(), 200.0f);
+	TestEqual(TEXT("Gameplay darkness rests at the cinematic baseline"), VisionDirector->GetDarknessStrength(), 0.4f);
 
 	VisionDirector->SetVisionAlpha(-1.0f);
 	TestEqual(TEXT("Immediate vision alpha clamps below zero"), VisionDirector->GetVisionAlpha(), 0.0f);

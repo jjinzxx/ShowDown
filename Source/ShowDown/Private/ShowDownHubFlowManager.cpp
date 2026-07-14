@@ -3,6 +3,7 @@
 #include "Audio/ShowDownAudioSubsystem.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
+#include "Camera/PlayerCameraManager.h"
 #include "Blueprint/UserWidget.h"
 #include "Components/Button.h"
 #include "Engine/GameInstance.h"
@@ -136,6 +137,7 @@ void AShowDownHubFlowManager::BeginPlay()
 
 void AShowDownHubFlowManager::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	ClearSinglePlayerCameraBlendCompletion();
 	if (UWorld* World = GetWorld())
 	{
 		World->GetTimerManager().ClearTimer(ReturnToHubTimerHandle);
@@ -181,6 +183,7 @@ void AShowDownHubFlowManager::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void AShowDownHubFlowManager::ShowLogin()
 {
+	ClearSinglePlayerCameraBlendCompletion();
 	if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(GetPrimaryPlayerController()))
 	{
 		PlayerController->DisableGameplayChat();
@@ -214,6 +217,7 @@ void AShowDownHubFlowManager::ShowLogin()
 
 void AShowDownHubFlowManager::ShowMainMenu()
 {
+	ClearSinglePlayerCameraBlendCompletion();
 	if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(GetPrimaryPlayerController()))
 	{
 		PlayerController->DisableGameplayChat();
@@ -517,6 +521,7 @@ void AShowDownHubFlowManager::ShowSinglePlayPreviewInternal(bool bAllowOnlineRew
 
 	if (PlayerController && PlayerController->GetPawn())
 	{
+		ArmSinglePlayerCameraBlendCompletion(PlayerController, PlayerController->GetPawn());
 		PlayerController->SetViewTargetWithBlend(
 			PlayerController->GetPawn(),
 			CameraBlendTime,
@@ -538,10 +543,12 @@ void AShowDownHubFlowManager::ShowSinglePlayPreviewInternal(bool bAllowOnlineRew
 	}
 
 	// 실제 게임 한 판을 시작합니다.
+	AShowDownGameModeBase* StartedGameMode = nullptr;
 	if (UWorld* World = GetWorld())
 	{
 		if (AShowDownGameModeBase* GameMode = World->GetAuthGameMode<AShowDownGameModeBase>())
 		{
+			StartedGameMode = GameMode;
 			GameMode->StartSinglePlayer();
 		}
 		else
@@ -549,9 +556,155 @@ void AShowDownHubFlowManager::ShowSinglePlayPreviewInternal(bool bAllowOnlineRew
 			UE_LOG(LogTemp, Warning, TEXT("Main level GameMode is not AShowDownGameModeBase. Single play cannot start."));
 		}
 	}
+	if (StartedGameMode && !SinglePlayerBlendCompleteHandle.IsValid())
+	{
+		// No camera movement was required (or no camera manager was available).
+		StartedGameMode->NotifySinglePlayerGameplayCameraReady();
+	}
 
 	OnScreenChanged.Broadcast(EShowDownHubFlowScreen::SinglePlayPreview);
 	UE_LOG(LogTemp, Log, TEXT("Single play started from HubFlowManager."));
+}
+
+void AShowDownHubFlowManager::ArmSinglePlayerCameraBlendCompletion(
+	APlayerController* PlayerController,
+	AActor* ViewTarget)
+{
+	ClearSinglePlayerCameraBlendCompletion();
+	if (!PlayerController
+		|| !ViewTarget
+		|| CameraBlendTime <= KINDA_SMALL_NUMBER
+		|| PlayerController->GetViewTarget() == ViewTarget
+		|| !PlayerController->PlayerCameraManager)
+	{
+		return;
+	}
+
+	SinglePlayerBlendPlayerController = PlayerController;
+	SinglePlayerBlendCameraManager = PlayerController->PlayerCameraManager;
+	SinglePlayerBlendViewTarget = ViewTarget;
+	SinglePlayerBlendCompleteHandle = PlayerController->PlayerCameraManager->OnBlendComplete().AddUObject(
+		this,
+		&AShowDownHubFlowManager::HandleSinglePlayerCameraBlendComplete);
+
+	// Native blend completion is authoritative. The fallback only prevents a
+	// replaced/cancelled view-target blend from permanently blocking gameplay.
+	GetWorldTimerManager().SetTimer(
+		SinglePlayerBlendFallbackTimerHandle,
+		this,
+		&AShowDownHubFlowManager::HandleSinglePlayerCameraBlendFallback,
+		CameraBlendTime + 0.25f,
+		false);
+}
+
+void AShowDownHubFlowManager::HandleSinglePlayerCameraBlendComplete()
+{
+	APlayerController* PlayerController = SinglePlayerBlendPlayerController.Get();
+	AActor* ExpectedViewTarget = SinglePlayerBlendViewTarget.Get();
+	if (!PlayerController
+		|| !ExpectedViewTarget
+		|| PlayerController->GetViewTarget() != ExpectedViewTarget)
+	{
+		return;
+	}
+
+	ClearSinglePlayerCameraBlendCompletion();
+	if (UWorld* World = GetWorld())
+	{
+		if (AShowDownGameModeBase* GameMode = World->GetAuthGameMode<AShowDownGameModeBase>())
+		{
+			GameMode->NotifySinglePlayerGameplayCameraReady();
+		}
+	}
+}
+
+void AShowDownHubFlowManager::HandleSinglePlayerCameraBlendFallback()
+{
+	APlayerController* PlayerController = SinglePlayerBlendPlayerController.Get();
+	AActor* ExpectedViewTarget = SinglePlayerBlendViewTarget.Get();
+	if (PlayerController
+		&& ExpectedViewTarget
+		&& PlayerController->GetViewTarget() == ExpectedViewTarget)
+	{
+		HandleSinglePlayerCameraBlendComplete();
+		return;
+	}
+
+	const bool bShouldRetry = bRetrySinglePlayerGameplayCameraUntilReady;
+	ClearSinglePlayerCameraBlendCompletion();
+	if (bShouldRetry)
+	{
+		// The final gameplay return may be replaced by a Blueprint camera cut.
+		// Retry on the next tick until the exact pawn view is actually reached.
+		SinglePlayerBlendFallbackTimerHandle = GetWorldTimerManager().SetTimerForNextTick(
+			this,
+			&AShowDownHubFlowManager::EnsureSinglePlayerGameplayCameraReady);
+	}
+}
+
+void AShowDownHubFlowManager::ClearSinglePlayerCameraBlendCompletion()
+{
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(SinglePlayerBlendFallbackTimerHandle);
+	}
+	if (APlayerCameraManager* CameraManager = SinglePlayerBlendCameraManager.Get();
+		CameraManager && SinglePlayerBlendCompleteHandle.IsValid())
+	{
+		CameraManager->OnBlendComplete().Remove(SinglePlayerBlendCompleteHandle);
+	}
+
+	SinglePlayerBlendPlayerController.Reset();
+	SinglePlayerBlendCameraManager.Reset();
+	SinglePlayerBlendViewTarget.Reset();
+	SinglePlayerBlendCompleteHandle.Reset();
+	bRetrySinglePlayerGameplayCameraUntilReady = false;
+}
+
+void AShowDownHubFlowManager::EnsureSinglePlayerGameplayCameraReady()
+{
+	APlayerController* PlayerController = GetPrimaryPlayerController();
+	AActor* GameplayViewTarget = PlayerController ? PlayerController->GetPawn() : nullptr;
+	if (!PlayerController || !GameplayViewTarget)
+	{
+		return;
+	}
+
+	if (PlayerController->GetViewTarget() == GameplayViewTarget)
+	{
+		ClearSinglePlayerCameraBlendCompletion();
+		if (UWorld* World = GetWorld())
+		{
+			if (AShowDownGameModeBase* GameMode = World->GetAuthGameMode<AShowDownGameModeBase>())
+			{
+				GameMode->NotifySinglePlayerGameplayCameraReady();
+			}
+		}
+		return;
+	}
+
+	ArmSinglePlayerCameraBlendCompletion(PlayerController, GameplayViewTarget);
+	bRetrySinglePlayerGameplayCameraUntilReady = true;
+	PlayerController->SetViewTargetWithBlend(
+		GameplayViewTarget,
+		CameraBlendTime,
+		EViewTargetBlendFunction::VTBlend_EaseInOut,
+		CameraBlendEaseExponent,
+		false);
+
+	if (!SinglePlayerBlendCompleteHandle.IsValid()
+		&& PlayerController->GetViewTarget() == GameplayViewTarget)
+	{
+		// Zero-duration blends are synchronous and never broadcast OnBlendComplete.
+		bRetrySinglePlayerGameplayCameraUntilReady = false;
+		if (UWorld* World = GetWorld())
+		{
+			if (AShowDownGameModeBase* GameMode = World->GetAuthGameMode<AShowDownGameModeBase>())
+			{
+				GameMode->NotifySinglePlayerGameplayCameraReady();
+			}
+		}
+	}
 }
 
 void AShowDownHubFlowManager::ApplySinglePlayerVoiceSettings()

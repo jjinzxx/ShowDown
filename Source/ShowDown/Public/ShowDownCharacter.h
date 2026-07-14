@@ -460,13 +460,13 @@ protected:
 	TObjectPtr<USpotLightComponent> RoundStatusSpotLight;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Cinematic Light", meta = (ClampMin = "0.0"))
-	float TurnSpotLightIntensity = 45000.0f;
+	float TurnSpotLightIntensity = 2500.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Cinematic Light", meta = (ClampMin = "0.0"))
-	float LoserSpotLightIntensity = 70000.0f;
+	float LoserSpotLightIntensity = 6000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Cinematic Light", meta = (ClampMin = "50.0"))
-	float RoundStatusSpotLightRadius = 320.0f;
+	float RoundStatusSpotLightRadius = 230.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Cinematic Light")
 	FLinearColor TurnSpotLightColor = FLinearColor(1.0f, 0.58f, 0.20f, 1.0f);
@@ -486,11 +486,11 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery")
 	FLinearColor HitResetPulseColor = FLinearColor(0.32f, 0.85f, 1.0f, 1.0f);
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery", meta = (ClampMin = "0.0", UIMin = "0.0", UIMax = "3000000.0"))
-	float HitResetPulsePeakIntensity = 80000.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery", meta = (ClampMin = "0.0", UIMin = "0.0", UIMax = "8000.0"))
+	float HitResetPulsePeakIntensity = 8000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery", meta = (ClampMin = "50.0", UIMin = "50.0", UIMax = "1200.0"))
-	float HitResetPulseRadius = 320.0f;
+	float HitResetPulseRadius = 240.0f;
 
 	UPROPERTY(ReplicatedUsing = OnRep_Identity, EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Identity")
 	EShowDownCharacterRole CharacterRole = EShowDownCharacterRole::Unassigned;

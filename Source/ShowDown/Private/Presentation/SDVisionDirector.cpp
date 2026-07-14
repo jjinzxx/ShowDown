@@ -2,7 +2,10 @@
 
 #include "Components/PostProcessComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/SpotLightComponent.h"
+#include "Engine/SpotLight.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 
@@ -10,6 +13,10 @@ namespace
 {
 	const TCHAR* DefaultDarknessMaterialPath = TEXT("/Game/ArtTone/M_PP_TableVisionWorldRange.M_PP_TableVisionWorldRange");
 	const TCHAR* DeprecatedDarknessMaterialPath = TEXT("/Game/ArtTone/M_PP_TableVisionDarkness.M_PP_TableVisionDarkness");
+	constexpr float GameplayVisionRadius = 100.0f;
+	constexpr float GameplayVisionFeather = 200.0f;
+	constexpr float GameplayDarknessStrength = 0.4f;
+	constexpr float MatchEntryVisionRadius = 5000.0f;
 	const FName DarknessStrengthParameterName(TEXT("DarknessStrength"));
 	const FName VisionCenterParameterName(TEXT("VisionCenter"));
 	const FName VisionRadiusParameterName(TEXT("VisionRadius"));
@@ -30,9 +37,9 @@ ASDVisionDirector::ASDVisionDirector()
 	PostProcessComponent->Priority = PostProcessPriority;
 	PostProcessComponent->BlendWeight = 1.0f;
 
-	FocusedVision.VisionRadius = 450.0f;
-	FocusedVision.VisionFeather = 120.0f;
-	FocusedVision.DarknessStrength = 1.0f;
+	FocusedVision.VisionRadius = GameplayVisionRadius;
+	FocusedVision.VisionFeather = GameplayVisionFeather;
+	FocusedVision.DarknessStrength = GameplayDarknessStrength;
 
 	WideVision.VisionRadius = 1800.0f;
 	WideVision.VisionFeather = 360.0f;
@@ -54,6 +61,17 @@ void ASDVisionDirector::BeginPlay()
 
 	PostProcessComponent->bUnbound = bUnboundPostProcess;
 	PostProcessComponent->Priority = PostProcessPriority;
+
+	// The placed main-map actor predates the gameplay iris preset and may still
+	// carry serialized editor overrides. Normalize the runtime preset while
+	// leaving the user's map asset untouched.
+	FocusedVision.VisionRadius = GameplayVisionRadius;
+	FocusedVision.VisionFeather = GameplayVisionFeather;
+	FocusedVision.DarknessStrength = GameplayDarknessStrength;
+	InitialDarknessStrength = 0.0f;
+	IntroWideVisionRadius = MatchEntryVisionRadius;
+	IntroWideVisionFeather = GameplayVisionFeather;
+	NormalizeAuthoredTableSpotLights();
 
 	// Establish one safe state before the first rendered game frame. Applying the
 	// focused preset first could briefly expose its (often fully black) darkness.
@@ -78,6 +96,71 @@ void ASDVisionDirector::BeginPlay()
 	TargetVisionRangeFeather = CurrentState.VisionFeather;
 	ApplyCurrentState();
 	UpdateTickState();
+}
+
+void ASDVisionDirector::NormalizeAuthoredTableSpotLights()
+{
+	UWorld* World = GetWorld();
+	if (!bNormalizeAuthoredTableSpotLights
+		|| !World
+		|| World->GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	constexpr float MinimumLegacyIntensity = 50000.0f;
+	// Includes the table, both seats, and the tight gameplay staging around it.
+	// The authored spotlights aim at different points in this area, so testing
+	// only the exact vision-center point misses every real map light.
+	constexpr float TableGameplayAreaRadius = 800.0f;
+	const FVector TableCenter = GetVisionCenterWorldLocation();
+	const float SafeScale = FMath::Clamp(AuthoredTableSpotLightIntensityScale, 0.0f, 1.0f);
+	const float SafeMaximum = FMath::Max(0.0f, MaximumAuthoredTableSpotLightIntensity);
+
+	for (TActorIterator<ASpotLight> It(World); It; ++It)
+	{
+		USpotLightComponent* Light = Cast<USpotLightComponent>(It->GetLightComponent());
+		if (!Light
+			|| !Light->IsRegistered()
+			|| !Light->IsVisible()
+			|| !Light->bAffectsWorld
+			|| Light->GetLightUnits() != ELightUnits::Unitless
+			|| Light->Intensity < MinimumLegacyIntensity)
+		{
+			continue;
+		}
+
+		const FVector ToTable = TableCenter - Light->GetComponentLocation();
+		const float Distance = ToTable.Size();
+		if (Distance <= KINDA_SMALL_NUMBER
+			|| Distance > Light->AttenuationRadius + TableGameplayAreaRadius)
+		{
+			continue;
+		}
+
+		const float AreaAngularRadius = FMath::RadiansToDegrees(FMath::Asin(
+			FMath::Clamp(TableGameplayAreaRadius / Distance, 0.0f, 1.0f)));
+		const float MaximumAreaAngle = FMath::Clamp(
+			Light->OuterConeAngle + AreaAngularRadius,
+			0.0f,
+			180.0f);
+		const float DirectionDot = FVector::DotProduct(
+			Light->GetForwardVector(),
+			ToTable / Distance);
+		if (DirectionDot < FMath::Cos(FMath::DegreesToRadians(MaximumAreaAngle)))
+		{
+			continue;
+		}
+
+		// Static lighting is disabled for this project, but several legacy actors
+		// are still authored Static. Promote only those; Stationary lights already
+		// accept dynamic intensity changes and should keep their cheaper mobility.
+		if (Light->Mobility == EComponentMobility::Static)
+		{
+			Light->SetMobility(EComponentMobility::Movable);
+		}
+		Light->SetIntensity(FMath::Min(Light->Intensity * SafeScale, SafeMaximum));
+	}
 }
 
 void ASDVisionDirector::OnConstruction(const FTransform& Transform)

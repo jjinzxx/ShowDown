@@ -24,13 +24,13 @@ struct FSDVisionState
 	GENERATED_BODY()
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vision", meta = (ClampMin = "0.0"))
-	float VisionRadius = 450.0f;
+	float VisionRadius = 100.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vision", meta = (ClampMin = "0.0"))
-	float VisionFeather = 120.0f;
+	float VisionFeather = 200.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vision", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float DarknessStrength = 1.0f;
+	float DarknessStrength = 0.4f;
 };
 
 UCLASS(Blueprintable)
@@ -236,16 +236,26 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision")
 	bool bApplyInitialStateOnBeginPlay = true;
 
-	/** Safe startup value applied before the first rendered game frame. Runtime cues can then blend from it. */
+	/** Hub/loading stays clear. Match-entry presentation activates gameplay darkness. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float InitialDarknessStrength = 0.5f;
+	float InitialDarknessStrength = 0.0f;
 
-	/** Large enough to carry the match-opening reveal beyond the authored table. */
+	/** Match-entry iris starts wide, then closes to the focused table preset. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision|Intro", meta = (ClampMin = "0.0"))
-	float IntroWideVisionRadius = 6000.0f;
+	float IntroWideVisionRadius = 5000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision|Intro", meta = (ClampMin = "1.0"))
-	float IntroWideVisionFeather = 900.0f;
+	float IntroWideVisionFeather = 200.0f;
+
+	/** Reduces only the legacy standalone spotlights aimed into the table. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision|Lighting Safety")
+	bool bNormalizeAuthoredTableSpotLights = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision|Lighting Safety", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float AuthoredTableSpotLightIntensityScale = 0.1f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision|Lighting Safety", meta = (ClampMin = "0.0"))
+	float MaximumAuthoredTableSpotLightIntensity = 10000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision")
 	bool bTrackVisionCenterEveryTick = true;
@@ -261,6 +271,7 @@ private:
 	TObjectPtr<UPostProcessComponent> PostProcessComponent;
 
 	void EnsureDarknessMaterialInstance();
+	void NormalizeAuthoredTableSpotLights();
 	void ApplyCurrentState();
 	void ApplyPostProcessState();
 	void ApplyDarknessMaterialState();
