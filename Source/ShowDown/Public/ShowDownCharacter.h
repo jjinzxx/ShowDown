@@ -207,6 +207,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Name Tag")
 	int32 GetCharacterLives() const { return CharacterLives; }
 
+	/** Re-registers the screen-space name tag after viewport UI layers change. */
+	void RestoreNameTagScreenRegistration();
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Voice")
 	void SetVoiceTalking(bool bNewVoiceTalking);
 
@@ -458,11 +461,11 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery")
 	FLinearColor HitResetPulseColor = FLinearColor(0.32f, 0.85f, 1.0f, 1.0f);
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery", meta = (ClampMin = "0.0", UIMin = "0.0", UIMax = "200000.0"))
-	float HitResetPulsePeakIntensity = 80000.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery", meta = (ClampMin = "0.0", UIMin = "0.0", UIMax = "3000000.0"))
+	float HitResetPulsePeakIntensity = 1500000.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery", meta = (ClampMin = "50.0", UIMin = "50.0", UIMax = "600.0"))
-	float HitResetPulseRadius = 320.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery", meta = (ClampMin = "50.0", UIMin = "50.0", UIMax = "1200.0"))
+	float HitResetPulseRadius = 500.0f;
 
 	UPROPERTY(ReplicatedUsing = OnRep_Identity, EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Identity")
 	EShowDownCharacterRole CharacterRole = EShowDownCharacterRole::Unassigned;

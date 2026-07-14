@@ -2,6 +2,7 @@
 
 #include "Camera/CameraComponent.h"
 #include "Card.h"
+#include "Components/PrimitiveComponent.h"
 #include "InputCoreTypes.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
@@ -18,11 +19,9 @@
 
 namespace
 {
-	bool IsShowDownControllerHandlingInput(const APawn* Pawn)
+	bool ShouldDeferToShowDownController(const APawn* Pawn)
 	{
-		const AShowDownPlayerController* ShowDownController =
-			Pawn ? Cast<AShowDownPlayerController>(Pawn->GetController()) : nullptr;
-		return ShowDownController && ShowDownController->HandlesShowDownGameplayInput();
+		return Pawn && Cast<AShowDownPlayerController>(Pawn->GetController()) != nullptr;
 	}
 }
 
@@ -63,6 +62,24 @@ void APlayerPawn::ApplyDefaultCameraAspect()
 	}
 
 	ShowDownCameraAspect::ApplyForced16By9(cameraComp);
+
+#if WITH_EDITORONLY_DATA
+	// Multiplayer attaches this component to the local character's Head socket.
+	// When the gun-shot camera cuts away, an authored camera proxy that is marked
+	// visible in game would otherwise be seen sitting on the character's head.
+	cameraComp->bCameraMeshHiddenInGame = true;
+	cameraComp->SetCameraMesh(nullptr);
+
+	TInlineComponentArray<UPrimitiveComponent*> PrimitiveComponents(this);
+	for (UPrimitiveComponent* PrimitiveComponent : PrimitiveComponents)
+	{
+		if (PrimitiveComponent && PrimitiveComponent->IsVisualizationComponent())
+		{
+			PrimitiveComponent->SetHiddenInGame(true, true);
+			PrimitiveComponent->SetVisibility(false, true);
+		}
+	}
+#endif
 }
 
 void APlayerPawn::PreInitializeComponents()
@@ -104,17 +121,27 @@ void APlayerPawn::BeginPlay()
 		ModeBase = ResolveGameMode();
 	}
 
-	if (!IsShowDownControllerHandlingInput(this))
+	if (!ShouldDeferToShowDownController(this))
 	{
 		AddInputMappingContext();
 	}
+}
+
+void APlayerPawn::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	ReleaseChatWidget();
+	Super::EndPlay(EndPlayReason);
 }
 
 void APlayerPawn::PossessedBy(AController* NewController)
 {
 	Super::PossessedBy(NewController);
 	ApplyDefaultCameraAspect();
-	if (!IsShowDownControllerHandlingInput(this))
+	if (Cast<AShowDownPlayerController>(NewController))
+	{
+		ReleaseChatWidget();
+	}
+	if (!ShouldDeferToShowDownController(this))
 	{
 		AddInputMappingContext();
 	}
@@ -123,7 +150,7 @@ void APlayerPawn::PossessedBy(AController* NewController)
 
 void APlayerPawn::AddInputMappingContext()
 {
-	if (IsShowDownControllerHandlingInput(this))
+	if (ShouldDeferToShowDownController(this))
 	{
 		return;
 	}
@@ -159,7 +186,7 @@ void APlayerPawn::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
-	if (IsShowDownControllerHandlingInput(this))
+	if (ShouldDeferToShowDownController(this))
 	{
 		bHasPreviousMousePosition = false;
 		return;
@@ -245,7 +272,7 @@ void APlayerPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 
-	if (IsShowDownControllerHandlingInput(this))
+	if (ShouldDeferToShowDownController(this))
 	{
 		return;
 	}
@@ -781,19 +808,18 @@ void APlayerPawn::ServerPlayerFold_Implementation()
 
 void APlayerPawn::EnsureChatWidget()
 {
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (Cast<AShowDownPlayerController>(PC))
+	{
+		ReleaseChatWidget();
+		return;
+	}
+
 	if (ChatWidget)
 	{
 		return;
 	}
 
-	APlayerController* PC = Cast<APlayerController>(GetController());
-	if (const AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(PC))
-	{
-		if (!ShowDownController->IsGameplayChatEnabled())
-		{
-			return;
-		}
-	}
 	ChatWidgetClass = UShowDownChatWidget::StaticClass();
 	if (!PC || !ChatWidgetClass)
 	{
@@ -815,6 +841,16 @@ void APlayerPawn::EnsureChatWidget()
 	ChatWidget->AddToViewport();
 	ChatWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
 	ChatWidget->SetChatInputOpen(false);
+}
+
+void APlayerPawn::ReleaseChatWidget()
+{
+	bChatOpen = false;
+	if (ChatWidget)
+	{
+		ChatWidget->RemoveFromParent();
+		ChatWidget = nullptr;
+	}
 }
 
 void APlayerPawn::ApplyChatInputMode(bool bOpen)

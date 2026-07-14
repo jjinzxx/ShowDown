@@ -540,6 +540,22 @@ void AShowDownHubFlowManager::ApplySinglePlayerVoiceSettings()
 	}
 }
 
+void AShowDownHubFlowManager::PrepareForMultiplayerGameplay()
+{
+	// Remove the lobby/menu layer explicitly. RemoveAllViewportWidgets would also
+	// clear screen-space WidgetComponent layers (character name tags) while those
+	// components still believe they are registered with the viewport.
+	if (TransitionWidget)
+	{
+		TransitionWidget->RemoveFromParent();
+		TransitionWidget = nullptr;
+	}
+	TransitionOperation = EShowDownHubTransitionOperation::None;
+	SetActiveWidget(nullptr);
+	MultiplayerWidget = nullptr;
+	LobbyWidget = nullptr;
+}
+
 void AShowDownHubFlowManager::OpenMultiplayerLevel()
 {
 	if (MultiplayerLevelName.IsNone())

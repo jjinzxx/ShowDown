@@ -8,6 +8,7 @@
 
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
+#include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Card.h"
 #include "Components/MeshComponent.h"
 #include "Components/PrimitiveComponent.h"
@@ -50,6 +51,19 @@ namespace
 	const TCHAR* DefaultInteractionOutlineMaterialPath = TEXT("/Game/ArtTone/M_PP_InteractionOutline.M_PP_InteractionOutline");
 	constexpr float CharacterHeadLookReplicationInterval = 0.05f;
 	constexpr float CharacterHeadLookReplicationAngleThreshold = 0.5f;
+
+	void RestoreMultiplayerNameTagScreenRegistrations(UWorld* World)
+	{
+		if (!World)
+		{
+			return;
+		}
+
+		for (TActorIterator<AShowDownCharacter> CharacterIt(World); CharacterIt; ++CharacterIt)
+		{
+			CharacterIt->RestoreNameTagScreenRegistration();
+		}
+	}
 
 	bool IsOutlineablePrimitive(const UPrimitiveComponent* Component)
 	{
@@ -145,6 +159,49 @@ private:
 	FLinearColor CrosshairColor = FLinearColor::White;
 };
 
+/**
+ * PlayerCameraManager fades are rendered below viewport UI, so screen-space
+ * widget components and Slate HUD content would otherwise remain visible over
+ * a full camera blackout. This leaf fills the viewport at the highest Z-order.
+ */
+class SSDHitBlackoutOverlay : public SLeafWidget
+{
+public:
+	SLATE_BEGIN_ARGS(SSDHitBlackoutOverlay)
+	{
+	}
+	SLATE_END_ARGS()
+
+	void Construct(const FArguments& InArgs)
+	{
+		SetVisibility(EVisibility::HitTestInvisible);
+	}
+
+	virtual FVector2D ComputeDesiredSize(float LayoutScaleMultiplier) const override
+	{
+		return FVector2D::ZeroVector;
+	}
+
+	virtual int32 OnPaint(
+		const FPaintArgs& Args,
+		const FGeometry& AllottedGeometry,
+		const FSlateRect& MyCullingRect,
+		FSlateWindowElementList& OutDrawElements,
+		int32 LayerId,
+		const FWidgetStyle& InWidgetStyle,
+		bool bParentEnabled) const override
+	{
+		FSlateDrawElement::MakeBox(
+			OutDrawElements,
+			LayerId,
+			AllottedGeometry.ToPaintGeometry(),
+			FCoreStyle::Get().GetBrush("WhiteBrush"),
+			ESlateDrawEffect::None,
+			FLinearColor::Black);
+		return LayerId + 1;
+	}
+};
+
 namespace
 {
 	bool IsMultiplayerGameMap(const UWorld* World)
@@ -222,6 +279,8 @@ void AShowDownPlayerController::BeginPlay()
 void AShowDownPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	CancelGunShotCameraOverride();
+	SetHitBlackoutUiOpacity(0.0f);
+	DisableGameplayChat();
 
 	if (AShowDownGameStateBase* PreviousGameState = VoiceBoundGameState.Get())
 	{
@@ -292,13 +351,43 @@ void AShowDownPlayerController::ClientEnterMultiplayerGameplay_Implementation()
 	}
 
 	RemoveCenterCrosshairWidget();
-	if (GEngine && GEngine->GameViewport)
+	if (AShowDownHubFlowManager* HubFlowManager = Cast<AShowDownHubFlowManager>(
+		UGameplayStatics::GetActorOfClass(GetWorld(), AShowDownHubFlowManager::StaticClass())))
 	{
-		GEngine->GameViewport->RemoveAllViewportWidgets();
+		HubFlowManager->PrepareForMultiplayerGameplay();
 	}
-	ChatWidget = nullptr;
-	LeaveConfirmWidget = nullptr;
-	MultiplayerRankWidget = nullptr;
+	if (ChatWidget)
+	{
+		ChatWidget->RemoveFromParent();
+		ChatWidget = nullptr;
+	}
+	if (LeaveConfirmWidget)
+	{
+		LeaveConfirmWidget->RemoveFromParent();
+		LeaveConfirmWidget = nullptr;
+	}
+	if (MultiplayerRankWidget)
+	{
+		MultiplayerRankWidget->RemoveFromParent();
+		MultiplayerRankWidget = nullptr;
+	}
+	if (MultiplayerLoadingWidget)
+	{
+		MultiplayerLoadingWidget->RemoveFromParent();
+		MultiplayerLoadingWidget = nullptr;
+	}
+	if (PauseSettingsWidget)
+	{
+		PauseSettingsWidget->RemoveFromParent();
+		PauseSettingsWidget = nullptr;
+	}
+	if (PauseMenuWidget)
+	{
+		PauseMenuWidget->RemoveFromParent();
+		PauseMenuWidget = nullptr;
+	}
+	bPauseMenuOpen = false;
+	RestoreMultiplayerNameTagScreenRegistrations(GetWorld());
 	MultiplayerLoadingWidget = CreateWidget<UShowDownTransitionWidget>(this, UShowDownTransitionWidget::StaticClass());
 	if (MultiplayerLoadingWidget)
 	{
@@ -553,6 +642,7 @@ bool AShowDownPlayerController::TryApplyPendingMultiplayerCharacterCamera()
 	}
 	CreateCenterCrosshairWidget();
 	UpdateCenterCrosshairVisibility();
+	RestoreMultiplayerNameTagScreenRegistrations(GetWorld());
 	if (MultiplayerLoadingWidget)
 	{
 		MultiplayerLoadingWidget->Dismiss(0.22f);
@@ -733,11 +823,12 @@ void AShowDownPlayerController::InitializeFromPossessedPawn()
 	bEnableClickEvents = false;
 	bEnableMouseOverEvents = false;
 
-	const APlayerPawn* ShowDownPawn = Cast<APlayerPawn>(GetPawn());
+	APlayerPawn* ShowDownPawn = Cast<APlayerPawn>(GetPawn());
 	if (!ShowDownPawn)
 	{
 		return;
 	}
+	ShowDownPawn->ReleaseChatWidget();
 
 	if (!ChatWidgetClass)
 	{
@@ -2609,7 +2700,23 @@ bool AShowDownPlayerController::CanCreateLocalPlayerWidgets() const
 
 void AShowDownPlayerController::EnsureChatWidget()
 {
-	if (!CanCreateLocalPlayerWidgets() || !bGameplayChatEnabled || ChatWidget)
+	if (!CanCreateLocalPlayerWidgets() || !bGameplayChatEnabled)
+	{
+		return;
+	}
+
+	if (APlayerPawn* ShowDownPawn = Cast<APlayerPawn>(GetPawn()))
+	{
+		ShowDownPawn->ReleaseChatWidget();
+	}
+
+	if (ChatWidget && !ChatWidget->IsInViewport())
+	{
+		ChatWidget->RemoveFromParent();
+		ChatWidget = nullptr;
+	}
+	RemoveLocalChatWidgetsExcept(ChatWidget);
+	if (ChatWidget)
 	{
 		return;
 	}
@@ -2634,15 +2741,45 @@ void AShowDownPlayerController::EnsureChatWidget()
 	ChatWidget->SetChatInputOpen(false);
 }
 
+void AShowDownPlayerController::RemoveLocalChatWidgetsExcept(UShowDownChatWidget* WidgetToKeep)
+{
+	if (!GetWorld() || !GetLocalPlayer())
+	{
+		return;
+	}
+
+	TArray<UUserWidget*> ChatWidgets;
+	UWidgetBlueprintLibrary::GetAllWidgetsOfClass(
+		this,
+		ChatWidgets,
+		UShowDownChatWidget::StaticClass(),
+		true);
+	for (UUserWidget* FoundWidget : ChatWidgets)
+	{
+		UShowDownChatWidget* FoundChatWidget = Cast<UShowDownChatWidget>(FoundWidget);
+		if (FoundChatWidget
+			&& FoundChatWidget != WidgetToKeep
+			&& FoundChatWidget->GetOwningLocalPlayer() == GetLocalPlayer())
+		{
+			FoundChatWidget->RemoveFromParent();
+		}
+	}
+}
+
 void AShowDownPlayerController::DisableGameplayChat()
 {
 	bGameplayChatEnabled = false;
 	bChatOpen = false;
+	if (APlayerPawn* ShowDownPawn = Cast<APlayerPawn>(GetPawn()))
+	{
+		ShowDownPawn->ReleaseChatWidget();
+	}
 	if (ChatWidget)
 	{
 		ChatWidget->RemoveFromParent();
 		ChatWidget = nullptr;
 	}
+	RemoveLocalChatWidgetsExcept(nullptr);
 }
 
 void AShowDownPlayerController::EnsureLeaveConfirmWidget()
@@ -2747,6 +2884,55 @@ void AShowDownPlayerController::RemoveCenterCrosshairWidget()
 		GEngine->GameViewport->RemoveViewportWidgetContent(CenterCrosshairWidget.ToSharedRef());
 	}
 	CenterCrosshairWidget.Reset();
+}
+
+void AShowDownPlayerController::SetHitBlackoutUiOpacity(float Opacity)
+{
+	const float ClampedOpacity = FMath::Clamp(Opacity, 0.0f, 1.0f);
+	if (ClampedOpacity <= 0.0f)
+	{
+		if (!HitBlackoutOverlayWidget.IsValid())
+		{
+			return;
+		}
+
+		if (GEngine && GEngine->GameViewport)
+		{
+			GEngine->GameViewport->RemoveViewportWidgetContent(HitBlackoutOverlayWidget.ToSharedRef());
+		}
+		HitBlackoutOverlayWidget.Reset();
+		return;
+	}
+
+	if (!HitBlackoutOverlayWidget.IsValid())
+	{
+		if (!CanCreateLocalPlayerWidgets())
+		{
+			return;
+		}
+
+		HitBlackoutOverlayWidget = SNew(SSDHitBlackoutOverlay);
+		// Set the current fade amount before attaching the widget so a partial
+		// camera fade never produces a one-frame fully opaque UI blackout.
+		HitBlackoutOverlayWidget->SetRenderOpacity(ClampedOpacity);
+		if (GEngine && GEngine->GameViewport)
+		{
+			// Screen-space WidgetComponents use shared viewport layers, so the mask
+			// must sit above both those layers and ordinary UMG/Slate HUD content.
+			GEngine->GameViewport->AddViewportWidgetContent(
+				HitBlackoutOverlayWidget.ToSharedRef(),
+				MAX_int32);
+		}
+		else
+		{
+			HitBlackoutOverlayWidget.Reset();
+		}
+	}
+
+	if (HitBlackoutOverlayWidget.IsValid())
+	{
+		HitBlackoutOverlayWidget->SetRenderOpacity(ClampedOpacity);
+	}
 }
 
 FString AShowDownPlayerController::GetChatSenderName() const
@@ -3170,17 +3356,12 @@ void AShowDownPlayerController::ClientShowMultiplayerRank_Implementation(const T
 		return;
 	}
 
-	bGameplayChatEnabled = false;
+	DisableGameplayChat();
 	if (bPauseMenuOpen)
 	{
 		ResumeFromPauseMenu();
 	}
 	RemoveCenterCrosshairWidget();
-	if (ChatWidget)
-	{
-		ChatWidget->RemoveFromParent();
-		ChatWidget = nullptr;
-	}
 	if (LeaveConfirmWidget)
 	{
 		LeaveConfirmWidget->RemoveFromParent();

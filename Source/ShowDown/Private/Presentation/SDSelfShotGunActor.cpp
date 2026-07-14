@@ -1,16 +1,19 @@
 #include "Presentation/SDSelfShotGunActor.h"
 
+#include "Audio/ShowDownAudioSubsystem.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Components/AudioComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/PointLightComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/WidgetComponent.h"
 #include "DrawDebugHelpers.h"
+#include "Engine/GameInstance.h"
 #include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
 #include "Kismet/GameplayStatics.h"
@@ -26,6 +29,68 @@
 
 namespace
 {
+	APlayerController* FindLocalPlayerController(const UObject* WorldContextObject)
+	{
+		const UWorld* World = WorldContextObject ? WorldContextObject->GetWorld() : nullptr;
+		if (!World)
+		{
+			return nullptr;
+		}
+
+		for (FConstPlayerControllerIterator Iterator = World->GetPlayerControllerIterator(); Iterator; ++Iterator)
+		{
+			APlayerController* PlayerController = Iterator->Get();
+			if (PlayerController
+				&& PlayerController->IsLocalController()
+				&& PlayerController->GetLocalPlayer())
+			{
+				return PlayerController;
+			}
+		}
+
+		return nullptr;
+	}
+
+	UShowDownAudioSubsystem* FindShowDownAudioSubsystem(const UObject* WorldContextObject)
+	{
+		const UWorld* World = WorldContextObject ? WorldContextObject->GetWorld() : nullptr;
+		UGameInstance* GameInstance = World ? World->GetGameInstance() : nullptr;
+		return GameInstance ? GameInstance->GetSubsystem<UShowDownAudioSubsystem>() : nullptr;
+	}
+
+	void HideCameraVisualization(ACameraActor* CameraActor)
+	{
+		if (!IsValid(CameraActor))
+		{
+			return;
+		}
+
+		// A hidden camera actor still provides its camera view, but none of its
+		// renderable helper components can appear when another camera looks back
+		// at it. This covers both the authored map camera and the transient local
+		// copy used for seat-relative gun-shot presentation.
+		CameraActor->SetActorHiddenInGame(true);
+		CameraActor->SetActorEnableCollision(false);
+
+#if WITH_EDITORONLY_DATA
+		if (UCameraComponent* CameraComponent = CameraActor->GetCameraComponent())
+		{
+			CameraComponent->bCameraMeshHiddenInGame = true;
+			CameraComponent->SetCameraMesh(nullptr);
+		}
+
+		TInlineComponentArray<UPrimitiveComponent*> PrimitiveComponents(CameraActor);
+		for (UPrimitiveComponent* PrimitiveComponent : PrimitiveComponents)
+		{
+			if (PrimitiveComponent && PrimitiveComponent->IsVisualizationComponent())
+			{
+				PrimitiveComponent->SetHiddenInGame(true, true);
+				PrimitiveComponent->SetVisibility(false, true);
+			}
+		}
+#endif
+	}
+
 	float ApplyEase(float Alpha, ESDHitSequenceEaseMode EaseMode, float Exponent)
 	{
 		const float ClampedAlpha = FMath::Clamp(Alpha, 0.0f, 1.0f);
@@ -259,16 +324,13 @@ void ASDSelfShotGunActor::BeginPlay()
 	{
 		GunShotCameraReferenceTransform = SelfShotCinematicCamera->GetActorTransform();
 		bHasGunShotCameraReferenceTransform = true;
+		HideCameraVisualization(SelfShotCinematicCamera);
 	}
 
-	if (AShowDownGameStateBase* ShowDownGameState = GetWorld() ? GetWorld()->GetGameState<AShowDownGameStateBase>() : nullptr)
+	if (UWorld* World = GetWorld())
 	{
-		ShowDownGameState->OnPhaseChanged.AddUniqueDynamic(
-			this,
-			&ASDSelfShotGunActor::HandleGamePhaseChanged);
-		ShowDownGameState->OnMultiplayerRoulettePresentation.AddUniqueDynamic(
-			this,
-			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
+		World->GameStateSetEvent.AddUObject(this, &ASDSelfShotGunActor::HandleGameStateSet);
+		HandleGameStateSet(World->GetGameState());
 	}
 
 	RefreshRuntimeTickState();
@@ -276,6 +338,10 @@ void ASDSelfShotGunActor::BeginPlay()
 
 void ASDSelfShotGunActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (bHitSequenceBlackoutActive)
+	{
+		SetBlackoutInstant(0.0f, false);
+	}
 	CancelSelfShotCinematicCamera();
 	if (IsValid(LocalGunShotCamera))
 	{
@@ -283,7 +349,11 @@ void ASDSelfShotGunActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		LocalGunShotCamera = nullptr;
 	}
 
-	if (AShowDownGameStateBase* ShowDownGameState = GetWorld() ? GetWorld()->GetGameState<AShowDownGameStateBase>() : nullptr)
+	if (UWorld* World = GetWorld())
+	{
+		World->GameStateSetEvent.RemoveAll(this);
+	}
+	if (AShowDownGameStateBase* ShowDownGameState = BoundShowDownGameState.Get())
 	{
 		ShowDownGameState->OnPhaseChanged.RemoveDynamic(
 			this,
@@ -292,6 +362,7 @@ void ASDSelfShotGunActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 			this,
 			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
 	}
+	BoundShowDownGameState.Reset();
 
 	Super::EndPlay(EndPlayReason);
 }
@@ -926,6 +997,10 @@ void ASDSelfShotGunActor::StartGunUse()
 	}
 
 	OnGunRaised.Broadcast();
+	if (UShowDownAudioSubsystem* AudioSubsystem = FindShowDownAudioSubsystem(this))
+	{
+		AudioSubsystem->NotifyGunRaised();
+	}
 }
 
 bool ASDSelfShotGunActor::CanInteract_Implementation(AActor* Interactor) const
@@ -991,6 +1066,10 @@ void ASDSelfShotGunActor::FireLiveRound()
 	MuzzleFlashLight->SetIntensity(MuzzleFlashIntensity);
 
 	PlayConfiguredSound(GunshotSound, bPlayGunshotSound2D, GetActorLocation());
+	if (UShowDownAudioSubsystem* AudioSubsystem = FindShowDownAudioSubsystem(this))
+	{
+		AudioSubsystem->NotifyGunFired();
+	}
 
 	if (bEnableHitSequence && bCurrentShotTargetsLocalPlayer)
 	{
@@ -1009,6 +1088,10 @@ void ASDSelfShotGunActor::FireEmptyRound()
 	MuzzleFlashLight->SetIntensity(0.0f);
 
 	PlayConfiguredSound(EmptyShotSound, bPlayEmptyShotSound2D, HammerPivot->GetComponentLocation());
+	if (UShowDownAudioSubsystem* AudioSubsystem = FindShowDownAudioSubsystem(this))
+	{
+		AudioSubsystem->NotifyGunEmptyFired();
+	}
 	OnGunEmptyFired.Broadcast();
 }
 
@@ -1180,7 +1263,7 @@ void ASDSelfShotGunActor::ActivateSelfShotCinematicCamera()
 	}
 
 	AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(
-		UGameplayStatics::GetPlayerController(this, 0));
+		FindLocalPlayerController(this));
 	if (PlayerController
 		&& ActiveSelfShotCinematicCamera
 		&& PlayerController->BeginGunShotCameraOverride(
@@ -1266,7 +1349,7 @@ void ASDSelfShotGunActor::UpdateSelfShotCinematicCamera(float DeltaSeconds)
 		return;
 	}
 	if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(
-		UGameplayStatics::GetPlayerController(this, 0)))
+		FindLocalPlayerController(this)))
 	{
 		PlayerController->EndGunShotCameraOverride(
 			ActiveSelfShotCinematicCamera,
@@ -1319,7 +1402,7 @@ void ASDSelfShotGunActor::FinishEliminationTableOverview()
 {
 	ACameraActor* SpectatorCamera = ActiveSelfShotCinematicCamera;
 	if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(
-		UGameplayStatics::GetPlayerController(this, 0)))
+		FindLocalPlayerController(this)))
 	{
 		PlayerController->ReleaseGunShotCameraOverrideForElimination(SpectatorCamera);
 	}
@@ -1361,7 +1444,7 @@ void ASDSelfShotGunActor::CancelSelfShotCinematicCamera()
 	bCinematicCameraShakeActive = false;
 
 	if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(
-		UGameplayStatics::GetPlayerController(this, 0)))
+		FindLocalPlayerController(this)))
 	{
 		PlayerController->CancelGunShotCameraOverride(ActiveSelfShotCinematicCamera);
 	}
@@ -1381,6 +1464,7 @@ bool ASDSelfShotGunActor::PrepareLocalGunShotCamera()
 	ACameraActor* CameraTemplate = ForcedShotCamera.IsValid()
 		? ForcedShotCamera.Get()
 		: SelfShotCinematicCamera.Get();
+	HideCameraVisualization(CameraTemplate);
 	AShowDownCharacter* ReferenceCharacter = FindGunShotCameraReferenceCharacter();
 	AShowDownCharacter* TargetCharacter = ResolveCurrentGunShotCameraTarget();
 	if (!IsValid(CameraTemplate) || !IsValid(ReferenceCharacter) || !IsValid(TargetCharacter))
@@ -1441,6 +1525,7 @@ ACameraActor* ASDSelfShotGunActor::GetOrCreateLocalGunShotCamera()
 {
 	if (IsValid(LocalGunShotCamera))
 	{
+		HideCameraVisualization(LocalGunShotCamera);
 		return LocalGunShotCamera;
 	}
 
@@ -1462,6 +1547,7 @@ ACameraActor* ASDSelfShotGunActor::GetOrCreateLocalGunShotCamera()
 	{
 		LocalGunShotCamera->SetReplicates(false);
 		LocalGunShotCamera->SetActorEnableCollision(false);
+		HideCameraVisualization(LocalGunShotCamera);
 	}
 	return LocalGunShotCamera;
 }
@@ -1632,7 +1718,7 @@ void ASDSelfShotGunActor::StartHitSequence()
 			InitialHitShakeLocationAmplitude,
 			InitialHitShakeStepInterval);
 	}
-	else if (AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(UGameplayStatics::GetPlayerController(this, 0)))
+	else if (AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(FindLocalPlayerController(this)))
 	{
 		ShowDownController->PlayFixedCameraSteppedShake(
 			InitialHitEffectDuration,
@@ -1752,7 +1838,7 @@ void ASDSelfShotGunActor::EnterHitSequenceRecovery()
 			RecoveryHitShakeLocationAmplitude,
 			RecoveryHitShakeStepInterval);
 	}
-	else if (AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(UGameplayStatics::GetPlayerController(this, 0)))
+	else if (AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(FindLocalPlayerController(this)))
 	{
 		ShowDownController->PlayFixedCameraSteppedShake(
 			RecoveryHitShakeHoldTime,
@@ -1783,11 +1869,6 @@ void ASDSelfShotGunActor::FinishHitSequence()
 
 void ASDSelfShotGunActor::BroadcastPresentationFinishedIfIdle()
 {
-	if (!bPresentationFinishPending)
-	{
-		return;
-	}
-
 	if (AnimState != EGunAnimState::Idle
 		|| HitSequenceState != EHitSequenceState::Idle
 		|| bSelfShotCinematicCameraActive
@@ -1796,8 +1877,17 @@ void ASDSelfShotGunActor::BroadcastPresentationFinishedIfIdle()
 		return;
 	}
 
-	bPresentationFinishPending = false;
-	OnGunPresentationFinished.Broadcast();
+	if (bPresentationFinishPending)
+	{
+		bPresentationFinishPending = false;
+		OnGunPresentationFinished.Broadcast();
+		if (UShowDownAudioSubsystem* AudioSubsystem = FindShowDownAudioSubsystem(this))
+		{
+			AudioSubsystem->NotifyGunPresentationFinished();
+		}
+	}
+
+	TryStartPendingMultiplayerRoulettePresentation();
 }
 
 void ASDSelfShotGunActor::StartTinnitusSound()
@@ -1998,6 +2088,7 @@ void ASDSelfShotGunActor::FinishOpeningCardDrop()
 		InteractionBounds->SetCollisionEnabled(OriginalInteractionCollisionEnabled);
 	}
 	ApplyAmmoStatusDisplaySettings();
+	TryStartPendingMultiplayerRoulettePresentation();
 	RefreshRuntimeTickState();
 }
 
@@ -2011,19 +2102,42 @@ void ASDSelfShotGunActor::MulticastFinishOpeningCardDrop_Implementation()
 
 void ASDSelfShotGunActor::SetBlackoutInstant(float Alpha, bool bHoldWhenFinished)
 {
-	if (APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0))
+	const float ClampedAlpha = FMath::Clamp(Alpha, 0.0f, 1.0f);
+	if (ClampedAlpha <= 0.0f && !bHitSequenceBlackoutActive)
 	{
+		return;
+	}
+
+	if (APlayerController* PlayerController = FindLocalPlayerController(this))
+	{
+		if (AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(PlayerController))
+		{
+			ShowDownController->SetHitBlackoutUiOpacity(ClampedAlpha);
+		}
+
 		if (PlayerController->PlayerCameraManager)
 		{
-			PlayerController->PlayerCameraManager->StartCameraFade(
-				Alpha > 0.0f ? 0.0f : FMath::Clamp(HitBlackoutAmount, 0.0f, 1.0f),
-				Alpha,
-				0.001f,
-				FLinearColor::Black,
-				false,
-				bHoldWhenFinished);
+			APlayerCameraManager* CameraManager = PlayerController->PlayerCameraManager;
+			CameraManager->StopCameraFade();
+			CameraManager->SetManualCameraFade(ClampedAlpha, FLinearColor::Black, false);
+
+			if (!bHoldWhenFinished && ClampedAlpha <= KINDA_SMALL_NUMBER)
+			{
+				// Manual fade applies this frame. A zero-length automatic fade then
+				// releases the camera manager on its next update without a black frame.
+				CameraManager->StartCameraFade(
+					0.0f,
+					0.0f,
+					0.0f,
+					FLinearColor::Black,
+					false,
+					false);
+			}
+
 		}
 	}
+
+	bHitSequenceBlackoutActive = ClampedAlpha > 0.0f;
 }
 
 ASDArtToneController* ASDSelfShotGunActor::ResolveHitSequenceArtToneController()
@@ -2143,6 +2257,36 @@ void ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation(
 	PlayMultiplayerRoulettePresentation(TargetSlot, bHit);
 }
 
+void ASDSelfShotGunActor::HandleGameStateSet(AGameStateBase* GameState)
+{
+	AShowDownGameStateBase* ShowDownGameState = Cast<AShowDownGameStateBase>(GameState);
+	if (BoundShowDownGameState.Get() == ShowDownGameState)
+	{
+		return;
+	}
+
+	if (AShowDownGameStateBase* PreviousGameState = BoundShowDownGameState.Get())
+	{
+		PreviousGameState->OnPhaseChanged.RemoveDynamic(
+			this,
+			&ASDSelfShotGunActor::HandleGamePhaseChanged);
+		PreviousGameState->OnMultiplayerRoulettePresentation.RemoveDynamic(
+			this,
+			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
+	}
+
+	BoundShowDownGameState = ShowDownGameState;
+	if (ShowDownGameState)
+	{
+		ShowDownGameState->OnPhaseChanged.AddUniqueDynamic(
+			this,
+			&ASDSelfShotGunActor::HandleGamePhaseChanged);
+		ShowDownGameState->OnMultiplayerRoulettePresentation.AddUniqueDynamic(
+			this,
+			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
+	}
+}
+
 AActor* ASDSelfShotGunActor::FindMultiplayerShotTarget(EShowDownPlayerSlot TargetSlot) const
 {
 	if (TargetSlot == EShowDownPlayerSlot::None)
@@ -2172,6 +2316,22 @@ AActor* ASDSelfShotGunActor::FindMultiplayerShotTarget(EShowDownPlayerSlot Targe
 
 void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(EShowDownPlayerSlot TargetSlot, bool bHit)
 {
+	if (!CanInteract_Implementation(nullptr))
+	{
+		if (!HasAuthority())
+		{
+			PendingMultiplayerRoulettePresentations.Add({ TargetSlot, bHit });
+			UE_LOG(
+				LogTemp,
+				Warning,
+				TEXT("Queued multiplayer roulette presentation while the local gun was busy. Slot=%d Hit=%s Pending=%d"),
+				static_cast<int32>(TargetSlot),
+				bHit ? TEXT("true") : TEXT("false"),
+				PendingMultiplayerRoulettePresentations.Num());
+		}
+		return;
+	}
+
 	AActor* TargetActor = FindMultiplayerShotTarget(TargetSlot);
 	ShotResultMode = bHit
 		? ESDSelfShotRoundMode::AlwaysLive
@@ -2183,6 +2343,14 @@ void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(EShowDownPlayerSlo
 	bHasForcedShotRotationOffset = false;
 	bCurrentShotTargetsLocalPlayer = ShouldTreatSlotAsLocalPlayer(TargetSlot);
 	CurrentShotTargetSlot = TargetSlot;
+	UE_LOG(
+		LogTemp,
+		Log,
+		TEXT("Playing multiplayer roulette presentation. Slot=%d Hit=%s LocalVictim=%s Target=%s"),
+		static_cast<int32>(TargetSlot),
+		bHit ? TEXT("true") : TEXT("false"),
+		bCurrentShotTargetsLocalPlayer ? TEXT("true") : TEXT("false"),
+		*GetNameSafe(TargetActor));
 
 	FVector SourceLocation = FVector::ZeroVector;
 	FVector AimLocation = FVector::ZeroVector;
@@ -2205,6 +2373,21 @@ void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(EShowDownPlayerSlo
 	StartGunUse();
 }
 
+void ASDSelfShotGunActor::TryStartPendingMultiplayerRoulettePresentation()
+{
+	if (HasAuthority()
+		|| PendingMultiplayerRoulettePresentations.IsEmpty()
+		|| !CanInteract_Implementation(nullptr))
+	{
+		return;
+	}
+
+	const FPendingMultiplayerRoulettePresentation PendingPresentation =
+		PendingMultiplayerRoulettePresentations[0];
+	PendingMultiplayerRoulettePresentations.RemoveAt(0);
+	PlayMultiplayerRoulettePresentation(PendingPresentation.TargetSlot, PendingPresentation.bHit);
+}
+
 bool ASDSelfShotGunActor::ShouldTreatSlotAsLocalPlayer(EShowDownPlayerSlot TargetSlot) const
 {
 	if (TargetSlot == EShowDownPlayerSlot::None)
@@ -2212,8 +2395,7 @@ bool ASDSelfShotGunActor::ShouldTreatSlotAsLocalPlayer(EShowDownPlayerSlot Targe
 		return false;
 	}
 
-	const UWorld* World = GetWorld();
-	const APlayerController* LocalPlayerController = World ? World->GetFirstPlayerController() : nullptr;
+	const APlayerController* LocalPlayerController = FindLocalPlayerController(this);
 	if (!LocalPlayerController
 		|| !LocalPlayerController->IsLocalController()
 		|| !LocalPlayerController->GetLocalPlayer())
@@ -2230,10 +2412,10 @@ bool ASDSelfShotGunActor::ShouldTreatSlotAsLocalPlayer(EShowDownPlayerSlot Targe
 
 bool ASDSelfShotGunActor::ShouldTreatTargetAsLocalPlayer(AActor* TargetActor) const
 {
+	const UWorld* World = GetWorld();
 	if (!IsValid(TargetActor))
 	{
-		const UWorld* World = GetWorld();
-		const APlayerController* LocalPlayerController = World ? World->GetFirstPlayerController() : nullptr;
+		const APlayerController* LocalPlayerController = FindLocalPlayerController(this);
 		return World
 			&& World->GetNetMode() == NM_Standalone
 			&& LocalPlayerController
@@ -2242,7 +2424,18 @@ bool ASDSelfShotGunActor::ShouldTreatTargetAsLocalPlayer(AActor* TargetActor) co
 	}
 
 	const AShowDownCharacter* TargetCharacter = Cast<AShowDownCharacter>(TargetActor);
-	return TargetCharacter && TargetCharacter->IsLocalPlayerCharacter();
+	if (!TargetCharacter)
+	{
+		return false;
+	}
+
+	if (World && World->GetNetMode() == NM_Standalone)
+	{
+		return TargetCharacter->GetCharacterRole() == EShowDownCharacterRole::Player;
+	}
+
+	return ShouldTreatSlotAsLocalPlayer(TargetCharacter->GetPlayerSlot())
+		|| TargetCharacter->IsLocalPlayerCharacter();
 }
 
 bool ASDSelfShotGunActor::UpdateRevolverPlacementDevPreview()

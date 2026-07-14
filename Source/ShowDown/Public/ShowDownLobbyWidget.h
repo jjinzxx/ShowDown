@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Blueprint/UserWidget.h"
+#include "ShowDownUserWidget.h"
 #include "ShowDownLobbyWidget.generated.h"
 
 class UButton;
@@ -10,7 +10,7 @@ class UTextBlock;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShowDownLobbyRequest);
 
 UCLASS()
-class SHOWDOWN_API UShowDownLobbyWidget : public UUserWidget
+class SHOWDOWN_API UShowDownLobbyWidget : public UShowDownUserWidget
 {
 	GENERATED_BODY()
 

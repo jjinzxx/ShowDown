@@ -23,6 +23,7 @@ class UBettingSystem;
 class URoundResolver;
 class URouletteSystem;
 struct FCollectorBetDecision;
+struct FSDBetActionPanelState;
 struct FSDLLMBossContext;
 class AShowDownCharacter;
 class AShowDownGameStateBase;
@@ -352,9 +353,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (DisplayName = "Height"))
 	float CardRevealHeightOffset = 10.0f;
 
-	// Multiplayer: exact radial distance from table center to every player's reveal card.
-	// Single-player keeps the legacy meaning as spacing between its two cards.
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0", DisplayName = "Center Distance / Single Spacing"))
+	// Single-player uses this as the neighboring-card gap. Two-player multiplayer
+	// splits the same gap around table center; larger matches keep the authored
+	// radial seat layout.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0", DisplayName = "Reveal Card Spacing"))
 	float CardRevealSideSpacing = 10.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.1"))
@@ -656,6 +658,7 @@ private:
 	void ContinueFoldAfterReveal(EShowDownSide FoldedSide, int32 LoadCount);
 	void ClearBetBulletPresentation();
 	void RefreshBetBulletPresentation();
+	void PopulateBetActionPanelLayoutState(FSDBetActionPanelState& PanelState) const;
 	void ClearBetActionPanel();
 	void RefreshBetActionPanel();
 	ASDBetActionPanelActor* EnsureBetActionPanelActor();

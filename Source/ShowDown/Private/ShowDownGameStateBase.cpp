@@ -1,7 +1,9 @@
 #include "ShowDownGameStateBase.h"
 
+#include "Audio/ShowDownAudioSubsystem.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
+#include "Engine/GameInstance.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
 #include "EngineUtils.h"
@@ -50,6 +52,17 @@ namespace
 			GEngine->AddOnScreenDebugMessage(-1, 4.0f, Color, Message);
 		}
 	}
+
+	void NotifyAudioPhaseChanged(const AShowDownGameStateBase* GameState, EShowDownPhase Phase)
+	{
+		UGameInstance* GameInstance = GameState ? GameState->GetGameInstance() : nullptr;
+		if (UShowDownAudioSubsystem* AudioSubsystem = GameInstance
+			? GameInstance->GetSubsystem<UShowDownAudioSubsystem>()
+			: nullptr)
+		{
+			AudioSubsystem->NotifyPhaseChanged(Phase);
+		}
+	}
 }
 
 void AShowDownGameStateBase::SetPhase(EShowDownPhase NewPhase)
@@ -66,6 +79,7 @@ void AShowDownGameStateBase::SetPhase(EShowDownPhase NewPhase)
 
 	CurrentPhase = NewPhase;
 	OnPhaseChanged.Broadcast(CurrentPhase);
+	NotifyAudioPhaseChanged(this, CurrentPhase);
 	EventStart(CurrentPhase);
 }
 
@@ -537,6 +551,7 @@ void AShowDownGameStateBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 void AShowDownGameStateBase::OnRep_CurrentPhase()
 {
 	OnPhaseChanged.Broadcast(CurrentPhase);
+	NotifyAudioPhaseChanged(this, CurrentPhase);
 }
 
 void AShowDownGameStateBase::OnRep_CurrentStage()

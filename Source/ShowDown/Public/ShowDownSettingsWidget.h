@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Blueprint/UserWidget.h"
+#include "ShowDownUserWidget.h"
 #include "ShowDownSettingsWidget.generated.h"
 
 class UButton;
@@ -13,7 +13,7 @@ class USlider;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShowDownSettingsRequest);
 
 UCLASS()
-class SHOWDOWN_API UShowDownSettingsWidget : public UUserWidget
+class SHOWDOWN_API UShowDownSettingsWidget : public UShowDownUserWidget
 {
 	GENERATED_BODY()
 

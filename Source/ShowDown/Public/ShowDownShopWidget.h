@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Blueprint/UserWidget.h"
+#include "ShowDownUserWidget.h"
 #include "SupabaseSubsystem.h"
 #include "Types/SlateEnums.h"
 #include "ShowDownShopWidget.generated.h"
@@ -20,7 +20,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
 	SkinId);
 
 UCLASS()
-class SHOWDOWN_API UShowDownShopWidget : public UUserWidget
+class SHOWDOWN_API UShowDownShopWidget : public UShowDownUserWidget
 {
 	GENERATED_BODY()
 

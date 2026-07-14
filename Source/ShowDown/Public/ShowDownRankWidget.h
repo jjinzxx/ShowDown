@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Blueprint/UserWidget.h"
+#include "ShowDownUserWidget.h"
 #include "ShowDownRankWidget.generated.h"
 
 class UTextBlock;
@@ -22,7 +22,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShowDownRankBackRequested);
 //  - 이름이 없어도(BindWidgetOptional) 크래시 없이 동작하며 해당 표시만 생략됩니다.
 //  - 즉 데이터 로딩/갱신 로직은 전부 이 C++에 있고, 디자인은 WBP가 담당합니다.
 UCLASS()
-class SHOWDOWN_API UShowDownRankWidget : public UUserWidget
+class SHOWDOWN_API UShowDownRankWidget : public UShowDownUserWidget
 {
 	GENERATED_BODY()
 

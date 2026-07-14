@@ -34,6 +34,34 @@ namespace
 	constexpr float ActionAnimationFallbackReturnDelay = 1.0f;
 	const FName NameTagSharedLayerName(TEXT("ShowDownCharacterNameTags"));
 	constexpr int32 NameTagLayerZOrder = 50;
+	constexpr float GuaranteedHitResetPulsePeakIntensity = 1500000.0f;
+	constexpr float GuaranteedHitResetPulseRadius = 500.0f;
+	const FVector HitResetPulseRelativeLocation(0.0f, 0.0f, 220.0f);
+	const FRotator HitResetPulseRelativeRotation(-90.0f, 0.0f, 0.0f);
+
+	void ConfigureHitResetPulseLight(
+		USpotLightComponent* Light,
+		const FLinearColor& Color,
+		float RequestedRadius)
+	{
+		if (!Light)
+		{
+			return;
+		}
+
+		// Blueprint component overrides can survive later native-default changes.
+		// Reapply the authored recovery-light contract at runtime so the beam stays
+		// above the head and cannot be swallowed by the character's own shadow.
+		Light->SetRelativeLocation(HitResetPulseRelativeLocation);
+		Light->SetRelativeRotation(HitResetPulseRelativeRotation);
+		Light->SetInnerConeAngle(22.0f);
+		Light->SetOuterConeAngle(42.0f);
+		Light->SetIntensityUnits(ELightUnits::Lumens);
+		Light->SetUseInverseSquaredFalloff(true);
+		Light->SetAttenuationRadius(FMath::Max(GuaranteedHitResetPulseRadius, RequestedRadius));
+		Light->SetLightColor(Color);
+		Light->SetCastShadows(false);
+	}
 
 	FString GetAnimStateDebugName(EShowDownCharacterAnimState State)
 	{
@@ -212,14 +240,8 @@ AShowDownCharacter::AShowDownCharacter()
 	// It follows the character capsule, so no per-slot Blueprint setup is needed.
 	HitResetPulseLight = CreateDefaultSubobject<USpotLightComponent>(TEXT("HitResetPulseLight"));
 	HitResetPulseLight->SetupAttachment(GetCapsuleComponent());
-	HitResetPulseLight->SetRelativeLocation(FVector(0.0f, 0.0f, 220.0f));
-	HitResetPulseLight->SetRelativeRotation(FRotator(-90.0f, 0.0f, 0.0f));
-	HitResetPulseLight->SetInnerConeAngle(22.0f);
-	HitResetPulseLight->SetOuterConeAngle(42.0f);
-	HitResetPulseLight->SetAttenuationRadius(HitResetPulseRadius);
-	HitResetPulseLight->SetLightColor(HitResetPulseColor);
+	ConfigureHitResetPulseLight(HitResetPulseLight, HitResetPulseColor, HitResetPulseRadius);
 	HitResetPulseLight->SetIntensity(0.0f);
-	HitResetPulseLight->SetCastShadows(false);
 	HitResetPulseLight->SetVisibility(false);
 
 	UCharacterMovementComponent* MovementComponent = GetCharacterMovement();
@@ -252,6 +274,13 @@ void AShowDownCharacter::Tick(float DeltaSeconds)
 void AShowDownCharacter::PostInitializeComponents()
 {
 	Super::PostInitializeComponents();
+	ConfigureHitResetPulseLight(HitResetPulseLight, HitResetPulseColor, HitResetPulseRadius);
+	if (HitResetPulseLight)
+	{
+		HitResetPulseLight->SetIntensity(0.0f);
+		HitResetPulseLight->SetVisibility(false, true);
+		HitResetPulseLight->SetHiddenInGame(true, true);
+	}
 	if (WorldLivesText)
 	{
 		WorldLivesBaseRelativeScale = WorldLivesText->GetRelativeScale3D();
@@ -267,6 +296,9 @@ void AShowDownCharacter::PostInitializeComponents()
 void AShowDownCharacter::BeginPlay()
 {
 	Super::BeginPlay();
+	// Blueprint construction data is applied by this point, so enforce the
+	// runtime light contract once more before any hit presentation can start.
+	SetHitResetPulseStrength(0.0f);
 	ApplyCharacterSkin();
 	CacheAnimBlueprintClass();
 	CacheBaseMeshTransform();
@@ -656,6 +688,22 @@ void AShowDownCharacter::SetCharacterLives(int32 NewLives)
 	{
 		ForceNetUpdate();
 	}
+}
+
+void AShowDownCharacter::RestoreNameTagScreenRegistration()
+{
+	if (!NameTagWidgetComponent || IsRunningDedicatedServer())
+	{
+		return;
+	}
+
+	// UGameViewportClient::RemoveAllViewportWidgets can clear the shared screen
+	// layer without notifying WidgetComponent, leaving its internal
+	// bAddedToScreen flag stale. Changing OwnerPlayer uses the component's public
+	// teardown path so the next component tick can safely add it back.
+	NameTagWidgetComponent->SetOwnerPlayer(nullptr);
+	bNameTagVisibilityInitialized = false;
+	RefreshNameTag();
 }
 
 void AShowDownCharacter::SetVoiceTalking(bool bNewVoiceTalking)
@@ -1583,9 +1631,11 @@ void AShowDownCharacter::SetHitResetPulseStrength(float Strength)
 	const bool bVisible = bCharacterSceneActive
 		&& HitRecoveryPresentationState.bActive
 		&& ClampedStrength > KINDA_SMALL_NUMBER;
-	HitResetPulseLight->SetLightColor(HitResetPulseColor);
-	HitResetPulseLight->SetAttenuationRadius(FMath::Max(50.0f, HitResetPulseRadius));
-	HitResetPulseLight->SetIntensity(FMath::Max(0.0f, HitResetPulsePeakIntensity) * ClampedStrength);
+	ConfigureHitResetPulseLight(HitResetPulseLight, HitResetPulseColor, HitResetPulseRadius);
+	const float PeakIntensity = FMath::Max(
+		GuaranteedHitResetPulsePeakIntensity,
+		HitResetPulsePeakIntensity);
+	HitResetPulseLight->SetIntensity(PeakIntensity * ClampedStrength);
 	HitResetPulseLight->SetVisibility(bVisible, true);
 	HitResetPulseLight->SetHiddenInGame(!bVisible, true);
 }

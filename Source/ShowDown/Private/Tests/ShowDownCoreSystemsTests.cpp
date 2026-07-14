@@ -1,16 +1,19 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Audio/ShowDownAudioConfig.h"
 #include "BettingSystem.h"
 #include "CardSystem.h"
 #include "CollectorAISystem.h"
 #include "Misc/AutomationTest.h"
 #include "Presentation/SDCardRevealLayout.h"
 #include "Presentation/SDSelfShotGunActor.h"
+#include "Presentation/SDVisionDirector.h"
 #include "RoundResolver.h"
 #include "RouletteSystem.h"
 #include "ShowDownCharacter.h"
 #include "ShowDownCharacterSkinCatalog.h"
 #include "ShowDownGameModeBase.h"
+#include "Sound/SoundWave.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FShowDownBettingSystemTest,
@@ -211,6 +214,49 @@ bool FShowDownCardRevealLayoutTest::RunTest(const FString& Parameters)
 		TestTrue(
 			*FString::Printf(TEXT("%s reveal card rotates with its seat"), SeatCase.Label),
 			Transform.GetRotation().Equals(ExpectedRotation, KINDA_SMALL_NUMBER));
+	}
+
+	const float TwoPlayerRadius = ShowDownCardRevealLayout::ResolveRadialCenterDistance(
+		CenterDistance,
+		2);
+	TestEqual(
+		TEXT("Two reveal cards split the configured single-player spacing"),
+		TwoPlayerRadius,
+		CenterDistance * 0.5f);
+	TestEqual(
+		TEXT("Three-player reveal keeps the authored radial distance"),
+		ShowDownCardRevealLayout::ResolveRadialCenterDistance(CenterDistance, 3),
+		CenterDistance);
+
+	FTransform OppositeLeftTransform;
+	FTransform OppositeRightTransform;
+	const bool bBuiltOppositeLeft = ShowDownCardRevealLayout::TryBuildRadialTransform(
+		TableCenter,
+		TableCenter + FVector(-100.0f, 0.0f, 0.0f),
+		TwoPlayerRadius,
+		0.0f,
+		HeightOffset,
+		RotationOffset,
+		Scale,
+		OppositeLeftTransform);
+	const bool bBuiltOppositeRight = ShowDownCardRevealLayout::TryBuildRadialTransform(
+		TableCenter,
+		TableCenter + FVector(100.0f, 0.0f, 0.0f),
+		TwoPlayerRadius,
+		0.0f,
+		HeightOffset,
+		RotationOffset,
+		Scale,
+		OppositeRightTransform);
+	TestTrue(TEXT("Two opposite reveal transforms resolve"), bBuiltOppositeLeft && bBuiltOppositeRight);
+	if (bBuiltOppositeLeft && bBuiltOppositeRight)
+	{
+		TestEqual(
+			TEXT("Two-player multiplayer gap matches single-player spacing"),
+			FVector::Distance(
+				OppositeLeftTransform.GetLocation(),
+				OppositeRightTransform.GetLocation()),
+			static_cast<double>(CenterDistance));
 	}
 
 	FTransform InvalidTransform;
@@ -458,6 +504,194 @@ bool FShowDownHitRecoveryTimingTest::RunTest(const FString& Parameters)
 		TEXT("A longer gun camera still owns the presentation finish"),
 		AShowDownGameModeBase::CalculateRoulettePresentationFinishDelay(1.0f, 4.0f, 2.0f),
 		4.0f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownVisionDirectorBlendTest,
+	"ShowDown.Core.VisionDirectorBlend",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownVisionDirectorBlendTest::RunTest(const FString& Parameters)
+{
+	TestEqual(
+		TEXT("Linear easing clamps values below zero"),
+		ASDVisionDirector::EvaluateVisionBlendEase(-1.0f, ESDVisionBlendEase::Linear, 2.0f),
+		0.0f);
+	TestEqual(
+		TEXT("Linear easing clamps values above one"),
+		ASDVisionDirector::EvaluateVisionBlendEase(2.0f, ESDVisionBlendEase::Linear, 2.0f),
+		1.0f);
+	TestTrue(
+		TEXT("Ease-in uses the configured exponent"),
+		FMath::IsNearlyEqual(
+			ASDVisionDirector::EvaluateVisionBlendEase(0.5f, ESDVisionBlendEase::EaseIn, 2.0f),
+			0.25f));
+	TestTrue(
+		TEXT("Ease-out uses the configured exponent"),
+		FMath::IsNearlyEqual(
+			ASDVisionDirector::EvaluateVisionBlendEase(0.5f, ESDVisionBlendEase::EaseOut, 2.0f),
+			0.75f));
+	TestTrue(
+		TEXT("Ease-in-out is symmetric around its midpoint"),
+		FMath::IsNearlyEqual(
+			ASDVisionDirector::EvaluateVisionBlendEase(0.25f, ESDVisionBlendEase::EaseInOut, 2.0f),
+			0.125f));
+
+	ASDVisionDirector* VisionDirector = NewObject<ASDVisionDirector>();
+	TestNotNull(TEXT("Vision director can be created without a game world"), VisionDirector);
+	if (!VisionDirector)
+	{
+		return false;
+	}
+
+	VisionDirector->SetVisionAlpha(-1.0f);
+	TestEqual(TEXT("Immediate vision alpha clamps below zero"), VisionDirector->GetVisionAlpha(), 0.0f);
+	VisionDirector->BlendToVisionAlpha(1.0f, 1.0f, ESDVisionBlendEase::Linear, 2.0f);
+	TestTrue(TEXT("A positive-duration alpha transition starts blending"), VisionDirector->IsVisionBlending());
+	TestEqual(TEXT("The alpha transition exposes its clamped target"), VisionDirector->GetVisionBlendTargetAlpha(), 1.0f);
+	VisionDirector->Tick(0.25f);
+	TestTrue(
+		TEXT("A linear alpha transition advances by elapsed duration"),
+		FMath::IsNearlyEqual(VisionDirector->GetVisionAlpha(), 0.25f));
+
+	const float AlphaBeforeRetarget = VisionDirector->GetVisionAlpha();
+	VisionDirector->BlendToVisionAlpha(0.0f, 1.0f, ESDVisionBlendEase::Linear, 2.0f);
+	TestTrue(
+		TEXT("Retargeting alpha preserves the currently displayed value"),
+		FMath::IsNearlyEqual(VisionDirector->GetVisionAlpha(), AlphaBeforeRetarget));
+	VisionDirector->Tick(0.5f);
+	TestTrue(
+		TEXT("A retargeted alpha transition starts from the displayed value"),
+		FMath::IsNearlyEqual(VisionDirector->GetVisionAlpha(), 0.125f));
+
+	VisionDirector->CancelVisionBlend();
+	const float CancelledAlpha = VisionDirector->GetVisionAlpha();
+	TestFalse(TEXT("Cancelling alpha leaves no active transition"), VisionDirector->IsVisionBlending());
+	VisionDirector->Tick(1.0f);
+	TestTrue(
+		TEXT("Cancelled alpha remains at the displayed value"),
+		FMath::IsNearlyEqual(VisionDirector->GetVisionAlpha(), CancelledAlpha));
+
+	VisionDirector->BlendToWideVision(1.0f, ESDVisionBlendEase::Linear, 2.0f);
+	VisionDirector->CompleteVisionBlend();
+	TestFalse(TEXT("Completing alpha clears the active transition"), VisionDirector->IsVisionBlending());
+	TestEqual(TEXT("Completing alpha applies its destination"), VisionDirector->GetVisionAlpha(), 1.0f);
+	VisionDirector->BlendToFocusedVision(0.0f, ESDVisionBlendEase::Linear, 2.0f);
+	TestFalse(TEXT("A zero-duration alpha transition completes immediately"), VisionDirector->IsVisionBlending());
+	TestEqual(TEXT("A zero-duration alpha transition applies its destination"), VisionDirector->GetVisionAlpha(), 0.0f);
+	VisionDirector->BlendToVisionAlpha(0.5f, 1.0f, ESDVisionBlendEase::Linear, 2.0f);
+	VisionDirector->SetVisionAlpha(2.0f);
+	TestFalse(TEXT("Immediate alpha application cancels an active transition"), VisionDirector->IsVisionBlending());
+	TestEqual(TEXT("Immediate vision alpha clamps above one"), VisionDirector->GetVisionAlpha(), 1.0f);
+
+	VisionDirector->SetDarknessStrength(-1.0f);
+	TestEqual(TEXT("Immediate darkness clamps below zero"), VisionDirector->GetDarknessStrength(), 0.0f);
+	VisionDirector->BlendToDarknessStrength(1.0f, 1.0f, ESDVisionBlendEase::Linear, 2.0f);
+	TestTrue(TEXT("A positive-duration darkness transition starts blending"), VisionDirector->IsDarknessStrengthBlending());
+	TestEqual(TEXT("The darkness transition exposes its clamped target"), VisionDirector->GetDarknessStrengthBlendTarget(), 1.0f);
+	VisionDirector->Tick(0.25f);
+	TestTrue(
+		TEXT("A linear darkness transition advances by elapsed duration"),
+		FMath::IsNearlyEqual(VisionDirector->GetDarknessStrength(), 0.25f));
+
+	const float DarknessBeforeRetarget = VisionDirector->GetDarknessStrength();
+	VisionDirector->BlendToDarknessStrength(0.0f, 1.0f, ESDVisionBlendEase::Linear, 2.0f);
+	TestTrue(
+		TEXT("Retargeting darkness preserves the currently displayed value"),
+		FMath::IsNearlyEqual(VisionDirector->GetDarknessStrength(), DarknessBeforeRetarget));
+	VisionDirector->Tick(0.5f);
+	TestTrue(
+		TEXT("A retargeted darkness transition starts from the displayed value"),
+		FMath::IsNearlyEqual(VisionDirector->GetDarknessStrength(), 0.125f));
+
+	VisionDirector->CancelDarknessStrengthBlend();
+	const float CancelledDarkness = VisionDirector->GetDarknessStrength();
+	TestFalse(TEXT("Cancelling darkness leaves no active transition"), VisionDirector->IsDarknessStrengthBlending());
+	VisionDirector->Tick(1.0f);
+	TestTrue(
+		TEXT("Cancelled darkness remains at the displayed value"),
+		FMath::IsNearlyEqual(VisionDirector->GetDarknessStrength(), CancelledDarkness));
+
+	VisionDirector->BlendToDarknessStrength(2.0f, 0.0f, ESDVisionBlendEase::Linear, 2.0f);
+	TestFalse(TEXT("A zero-duration darkness transition completes immediately"), VisionDirector->IsDarknessStrengthBlending());
+	TestEqual(TEXT("A zero-duration darkness transition clamps its destination"), VisionDirector->GetDarknessStrength(), 1.0f);
+
+	VisionDirector->SetDarknessStrength(0.6f);
+	VisionDirector->BlendToDarknessStrength(0.8f, 1.0f, ESDVisionBlendEase::Linear, 2.0f);
+	VisionDirector->Tick(0.25f);
+	const float DarknessBeforeAlphaBlend = VisionDirector->GetDarknessStrength();
+	VisionDirector->BlendToVisionAlpha(0.0f, 1.0f, ESDVisionBlendEase::Linear, 2.0f);
+	TestFalse(TEXT("Starting alpha cancels the direct darkness transition"), VisionDirector->IsDarknessStrengthBlending());
+	TestTrue(TEXT("Starting alpha preserves current darkness"), FMath::IsNearlyEqual(
+		VisionDirector->GetDarknessStrength(), DarknessBeforeAlphaBlend));
+	VisionDirector->BlendToDarknessStrength(0.2f, 1.0f, ESDVisionBlendEase::Linear, 2.0f);
+	TestFalse(TEXT("Starting direct darkness cancels the alpha transition"), VisionDirector->IsVisionBlending());
+	TestTrue(TEXT("Starting direct darkness preserves current darkness"), FMath::IsNearlyEqual(
+		VisionDirector->GetDarknessStrength(), DarknessBeforeAlphaBlend));
+
+	VisionDirector->CompleteDarknessStrengthBlend();
+	TestFalse(TEXT("Completing darkness clears the active transition"), VisionDirector->IsDarknessStrengthBlending());
+	TestEqual(TEXT("Completing darkness applies its destination"), VisionDirector->GetDarknessStrength(), 0.2f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownAudioConfigTest,
+	"ShowDown.Core.AudioConfig",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownAudioConfigTest::RunTest(const FString& Parameters)
+{
+	const UShowDownAudioConfig* AudioConfig = LoadObject<UShowDownAudioConfig>(
+		nullptr,
+		TEXT("/Game/Audio/DA_ShowDownAudioConfig.DA_ShowDownAudioConfig"));
+	TestNotNull(TEXT("The central ShowDown audio config asset loads"), AudioConfig);
+	if (!AudioConfig)
+	{
+		return false;
+	}
+
+	auto TestSoundPath = [this](const TCHAR* Label, const USoundBase* Sound, const TCHAR* ExpectedPath)
+	{
+		TestNotNull(Label, Sound);
+		if (Sound)
+		{
+			TestEqual(Label, Sound->GetPathName(), FString(ExpectedPath));
+		}
+	};
+
+	TestSoundPath(
+		TEXT("Crowd bed uses the imported ambience"),
+		AudioConfig->CrowdBedSound,
+		TEXT("/Game/Audio/SW_Crowd_Bed.SW_Crowd_Bed"));
+	TestSoundPath(
+		TEXT("Crowd shock uses the imported reaction"),
+		AudioConfig->CrowdShockedSound,
+		TEXT("/Game/Audio/SW_Crowd_Shocked.SW_Crowd_Shocked"));
+	TestSoundPath(
+		TEXT("Live shots use the imported metal hit layer"),
+		AudioConfig->GunHitLayerSound,
+		TEXT("/Game/Audio/SW_Gun_HitMetal.SW_Gun_HitMetal"));
+	TestSoundPath(
+		TEXT("UI buttons use the imported click"),
+		AudioConfig->ButtonClickSound,
+		TEXT("/Game/Audio/SW_UI_ButtonClick.SW_UI_ButtonClick"));
+	TestSoundPath(
+		TEXT("BGM uses the imported Boogie Down track"),
+		AudioConfig->BackgroundMusicSound,
+		TEXT("/Game/Audio/SW_BGM_BoogieDown.SW_BGM_BoogieDown"));
+
+	const USoundWave* CrowdBedWave = Cast<USoundWave>(AudioConfig->CrowdBedSound);
+	const USoundWave* BackgroundMusicWave = Cast<USoundWave>(AudioConfig->BackgroundMusicSound);
+	TestTrue(TEXT("Crowd bed is configured to loop"), CrowdBedWave && CrowdBedWave->IsLooping());
+	TestTrue(TEXT("Background music is configured to loop"), BackgroundMusicWave && BackgroundMusicWave->IsLooping());
+	TestTrue(
+		TEXT("Crowd idle stays quieter than the empty-chamber boost"),
+		AudioConfig->CrowdIdleVolume < AudioConfig->CrowdEmptyBoostVolume);
+	TestTrue(
+		TEXT("Live-round crowd shock is delayed after the gunshot"),
+		AudioConfig->CrowdShockDelay > 0.0f);
 	return true;
 }
 

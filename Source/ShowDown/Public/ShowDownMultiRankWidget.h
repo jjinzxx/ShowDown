@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Blueprint/UserWidget.h"
+#include "ShowDownUserWidget.h"
 #include "ShowDownMultiRankWidget.generated.h"
 
 class UTextBlock;
@@ -11,7 +11,7 @@ class UButton;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FShowDownMultiRankRequest);
 
 UCLASS()
-class SHOWDOWN_API UShowDownMultiRankWidget : public UUserWidget
+class SHOWDOWN_API UShowDownMultiRankWidget : public UShowDownUserWidget
 {
 	GENERATED_BODY()
 

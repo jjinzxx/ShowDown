@@ -1,11 +1,11 @@
 #pragma once
 #include "CoreMinimal.h"
-#include "Blueprint/UserWidget.h"
+#include "ShowDownUserWidget.h"
 #include "ShowDownPauseMenuWidget.generated.h"
 class UButton;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnPauseMenuAction);
 UCLASS()
-class SHOWDOWN_API UShowDownPauseMenuWidget : public UUserWidget
+class SHOWDOWN_API UShowDownPauseMenuWidget : public UShowDownUserWidget
 {
 	GENERATED_BODY()
 public:

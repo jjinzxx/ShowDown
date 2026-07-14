@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Blueprint/UserWidget.h"
+#include "ShowDownUserWidget.h"
 #include "ShowDownLeaveConfirmWidget.generated.h"
 
 class AShowDownPlayerController;
@@ -11,7 +11,7 @@ class UTextBlock;
 
 // C++-only confirmation dialog used before a multiplayer player leaves a match.
 UCLASS()
-class SHOWDOWN_API UShowDownLeaveConfirmWidget : public UUserWidget
+class SHOWDOWN_API UShowDownLeaveConfirmWidget : public UShowDownUserWidget
 {
 	GENERATED_BODY()
 
