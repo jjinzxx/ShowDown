@@ -9,6 +9,7 @@ class UAudioComponent;
 class UShowDownAudioConfig;
 class USoundBase;
 class USoundWave;
+struct FActorsInitializedParams;
 
 /**
  * Persistent local audio director for music, the crowd bed and presentation
@@ -60,6 +61,8 @@ public:
 
 private:
 	void HandlePostLoadMap(UWorld* LoadedWorld);
+	void HandleWorldInitializedActors(const FActorsInitializedParams& Params);
+	void EnsurePersistentLoops();
 	void StartPersistentLoops(UWorld* World);
 	void StopPersistentLoops();
 	bool CanPlayInWorld(const UWorld* World) const;
@@ -95,6 +98,7 @@ private:
 
 	TWeakObjectPtr<UWorld> PlaybackWorld;
 	FDelegateHandle PostLoadMapDelegateHandle;
+	FDelegateHandle WorldInitializedActorsDelegateHandle;
 	FTimerHandle CrowdShockTimerHandle;
 	FTimerHandle MixRestoreTimerHandle;
 

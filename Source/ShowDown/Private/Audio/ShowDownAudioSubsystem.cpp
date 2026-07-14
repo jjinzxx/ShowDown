@@ -34,11 +34,21 @@ void UShowDownAudioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("ShowDown audio config was not found at %s."), AudioConfigAssetPath);
 	}
+	else
+	{
+		// PIE can initialize this subsystem before its world permits audio playback.
+		// Keep a usable crowd target ready for the later world-ready callback or
+		// lazy-start path instead of leaving the loop permanently at zero.
+		CurrentCrowdConfigVolume = FMath::Max(0.0f, AudioConfig->CrowdIdleVolume);
+	}
 
 	RefreshUserVolumes();
 	PostLoadMapDelegateHandle = FCoreUObjectDelegates::PostLoadMapWithWorld.AddUObject(
 		this,
 		&UShowDownAudioSubsystem::HandlePostLoadMap);
+	WorldInitializedActorsDelegateHandle = FWorldDelegates::OnWorldInitializedActors.AddUObject(
+		this,
+		&UShowDownAudioSubsystem::HandleWorldInitializedActors);
 
 	if (UWorld* World = GetWorld())
 	{
@@ -52,6 +62,11 @@ void UShowDownAudioSubsystem::Deinitialize()
 	{
 		FCoreUObjectDelegates::PostLoadMapWithWorld.Remove(PostLoadMapDelegateHandle);
 		PostLoadMapDelegateHandle.Reset();
+	}
+	if (WorldInitializedActorsDelegateHandle.IsValid())
+	{
+		FWorldDelegates::OnWorldInitializedActors.Remove(WorldInitializedActorsDelegateHandle);
+		WorldInitializedActorsDelegateHandle.Reset();
 	}
 
 	ClearPresentationTimers();
@@ -69,6 +84,7 @@ USoundWave* UShowDownAudioSubsystem::GetButtonClickSound() const
 
 void UShowDownAudioSubsystem::NotifyGunRaised()
 {
+	EnsurePersistentLoops();
 	if (!AudioConfig || !CanPlayInWorld(ResolvePlaybackWorld()))
 	{
 		return;
@@ -83,6 +99,7 @@ void UShowDownAudioSubsystem::NotifyGunRaised()
 
 void UShowDownAudioSubsystem::NotifyGunFired()
 {
+	EnsurePersistentLoops();
 	UWorld* World = ResolvePlaybackWorld();
 	if (!AudioConfig || !CanPlayInWorld(World))
 	{
@@ -123,6 +140,7 @@ void UShowDownAudioSubsystem::NotifyGunFired()
 
 void UShowDownAudioSubsystem::NotifyGunEmptyFired()
 {
+	EnsurePersistentLoops();
 	if (!AudioConfig || !CanPlayInWorld(ResolvePlaybackWorld()))
 	{
 		return;
@@ -138,6 +156,7 @@ void UShowDownAudioSubsystem::NotifyGunEmptyFired()
 
 void UShowDownAudioSubsystem::NotifyGunPresentationFinished()
 {
+	EnsurePersistentLoops();
 	if (!AudioConfig)
 	{
 		return;
@@ -155,6 +174,7 @@ void UShowDownAudioSubsystem::NotifyGunPresentationFinished()
 
 void UShowDownAudioSubsystem::NotifyPhaseChanged(EShowDownPhase NewPhase)
 {
+	EnsurePersistentLoops();
 	if (!AudioConfig || NewPhase == EShowDownPhase::Roulette)
 	{
 		return;
@@ -166,6 +186,7 @@ void UShowDownAudioSubsystem::NotifyPhaseChanged(EShowDownPhase NewPhase)
 
 void UShowDownAudioSubsystem::SetCrowdBedEnabled(bool bEnabled, float FadeDuration)
 {
+	EnsurePersistentLoops();
 	bCrowdBedEnabled = bEnabled;
 	SetCrowdMixVolume(CurrentCrowdConfigVolume, FMath::Max(0.0f, FadeDuration));
 }
@@ -173,12 +194,14 @@ void UShowDownAudioSubsystem::SetCrowdBedEnabled(bool bEnabled, float FadeDurati
 void UShowDownAudioSubsystem::SetUserMusicVolume(float Volume)
 {
 	UserMusicVolume = ClampUserVolume(Volume);
+	EnsurePersistentLoops();
 	SetMusicMixMultiplier(CurrentMusicMixMultiplier, 0.0f);
 }
 
 void UShowDownAudioSubsystem::SetUserEffectVolume(float Volume)
 {
 	UserEffectVolume = ClampUserVolume(Volume);
+	EnsurePersistentLoops();
 	SetCrowdMixVolume(CurrentCrowdConfigVolume, 0.0f);
 	ApplyButtonClickVolume();
 }
@@ -226,6 +249,29 @@ void UShowDownAudioSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
 	{
 		RestoreIdleMix(AudioConfig->LoopFadeInDuration);
 	}
+}
+
+void UShowDownAudioSubsystem::HandleWorldInitializedActors(const FActorsInitializedParams& Params)
+{
+	// PIE duplicates an editor world instead of loading a map, so
+	// PostLoadMapWithWorld is not guaranteed to run after audio becomes valid.
+	HandlePostLoadMap(Params.World);
+}
+
+void UShowDownAudioSubsystem::EnsurePersistentLoops()
+{
+	UWorld* World = GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr;
+	if (!CanPlayInWorld(World))
+	{
+		World = ResolvePlaybackWorld();
+	}
+	if (!CanPlayInWorld(World))
+	{
+		return;
+	}
+
+	PlaybackWorld = World;
+	StartPersistentLoops(World);
 }
 
 void UShowDownAudioSubsystem::StartPersistentLoops(UWorld* World)
@@ -314,6 +360,7 @@ bool UShowDownAudioSubsystem::CanPlayInWorld(const UWorld* World) const
 	return !IsRunningCommandlet()
 		&& World
 		&& World->IsGameWorld()
+		&& World->bAllowAudioPlayback
 		&& World->GetGameInstance() == GetGameInstance()
 		&& World->GetNetMode() != NM_DedicatedServer;
 }

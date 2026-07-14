@@ -896,6 +896,12 @@ bool FShowDownAudioConfigTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Crowd bed is configured to loop"), CrowdBedWave && CrowdBedWave->IsLooping());
 	TestTrue(TEXT("Background music is configured to loop"), BackgroundMusicWave && BackgroundMusicWave->IsLooping());
 	TestTrue(
+		TEXT("Background music has an audible configured volume"),
+		AudioConfig->BackgroundMusicVolume > 0.0f);
+	TestTrue(
+		TEXT("The idle crowd bed has an audible configured volume"),
+		AudioConfig->CrowdIdleVolume > 0.0f);
+	TestTrue(
 		TEXT("Crowd idle stays quieter than the empty-chamber boost"),
 		AudioConfig->CrowdIdleVolume < AudioConfig->CrowdEmptyBoostVolume);
 	TestTrue(
