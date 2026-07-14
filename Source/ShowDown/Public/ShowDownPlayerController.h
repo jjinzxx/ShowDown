@@ -329,6 +329,7 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="ShowDown|Pause") void TogglePauseMenu();
 	UFUNCTION(BlueprintCallable, Category="ShowDown|Settings") void SetUserMouseSensitivity(float Multiplier);
+	UFUNCTION(BlueprintCallable, Category="ShowDown|Settings") void SetUserBrightness(float Multiplier);
 
 	UFUNCTION(Server, Reliable)
 	void ServerSubmitSelectedCard(ACard* SelectedCard);
@@ -571,6 +572,7 @@ private:
 	FVector FixedCameraBaseLocation = FVector::ZeroVector;
 	float FixedCameraLookSensitivity = 0.2f;
 	float UserMouseSensitivityMultiplier = 1.0f;
+	float UserBrightnessMultiplier = 1.0f;
 	float FixedCameraMinPitch = -35.0f;
 	float FixedCameraMaxPitch = 35.0f;
 	float FixedCameraMinYawOffset = -45.0f;

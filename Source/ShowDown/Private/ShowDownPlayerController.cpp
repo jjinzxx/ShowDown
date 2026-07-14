@@ -40,6 +40,7 @@
 #include "ShowDownMultiRankWidget.h"
 #include "ShowDownTransitionWidget.h"
 #include "ShowDownVoiceSubsystem.h"
+#include "Slate/SceneViewport.h"
 #include "UObject/ConstructorHelpers.h"
 #include "SlateOptMacros.h"
 #include "Styling/CoreStyle.h"
@@ -260,11 +261,14 @@ void AShowDownPlayerController::BeginPlay()
 	Super::BeginPlay();
 	GConfig->GetFloat(TEXT("ShowDown.UserSettings"), TEXT("MouseSensitivity"), UserMouseSensitivityMultiplier, GGameUserSettingsIni);
 	UserMouseSensitivityMultiplier = FMath::Clamp(UserMouseSensitivityMultiplier, 0.2f, 2.0f);
+	GConfig->GetFloat(TEXT("ShowDown.UserSettings"), TEXT("Brightness"), UserBrightnessMultiplier, GGameUserSettingsIni);
+	UserBrightnessMultiplier = FMath::Clamp(UserBrightnessMultiplier, 0.5f, 1.5f);
 
 	if (!CanCreateLocalPlayerWidgets())
 	{
 		return;
 	}
+	SetUserBrightness(UserBrightnessMultiplier);
 
 	bShowMouseCursor = false;
 	bEnableClickEvents = false;
@@ -3479,6 +3483,25 @@ void AShowDownPlayerController::TogglePauseMenu()
 void AShowDownPlayerController::SetUserMouseSensitivity(float Multiplier)
 {
 	UserMouseSensitivityMultiplier = FMath::Clamp(Multiplier, 0.2f, 2.0f);
+}
+
+void AShowDownPlayerController::SetUserBrightness(float Multiplier)
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	UserBrightnessMultiplier = FMath::Clamp(Multiplier, 0.5f, 1.5f);
+
+	UGameViewportClient* GameViewportClient = GetWorld() ? GetWorld()->GetGameViewport() : nullptr;
+	FSceneViewport* SceneViewport = GameViewportClient ? GameViewportClient->GetGameViewport() : nullptr;
+	if (SceneViewport)
+	{
+		// Keep the engine-wide gamma neutral. A viewport override changes only the
+		// game image, so PIE no longer changes the surrounding editor Slate UI.
+		SceneViewport->SetGammaOverride(2.2f * UserBrightnessMultiplier);
+	}
 }
 
 void AShowDownPlayerController::ResumeFromPauseMenu()

@@ -342,10 +342,11 @@ void UShowDownSettingsWidget::HandleApplyClicked()
 		GConfig->SetFloat(UserSettingsSection,TEXT("EffectVolume"),PendingEffectVolume,GGameUserSettingsIni);
 		GConfig->SetFloat(UserSettingsSection,TEXT("DialogVolume"),PendingDialogVolume,GGameUserSettingsIni);
 		GConfig->Flush(false,GGameUserSettingsIni);
-		// Unreal's neutral display gamma is 2.2. The UI exposes a relative
-		// brightness multiplier so that 1.0 always means the unchanged image.
-		if(GEngine) GEngine->DisplayGamma=2.2f*PendingBrightness;
-		if(AShowDownPlayerController* Controller=Cast<AShowDownPlayerController>(GetOwningPlayer())) Controller->SetUserMouseSensitivity(PendingMouseSensitivity);
+		if(AShowDownPlayerController* Controller=Cast<AShowDownPlayerController>(GetOwningPlayer()))
+		{
+			Controller->SetUserBrightness(PendingBrightness);
+			Controller->SetUserMouseSensitivity(PendingMouseSensitivity);
+		}
 		if (Text_Status) Text_Status->SetText(FText::FromString(TEXT("Settings applied")));
 	}
 }
