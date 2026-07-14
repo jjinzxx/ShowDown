@@ -34,7 +34,9 @@
 #include "ShowDownGameModeBase.h"
 #include "ShowDownGameStateBase.h"
 #include "ShowDownLeaveConfirmWidget.h"
+#include "ShowDownLoadingScreen.h"
 #include "ShowDownMultiRankWidget.h"
+#include "ShowDownTransitionWidget.h"
 #include "ShowDownVoiceSubsystem.h"
 #include "UObject/ConstructorHelpers.h"
 #include "SlateOptMacros.h"
@@ -256,6 +258,11 @@ void AShowDownPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason
 	}
 	SetHoveredCard(nullptr);
 	RemoveCenterCrosshairWidget();
+	if (MultiplayerLoadingWidget)
+	{
+		MultiplayerLoadingWidget->RemoveFromParent();
+		MultiplayerLoadingWidget = nullptr;
+	}
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -292,6 +299,16 @@ void AShowDownPlayerController::ClientEnterMultiplayerGameplay_Implementation()
 	ChatWidget = nullptr;
 	LeaveConfirmWidget = nullptr;
 	MultiplayerRankWidget = nullptr;
+	MultiplayerLoadingWidget = CreateWidget<UShowDownTransitionWidget>(this, UShowDownTransitionWidget::StaticClass());
+	if (MultiplayerLoadingWidget)
+	{
+		MultiplayerLoadingWidget->SetTransitionText(
+			TEXT("플레이 준비 중"),
+			TEXT("좌석과 카메라를 안전하게 연결하고 있습니다."));
+		MultiplayerLoadingWidget->AddToViewport(10000);
+	}
+	MultiplayerLoadingElapsedTime = 0.0f;
+	bMultiplayerLoadingDelayMessageShown = false;
 	bChatOpen = false;
 
 	bHandleShowDownGameplayInput = false;
@@ -454,6 +471,9 @@ void AShowDownPlayerController::ClientLeaveMultiplayerRoomToHub_Implementation()
 		return;
 	}
 
+	ShowDownLoadingScreen::Prepare(
+		TEXT("메인 화면으로 돌아가는 중"),
+		TEXT("네트워크 연결을 정리하고 있습니다."));
 	ClientTravel(TEXT("/Game/Maps/L_ShowdownMain"), TRAVEL_Absolute);
 }
 
@@ -533,6 +553,11 @@ bool AShowDownPlayerController::TryApplyPendingMultiplayerCharacterCamera()
 	}
 	CreateCenterCrosshairWidget();
 	UpdateCenterCrosshairVisibility();
+	if (MultiplayerLoadingWidget)
+	{
+		MultiplayerLoadingWidget->Dismiss(0.22f);
+		MultiplayerLoadingWidget = nullptr;
+	}
 	ClientShowStatusMessage(TEXT("Multiplayer character head camera ready."));
 	UE_LOG(
 		LogTemp,
@@ -548,6 +573,17 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime);
 	UpdateGunShotCameraOverride(DeltaTime);
+	if (MultiplayerLoadingWidget)
+	{
+		MultiplayerLoadingElapsedTime += FMath::Max(0.0f, DeltaTime);
+		if (!bMultiplayerLoadingDelayMessageShown && MultiplayerLoadingElapsedTime >= 8.0f)
+		{
+			bMultiplayerLoadingDelayMessageShown = true;
+			MultiplayerLoadingWidget->SetTransitionText(
+				TEXT("플레이 준비가 지연되는 중"),
+				TEXT("좌석과 캐릭터 동기화를 다시 확인하고 있습니다."));
+		}
+	}
 
 	if (bPendingMultiplayerSeatCamera)
 	{

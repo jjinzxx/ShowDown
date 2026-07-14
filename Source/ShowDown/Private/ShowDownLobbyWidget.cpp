@@ -96,6 +96,19 @@ void UShowDownLobbyWidget::ShowStatusMessage(const FString& Message, const FLine
 	}
 }
 
+void UShowDownLobbyWidget::SetInteractionPending(bool bPending)
+{
+	bInteractionPending = bPending;
+	if (Button_Start)
+	{
+		Button_Start->SetIsEnabled(!bPending && HasMinimumPlayersToStart());
+	}
+	if (Button_Leave)
+	{
+		Button_Leave->SetIsEnabled(!bPending);
+	}
+}
+
 void UShowDownLobbyWidget::BuildDefaultLayout()
 {
 	if (!WidgetTree)
@@ -248,6 +261,10 @@ void UShowDownLobbyWidget::RefreshParticipantText()
 		: nullptr;
 	if (!ShowDownGameState)
 	{
+		if (Button_Start)
+		{
+			Button_Start->SetIsEnabled(false);
+		}
 		const int32 ExpectedPlayerCount = GetLobbyExpectedPlayerCount(GetGameInstance());
 		const FString LoadingText = FString::Printf(TEXT("참여자 (0/%d)\n참가자 정보를 불러오는 중..."), ExpectedPlayerCount);
 		if (CachedParticipantText != LoadingText)
@@ -265,6 +282,10 @@ void UShowDownLobbyWidget::RefreshParticipantText()
 	});
 
 	const int32 ExpectedPlayerCount = GetLobbyExpectedPlayerCount(GetGameInstance());
+	if (Button_Start)
+	{
+		Button_Start->SetIsEnabled(!bInteractionPending && Slots.Num() >= 2);
+	}
 	FString ParticipantText = FString::Printf(TEXT("참여자 (%d/%d)"), Slots.Num(), ExpectedPlayerCount);
 	for (const FShowDownNetworkPlayerSlot& PlayerSlot : Slots)
 	{
@@ -279,13 +300,38 @@ void UShowDownLobbyWidget::RefreshParticipantText()
 	}
 }
 
+bool UShowDownLobbyWidget::HasMinimumPlayersToStart() const
+{
+	const AShowDownGameStateBase* ShowDownGameState = GetWorld()
+		? GetWorld()->GetGameState<AShowDownGameStateBase>()
+		: nullptr;
+	return ShowDownGameState && ShowDownGameState->PlayerSlots.Num() >= 2;
+}
+
 void UShowDownLobbyWidget::HandleStartClicked()
 {
+	if (bInteractionPending)
+	{
+		return;
+	}
+	if (!HasMinimumPlayersToStart())
+	{
+		ShowStatusMessage(TEXT("게임을 시작하려면 최소 2명이 필요합니다."), FLinearColor::Red);
+		return;
+	}
+
+	SetInteractionPending(true);
 	ShowStatusMessage(TEXT("게임을 시작하는 중..."), FLinearColor::Yellow);
 	OnStartRequested.Broadcast();
 }
 
 void UShowDownLobbyWidget::HandleLeaveClicked()
 {
+	if (bInteractionPending)
+	{
+		return;
+	}
+
+	SetInteractionPending(true);
 	OnLeaveRequested.Broadcast();
 }

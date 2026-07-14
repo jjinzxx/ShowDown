@@ -23,6 +23,7 @@ class UShowDownMultiRankWidget;
 class UShowDownVoiceSubsystem;
 class UShowDownPauseMenuWidget;
 class UShowDownSettingsWidget;
+class UShowDownTransitionWidget;
 
 struct FSDPrimitiveCustomDepthState
 {
@@ -495,6 +496,12 @@ private:
 
 	UPROPERTY()
 	UShowDownMultiRankWidget* MultiplayerRankWidget = nullptr;
+
+	UPROPERTY()
+	UShowDownTransitionWidget* MultiplayerLoadingWidget = nullptr;
+	float MultiplayerLoadingElapsedTime = 0.0f;
+	bool bMultiplayerLoadingDelayMessageShown = false;
+
 	UPROPERTY() UShowDownPauseMenuWidget* PauseMenuWidget = nullptr;
 	UPROPERTY() UShowDownSettingsWidget* PauseSettingsWidget = nullptr;
 	bool bPauseMenuOpen = false;

@@ -43,6 +43,8 @@
 
 namespace
 {
+	constexpr double MultiplayerStartWaitTimeoutSeconds = 15.0;
+
 	int32 GetSeatIndexFromPlayerSlot(EShowDownPlayerSlot Slot)
 	{
 		switch (Slot)
@@ -485,6 +487,9 @@ void AShowDownGameModeBase::StartMultiplayerGame()
 	ConfigureMultiplayerCharacters(TArray<ASDPlayerState*>());
 	FindCollector();
 	RefreshNetworkPlayerSlots();
+	MultiplayerStartDeadlineSeconds = GetWorld()
+		? GetWorld()->GetTimeSeconds() + MultiplayerStartWaitTimeoutSeconds
+		: 0.0;
 	GetWorldTimerManager().ClearTimer(MultiplayerStartTimerHandle);
 	GetWorldTimerManager().SetTimer(
 		MultiplayerStartTimerHandle,
@@ -596,6 +601,7 @@ void AShowDownGameModeBase::ResetForHubReturn()
 	ClearInitialCardDealPresentation();
 	bInitialCardDealPresentationPlayed = false;
 	bSinglePlayerMatchStarted = false;
+	MultiplayerStartDeadlineSeconds = 0.0;
 	ClearBetBulletPresentation();
 	if (ActiveSelfShotGunActor)
 	{
@@ -6001,8 +6007,36 @@ void AShowDownGameModeBase::TryStartMultiplayerMatch()
 			RequiredPlayerCount = FMath::Clamp(EosSubsystem->GetExpectedLobbyPlayerCount(), 2, 4);
 		}
 	}
+	// In the current same-world lobby flow every connected player is already in
+	// this GameMode. If somebody leaves after the host clicks Start, continue
+	// with the remaining valid group instead of waiting for a player who cannot
+	// reconnect to the pending match.
+	if (Players.Num() >= 2
+		&& Players.Num() < RequiredPlayerCount
+		&& UGameplayStatics::GetActorOfClass(GetWorld(), AShowDownHubFlowManager::StaticClass()))
+	{
+		RequiredPlayerCount = Players.Num();
+	}
 	if (Players.Num() < RequiredPlayerCount)
 	{
+		if (MultiplayerStartDeadlineSeconds > 0.0
+			&& GetWorld()
+			&& GetWorld()->GetTimeSeconds() >= MultiplayerStartDeadlineSeconds)
+		{
+			GetWorldTimerManager().ClearTimer(MultiplayerStartTimerHandle);
+			MultiplayerStartDeadlineSeconds = 0.0;
+			const FString TimeoutMessage = TEXT("참가자 연결을 확인하지 못해 게임 시작을 취소했습니다. 로비에서 다시 시도해주세요.");
+			NotifyMultiplayerStatus(TimeoutMessage);
+			if (UGameInstance* GameInstance = GetGameInstance())
+			{
+				if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
+				{
+					EosSubsystem->AbortHostedGameStart(TimeoutMessage);
+				}
+			}
+			return;
+		}
+
 		int32 ControllerCount = 0;
 		if (UWorld* World = GetWorld())
 		{
@@ -6034,6 +6068,7 @@ void AShowDownGameModeBase::TryStartMultiplayerMatch()
 void AShowDownGameModeBase::StartMultiplayerMatch(const TArray<ASDPlayerState*>& Players)
 {
 	GetWorldTimerManager().ClearTimer(MultiplayerStartTimerHandle);
+	MultiplayerStartDeadlineSeconds = 0.0;
 	ClearMultiplayerRoundTimers();
 	ClearCardRevealPresentationTimers();
 	ClearInitialCardDealPresentation();

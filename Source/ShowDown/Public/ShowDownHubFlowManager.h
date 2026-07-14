@@ -17,10 +17,20 @@ class UShowDownMultiplayerWidget;
 class UShowDownShopWidget;
 class UShowDownRankWidget;
 class UShowDownSettingsWidget;
+class UShowDownTransitionWidget;
 class UUserWidget;
 class AShowDownGameStateBase;
 class AShowDownShopPreviewActor;
 class UShowDownCharacterSkinCatalog;
+
+enum class EShowDownHubTransitionOperation : uint8
+{
+	None,
+	CreateRoom,
+	JoinRoom,
+	StartGame,
+	LeaveRoom
+};
 
 UENUM(BlueprintType)
 enum class EShowDownHubFlowScreen : uint8
@@ -123,6 +133,9 @@ private:
 
 	UPROPERTY(EditAnywhere, Category = "ShowDown|UI")
 	TSubclassOf<UShowDownSettingsWidget> SettingsWidgetClass;
+
+	UPROPERTY(EditDefaultsOnly, Category = "ShowDown|UI")
+	TSubclassOf<UShowDownTransitionWidget> TransitionWidgetClass;
 
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera")
 	ACameraActor* LoginCamera;
@@ -238,9 +251,19 @@ private:
 	UUserWidget* ActiveWidget;
 
 	UPROPERTY(Transient)
+	TObjectPtr<UShowDownTransitionWidget> TransitionWidget;
+
+	UPROPERTY(Transient)
 	TObjectPtr<AShowDownShopPreviewActor> ShopPreviewActor;
 
+	EShowDownHubTransitionOperation TransitionOperation = EShowDownHubTransitionOperation::None;
+
 	void SetActiveWidget(UUserWidget* NextWidget);
+	void ShowTransitionOverlay(
+		EShowDownHubTransitionOperation Operation,
+		const FString& Title,
+		const FString& Detail);
+	void HideTransitionOverlay();
 	void BindTopNavigation(UUserWidget* Widget);
 	void SetUiOnlyInput(UUserWidget* FocusWidget);
 
@@ -297,6 +320,9 @@ private:
 
 	UFUNCTION()
 	void HandleEosSessionResult(bool bSuccess, const FString& Message);
+
+	UFUNCTION()
+	void HandleManagedTravelFailed(const FString& Message, bool bReopenMultiplayerMenu);
 
 	UFUNCTION()
 	void HandleLobbyStartRequested();

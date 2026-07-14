@@ -529,6 +529,7 @@ private:
 
 	FTimerHandle MultiplayerStartTimerHandle;
 	FTimerHandle MultiplayerGunResultFallbackTimerHandle;
+	double MultiplayerStartDeadlineSeconds = 0.0;
 	bool bMultiplayerMatchStarted = false;
 	bool bMultiplayerRoundResolving = false;
 	

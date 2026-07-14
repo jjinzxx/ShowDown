@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "Engine/TimerHandle.h"
 #include "ShowDownEosSubsystem.h"
 #include "ShowDownMultiplayerWidget.generated.h"
 
@@ -82,6 +83,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Multiplayer")
 	void SetPublicRooms(const TArray<FShowDownPublicRoomInfo>& Rooms);
 
+	/** Blocks duplicate actions while an EOS create/join request is pending. */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Multiplayer")
+	void SetInteractionPending(bool bPending);
+
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 	virtual void NativeConstruct() override;
@@ -117,11 +122,19 @@ private:
 
 	UPROPERTY()
 	TArray<UShowDownPublicRoomEntryWidget*> PublicRoomEntries;
+	TArray<FShowDownPublicRoomInfo> CachedPublicRooms;
+	bool bHasPublicRoomSnapshot = false;
+
+	FTimerHandle PublicRoomAutoRefreshTimerHandle;
+	bool bInteractionPending = false;
 
 	void BuildDefaultLayout();
 	UButton* CreateMenuButton(const FString& Label);
 	UTextBlock* CreateTextBlock(const FString& Text, int32 FontSize, const FLinearColor& Color, ETextJustify::Type Justification = ETextJustify::Left);
 	void SetButtonColor(UButton* Button, const FLinearColor& Color);
+	void StartPublicRoomAutoRefresh();
+	void StopPublicRoomAutoRefresh();
+	void HandlePublicRoomAutoRefresh();
 
 	UFUNCTION()
 	void HandleHostClicked();

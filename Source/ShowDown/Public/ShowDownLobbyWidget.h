@@ -27,6 +27,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Lobby")
 	void ShowStatusMessage(const FString& Message, const FLinearColor& Color);
 
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Lobby")
+	void SetInteractionPending(bool bPending);
+
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 	virtual void NativeConstruct() override;
@@ -39,6 +42,7 @@ private:
 	FString CachedParticipantText;
 	float ParticipantRefreshElapsed = 0.0f;
 	bool bCachedIsHost = false;
+	bool bInteractionPending = false;
 
 	UPROPERTY(meta=(BindWidget))
 	UTextBlock* Text_Title;
@@ -65,6 +69,7 @@ private:
 	UButton* CreateMenuButton(const FString& Label);
 	void RefreshLobbyText();
 	void RefreshParticipantText();
+	bool HasMinimumPlayersToStart() const;
 
 	UFUNCTION()
 	void HandleStartClicked();

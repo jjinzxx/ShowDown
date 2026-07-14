@@ -12,8 +12,10 @@
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
+#include "Engine/World.h"
 #include "Styling/CoreStyle.h"
 #include "Styling/SlateTypes.h"
+#include "TimerManager.h"
 
 namespace
 {
@@ -45,6 +47,8 @@ const FLinearColor SectionColor(0.0f, 0.0f, 0.0f, 0.58f);
 const FLinearColor PrimaryButtonColor(0.0f, 0.0f, 0.0f, 0.82f);
 const FLinearColor DarkButtonColor(0.0f, 0.0f, 0.0f, 0.72f);
 const FLinearColor TextMutedColor(0.67f, 0.74f, 0.76f, 1.0f);
+constexpr float PublicRoomAutoRefreshIntervalSeconds = 5.0f;
+constexpr float PublicRoomInitialRefreshDelaySeconds = 0.1f;
 }
 
 void UShowDownPublicRoomEntryWidget::SetRoomInfo(const FShowDownPublicRoomInfo& InRoomInfo)
@@ -199,12 +203,15 @@ void UShowDownMultiplayerWidget::NativeConstruct()
 		Button_Back->OnClicked.AddDynamic(this, &UShowDownMultiplayerWidget::HandleBackClicked);
 	}
 
-	ShowStatusMessage(TEXT("공개방을 새로고침하거나 방 코드를 입력하세요."), FLinearColor::White);
-	OnRefreshRoomsRequested.Broadcast();
+	ShowStatusMessage(TEXT("공개방 목록을 불러오는 중..."), FLinearColor::White);
+	SetInteractionPending(false);
+	StartPublicRoomAutoRefresh();
 }
 
 void UShowDownMultiplayerWidget::NativeDestruct()
 {
+	StopPublicRoomAutoRefresh();
+
 	if (Button_Host)
 	{
 		Button_Host->OnClicked.RemoveDynamic(this, &UShowDownMultiplayerWidget::HandleHostClicked);
@@ -249,6 +256,35 @@ void UShowDownMultiplayerWidget::SetPublicRooms(const TArray<FShowDownPublicRoom
 		return;
 	}
 
+	bool bRoomsUnchanged = bHasPublicRoomSnapshot && CachedPublicRooms.Num() == Rooms.Num();
+	if (bRoomsUnchanged)
+	{
+		for (int32 Index = 0; Index < Rooms.Num(); ++Index)
+		{
+			const FShowDownPublicRoomInfo& Previous = CachedPublicRooms[Index];
+			const FShowDownPublicRoomInfo& Current = Rooms[Index];
+			if (Previous.SearchResultIndex != Current.SearchResultIndex
+				|| Previous.RoomCode != Current.RoomCode
+				|| Previous.RoomName != Current.RoomName
+				|| Previous.CurrentPlayers != Current.CurrentPlayers
+				|| Previous.MaxPlayers != Current.MaxPlayers)
+			{
+				bRoomsUnchanged = false;
+				break;
+			}
+		}
+	}
+	if (bRoomsUnchanged)
+	{
+		return;
+	}
+
+	const float PreviousScrollOffset = bHasPublicRoomSnapshot
+		? ScrollBox_PublicRooms->GetScrollOffset()
+		: 0.0f;
+	CachedPublicRooms = Rooms;
+	bHasPublicRoomSnapshot = true;
+
 	ScrollBox_PublicRooms->ClearChildren();
 	PublicRoomEntries.Reset();
 
@@ -272,10 +308,12 @@ void UShowDownMultiplayerWidget::SetPublicRooms(const TArray<FShowDownPublicRoom
 		}
 
 		EntryWidget->SetRoomInfo(RoomInfo);
+		EntryWidget->SetIsEnabled(!bInteractionPending);
 		EntryWidget->OnJoinRequested.AddDynamic(this, &UShowDownMultiplayerWidget::HandlePublicRoomJoinRequested);
 		PublicRoomEntries.Add(EntryWidget);
 		ScrollBox_PublicRooms->AddChild(EntryWidget);
 	}
+	ScrollBox_PublicRooms->SetScrollOffset(PreviousScrollOffset);
 }
 
 void UShowDownMultiplayerWidget::BuildDefaultLayout()
@@ -504,24 +542,108 @@ void UShowDownMultiplayerWidget::SetButtonColor(UButton* Button, const FLinearCo
 	}
 }
 
+void UShowDownMultiplayerWidget::SetInteractionPending(bool bPending)
+{
+	bInteractionPending = bPending;
+
+	for (UButton* Button : {Button_Host, Button_PrivateHost, Button_Join, Button_RefreshRooms, Button_Back})
+	{
+		if (Button)
+		{
+			Button->SetIsEnabled(!bPending);
+		}
+	}
+
+	if (EditableTextBox_RoomCode)
+	{
+		EditableTextBox_RoomCode->SetIsEnabled(!bPending);
+	}
+	if (EditableTextBox_RoomName)
+	{
+		EditableTextBox_RoomName->SetIsEnabled(!bPending);
+	}
+
+	for (UShowDownPublicRoomEntryWidget* Entry : PublicRoomEntries)
+	{
+		if (Entry)
+		{
+			Entry->SetIsEnabled(!bPending);
+		}
+	}
+
+	if (bPending)
+	{
+		StopPublicRoomAutoRefresh();
+	}
+	else if (IsInViewport())
+	{
+		StartPublicRoomAutoRefresh();
+	}
+}
+
+void UShowDownMultiplayerWidget::StartPublicRoomAutoRefresh()
+{
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(PublicRoomAutoRefreshTimerHandle);
+		World->GetTimerManager().SetTimer(
+			PublicRoomAutoRefreshTimerHandle,
+			this,
+			&UShowDownMultiplayerWidget::HandlePublicRoomAutoRefresh,
+			PublicRoomAutoRefreshIntervalSeconds,
+			true,
+			PublicRoomInitialRefreshDelaySeconds);
+	}
+}
+
+void UShowDownMultiplayerWidget::StopPublicRoomAutoRefresh()
+{
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(PublicRoomAutoRefreshTimerHandle);
+	}
+}
+
+void UShowDownMultiplayerWidget::HandlePublicRoomAutoRefresh()
+{
+	OnRefreshRoomsRequested.Broadcast();
+}
+
 void UShowDownMultiplayerWidget::HandleHostClicked()
 {
+	if (bInteractionPending)
+	{
+		return;
+	}
+
 	const FString RoomName = EditableTextBox_RoomName ? EditableTextBox_RoomName->GetText().ToString().TrimStartAndEnd() : TEXT("");
 	if (RoomName.IsEmpty()) { ShowStatusMessage(TEXT("방 이름을 입력하세요."), FLinearColor::Red); return; }
+	StopPublicRoomAutoRefresh();
 	ShowStatusMessage(TEXT("공개방을 생성하는 중..."), FLinearColor::Yellow);
 	OnHostRequested.Broadcast(RoomName);
 }
 
 void UShowDownMultiplayerWidget::HandlePrivateHostClicked()
 {
+	if (bInteractionPending)
+	{
+		return;
+	}
+
 	const FString RoomName = EditableTextBox_RoomName ? EditableTextBox_RoomName->GetText().ToString().TrimStartAndEnd() : TEXT("");
 	if (RoomName.IsEmpty()) { ShowStatusMessage(TEXT("방 이름을 입력하세요."), FLinearColor::Red); return; }
+	StopPublicRoomAutoRefresh();
 	ShowStatusMessage(TEXT("비공개방을 생성하는 중..."), FLinearColor::Yellow);
 	OnPrivateHostRequested.Broadcast(RoomName);
 }
 
 void UShowDownMultiplayerWidget::HandleJoinClicked()
 {
+	if (bInteractionPending)
+	{
+		return;
+	}
+
 	const FString RoomCode = EditableTextBox_RoomCode
 		? EditableTextBox_RoomCode->GetText().ToString().TrimStartAndEnd()
 		: TEXT("");
@@ -532,23 +654,36 @@ void UShowDownMultiplayerWidget::HandleJoinClicked()
 		return;
 	}
 
+	StopPublicRoomAutoRefresh();
 	ShowStatusMessage(TEXT("방 코드로 검색 중..."), FLinearColor::Yellow);
 	OnJoinRequested.Broadcast(RoomCode);
 }
 
 void UShowDownMultiplayerWidget::HandleRefreshRoomsClicked()
 {
+	if (bInteractionPending)
+	{
+		return;
+	}
+
 	ShowStatusMessage(TEXT("공개방 목록을 새로고침하는 중..."), FLinearColor::Yellow);
 	OnRefreshRoomsRequested.Broadcast();
 }
 
 void UShowDownMultiplayerWidget::HandlePublicRoomJoinRequested(int32 SearchResultIndex)
 {
+	if (bInteractionPending)
+	{
+		return;
+	}
+
+	StopPublicRoomAutoRefresh();
 	ShowStatusMessage(TEXT("공개방에 참가하는 중..."), FLinearColor::Yellow);
 	OnJoinPublicRoomRequested.Broadcast(SearchResultIndex);
 }
 
 void UShowDownMultiplayerWidget::HandleBackClicked()
 {
+	StopPublicRoomAutoRefresh();
 	OnBackRequested.Broadcast();
 }
