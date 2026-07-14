@@ -23,6 +23,8 @@
 | 플레이어/상대 자리의 손패/이마 기준점 | `BP_PlayerHandAnchor`, `BP_PlayerForeheadAnchor`, `BP_OpponentHandAnchor`, `BP_OpponentForeheadAnchor` | 액터 위치/회전, `ShowDown|Placement`, `ShowDown|Hand Layout` |
 | 스테이지별 목숨/최소 베팅/AI 성향 | `BP_ShowDownModeBase` 또는 `ShowDownGameModeBase` | `StageRules`, `StartingLives`, `MinimumBet`, `CollectorBluffRate`, `CollectorAggression`, `bSevenFoldLoadsSix` |
 | 라운드 공개 후 자동 진행 여부 | `BP_ShowDownModeBase` | `bAutoAdvanceRevealWithoutPresentation`, `RevealAutoAdvanceSeconds` |
+| 멀티 베팅/공개/총격 사이 템포 | `BP_ShowDownModeBase` | `MultiplayerBetActionIntervalSeconds`, `MultiplayerPreRevealDelaySeconds`, `MultiplayerPostRevealHoldSeconds`, `MultiplayerPostShotPauseSeconds` |
+| 멀티 공개 카드 사이 간격 | `BP_ShowDownModeBase` | `MultiplayerCardRevealGap` |
 | 중앙 십자선/상호작용 윤곽선 | `BP_ShowDownPlayerController` 또는 `ShowDownPlayerController` | `Input|Crosshair`, `Input|Interactable Outline` |
 | 멀티 좌석 카메라 | 레벨의 `CameraActor` 태그 | `MP_SeatCamera_1`, `MP_SeatCamera_2` ... 태그, 없으면 코드가 fallback 카메라 생성 |
 
@@ -292,7 +294,17 @@
 - `bAutoStartOnBeginPlay`: BeginPlay 자동 시작
 - `bAutoAdvanceRevealWithoutPresentation`: 공개 연출이 없어도 자동 진행
 - `RevealAutoAdvanceSeconds`: 자동 진행 대기 시간
+- `MultiplayerCardRevealGap`: 멀티 공개 카드 중 가장 가까운 두 카드의 목표 간격. 기본값 `20.0`
+- `MultiplayerBetActionIntervalSeconds`: 다음 플레이어에게 베팅 차례가 넘어가기 전 대기. 기본값 `0.8초`
+- `MultiplayerPreRevealDelaySeconds`: 전원 베팅 완료 후 카드 공개 시작 전 대기. 기본값 `1.2초`
+- `MultiplayerPostRevealHoldSeconds`: 공개 카드가 모두 정착한 뒤 첫 총격 전 대기. 기본값 `1.5초`
+- `MultiplayerPostShotPauseSeconds`: 연속 총격 사이와 마지막 총격 후 다음 흐름 전 대기. 기본값 `0.5초`
 - `bShowGameFlowDebugMessages`: 게임 흐름 디버그 메시지
+
+멀티 흐름:
+- 일반 베팅은 행동을 보여 준 뒤 `0.8초` 후 다음 차례로 넘어갑니다. 마지막 베팅에서는 이 값을 더하지 않고 `1.2초` 후 공개를 시작합니다.
+- 폴드는 폴드 확정 → 해당 카드 공개 → 카드 정착 후 대기 → 폴드한 플레이어 총격 순서입니다. 총격 뒤 한 명만 남으면 라운드를 끝내고, 둘 이상이면 남은 베팅 상태에 따라 다음 차례 또는 전체 공개로 이어집니다.
+- `MultiplayerCardRevealGap`은 테이블 중심 반지름이 아니라 실제 카드 사이 간격입니다. 좌석이 마주 보거나 이웃해 있어도 가장 가까운 공개 카드 간격이 이 값에 맞춰집니다.
 
 ## 허브, UI, 결과 연출
 

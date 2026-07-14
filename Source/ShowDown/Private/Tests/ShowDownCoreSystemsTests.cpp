@@ -10,6 +10,7 @@
 #include "Presentation/SDVisionDirector.h"
 #include "RoundResolver.h"
 #include "RouletteSystem.h"
+#include "SDMultiplayerRoundFlow.h"
 #include "ShowDownCharacter.h"
 #include "ShowDownCharacterSkinCatalog.h"
 #include "ShowDownGameModeBase.h"
@@ -84,6 +85,47 @@ bool FShowDownRoundResolverTest::RunTest(const FString& Parameters)
 		TEXT("Normal fold load is clamped"),
 		RoundResolver->GetFoldLoadCount(3, 9, true),
 		6);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownMultiplayerRoundFlowTest,
+	"ShowDown.Core.MultiplayerRoundFlow",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownMultiplayerRoundFlowTest::RunTest(const FString& Parameters)
+{
+	using namespace ShowDownMultiplayerRoundFlow;
+
+	TestEqual(
+		TEXT("No active player ends the round"),
+		ResolvePostBetDecision(0, false),
+		ESDMultiplayerPostBetDecision::EndRound);
+	TestEqual(
+		TEXT("A lone survivor ends without exposing their card"),
+		ResolvePostBetDecision(1, true),
+		ESDMultiplayerPostBetDecision::EndRound);
+	TestEqual(
+		TEXT("Multiple unfinished players continue betting"),
+		ResolvePostBetDecision(3, false),
+		ESDMultiplayerPostBetDecision::ContinueBetting);
+	TestEqual(
+		TEXT("Multiple completed players enter showdown"),
+		ResolvePostBetDecision(2, true),
+		ESDMultiplayerPostBetDecision::RevealCards);
+
+	TestEqual(
+		TEXT("Settled-card hold follows the reveal presentation"),
+		CalculateRevealToRouletteDelay(2.25f, 1.5f, true),
+		3.75f);
+	TestEqual(
+		TEXT("No revealed card does not add an artificial hold"),
+		CalculateRevealToRouletteDelay(0.0f, 1.5f, false),
+		0.0f);
+	TestEqual(
+		TEXT("Negative timing input is clamped"),
+		CalculateRevealToRouletteDelay(-1.0f, -2.0f, true),
+		0.0f);
 	return true;
 }
 
@@ -216,24 +258,138 @@ bool FShowDownCardRevealLayoutTest::RunTest(const FString& Parameters)
 			Transform.GetRotation().Equals(ExpectedRotation, KINDA_SMALL_NUMBER));
 	}
 
-	const float TwoPlayerRadius = ShowDownCardRevealLayout::ResolveRadialCenterDistance(
+	const TArray<FVector> OppositeTwoPlayerDirections = {
+		-FVector::ForwardVector,
+		FVector::ForwardVector,
+	};
+	const float OppositeTwoPlayerRadius = ShowDownCardRevealLayout::ResolveRadialCenterDistance(
 		CenterDistance,
-		2);
+		OppositeTwoPlayerDirections);
+	TestTrue(
+		TEXT("Two opposite reveal cards split the configured neighboring-card gap"),
+		FMath::IsNearlyEqual(OppositeTwoPlayerRadius, CenterDistance * 0.5f));
+	TestTrue(
+		TEXT("Two opposite reveal cards keep the configured center-to-center gap"),
+		FMath::IsNearlyEqual(
+			FVector::Distance(
+				OppositeTwoPlayerDirections[0] * OppositeTwoPlayerRadius,
+				OppositeTwoPlayerDirections[1] * OppositeTwoPlayerRadius),
+			CenterDistance));
+
+	const TArray<FVector> AdjacentTwoPlayerDirections = {
+		-FVector::ForwardVector,
+		FVector::RightVector,
+	};
+	const float AdjacentTwoPlayerRadius = ShowDownCardRevealLayout::ResolveRadialCenterDistance(
+		CenterDistance,
+		AdjacentTwoPlayerDirections);
+	TestTrue(
+		TEXT("Two adjacent reveal cards use the ninety-degree chord radius"),
+		FMath::IsNearlyEqual(
+			AdjacentTwoPlayerRadius,
+			CenterDistance / FMath::Sqrt(2.0f)));
+	TestTrue(
+		TEXT("Two adjacent reveal cards keep the configured center-to-center gap"),
+		FMath::IsNearlyEqual(
+			FVector::Distance(
+				AdjacentTwoPlayerDirections[0] * AdjacentTwoPlayerRadius,
+				AdjacentTwoPlayerDirections[1] * AdjacentTwoPlayerRadius),
+			CenterDistance,
+			0.01f));
+
+	const TArray<FVector> CardinalThreePlayerDirections = {
+		-FVector::ForwardVector,
+		FVector::ForwardVector,
+		FVector::RightVector,
+	};
+	const float CardinalThreePlayerRadius = ShowDownCardRevealLayout::ResolveRadialCenterDistance(
+		CenterDistance,
+		CardinalThreePlayerDirections);
+	TestTrue(
+		TEXT("Three cardinal reveal cards use the nearest ninety-degree seat pair"),
+		FMath::IsNearlyEqual(
+			CardinalThreePlayerRadius,
+			CenterDistance / FMath::Sqrt(2.0f)));
+	TestTrue(
+		TEXT("Three cardinal reveal cards keep the configured nearest-neighbor gap"),
+		FMath::IsNearlyEqual(
+			FVector::Distance(
+				CardinalThreePlayerDirections[0] * CardinalThreePlayerRadius,
+				CardinalThreePlayerDirections[2] * CardinalThreePlayerRadius),
+			CenterDistance,
+			0.01f));
+
+	const TArray<FVector> CardinalFourPlayerDirections = {
+		-FVector::ForwardVector,
+		FVector::ForwardVector,
+		FVector::RightVector,
+		-FVector::RightVector,
+	};
+	const float CardinalFourPlayerRadius = ShowDownCardRevealLayout::ResolveRadialCenterDistance(
+		CenterDistance,
+		CardinalFourPlayerDirections);
+	TestTrue(
+		TEXT("Four cardinal reveal cards use the compact square radius"),
+		FMath::IsNearlyEqual(
+			CardinalFourPlayerRadius,
+			CenterDistance / FMath::Sqrt(2.0f)));
+	TestTrue(
+		TEXT("Four cardinal reveal cards keep the configured nearest-neighbor gap"),
+		FMath::IsNearlyEqual(
+			FVector::Distance(
+				CardinalFourPlayerDirections[0] * CardinalFourPlayerRadius,
+				CardinalFourPlayerDirections[2] * CardinalFourPlayerRadius),
+			CenterDistance,
+			0.01f));
+
 	TestEqual(
-		TEXT("Two reveal cards split the configured single-player spacing"),
-		TwoPlayerRadius,
-		CenterDistance * 0.5f);
+		TEXT("A single reveal card stays at table center"),
+		ShowDownCardRevealLayout::ResolveRadialCenterDistance(
+			CenterDistance,
+			{FVector::ForwardVector}),
+		0.0f);
+
+	const TArray<FVector> DuplicateAndInvalidDirections = {
+		-FVector::ForwardVector,
+		-FVector::ForwardVector * 3.0f,
+		FVector::ZeroVector,
+		FVector::UpVector,
+		FVector::ForwardVector,
+	};
+	TestTrue(
+		TEXT("Duplicate and invalid directions do not change a valid opposite-seat radius"),
+		FMath::IsNearlyEqual(
+			ShowDownCardRevealLayout::ResolveRadialCenterDistance(
+				CenterDistance,
+				DuplicateAndInvalidDirections),
+			OppositeTwoPlayerRadius));
 	TestEqual(
-		TEXT("Three-player reveal keeps the authored radial distance"),
-		ShowDownCardRevealLayout::ResolveRadialCenterDistance(CenterDistance, 3),
-		CenterDistance);
+		TEXT("Duplicate and invalid directions without a second seat stay centered"),
+		ShowDownCardRevealLayout::ResolveRadialCenterDistance(
+			CenterDistance,
+			{-FVector::ForwardVector, -FVector::ForwardVector * 2.0f, FVector::ZeroVector}),
+		0.0f);
+
+	const TArray<FVector> ReorderedCardinalDirections = {
+		-FVector::RightVector,
+		FVector::RightVector,
+		FVector::ForwardVector,
+		-FVector::ForwardVector,
+	};
+	TestTrue(
+		TEXT("Reveal radius is invariant to seat direction order"),
+		FMath::IsNearlyEqual(
+			ShowDownCardRevealLayout::ResolveRadialCenterDistance(
+				CenterDistance,
+				ReorderedCardinalDirections),
+			CardinalFourPlayerRadius));
 
 	FTransform OppositeLeftTransform;
 	FTransform OppositeRightTransform;
 	const bool bBuiltOppositeLeft = ShowDownCardRevealLayout::TryBuildRadialTransform(
 		TableCenter,
 		TableCenter + FVector(-100.0f, 0.0f, 0.0f),
-		TwoPlayerRadius,
+		OppositeTwoPlayerRadius,
 		0.0f,
 		HeightOffset,
 		RotationOffset,
@@ -242,7 +398,7 @@ bool FShowDownCardRevealLayoutTest::RunTest(const FString& Parameters)
 	const bool bBuiltOppositeRight = ShowDownCardRevealLayout::TryBuildRadialTransform(
 		TableCenter,
 		TableCenter + FVector(100.0f, 0.0f, 0.0f),
-		TwoPlayerRadius,
+		OppositeTwoPlayerRadius,
 		0.0f,
 		HeightOffset,
 		RotationOffset,
