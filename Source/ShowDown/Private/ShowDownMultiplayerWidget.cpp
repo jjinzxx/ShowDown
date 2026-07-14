@@ -109,7 +109,7 @@ TSharedRef<SWidget> UShowDownPublicRoomEntryWidget::RebuildWidget()
 	WidgetTree->RootWidget = RootBox;
 
 	UBorder* CardBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("RoomEntryBorder"));
-	CardBorder->SetBrushColor(FLinearColor(0.30f, 0.30f, 0.30f, 0.84f));
+	CardBorder->SetBrushColor(FLinearColor(FColor::FromHex(TEXT("00000099"))));
 	CardBorder->SetPadding(FMargin(12.0f, 3.0f));
 	if (UVerticalBoxSlot* CardSlot = RootBox->AddChildToVerticalBox(CardBorder))
 	{

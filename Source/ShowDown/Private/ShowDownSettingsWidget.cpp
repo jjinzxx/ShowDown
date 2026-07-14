@@ -44,8 +44,8 @@ void ApplySettingsTabStyle(UButton* Button, bool bActive)
 		return;
 	}
 	const FLinearColor NormalColor = bActive
-		? FLinearColor(0.0f, 0.0f, 0.0f, 0x99 / 255.0f)
-		: FLinearColor(0x19 / 255.0f, 0x19 / 255.0f, 0x19 / 255.0f, 0xFF / 255.0f);
+		? FLinearColor::FromSRGBColor(FColor::FromHex(TEXT("00000099")))
+		: FLinearColor::FromSRGBColor(FColor::FromHex(TEXT("10101099")));
 	FButtonStyle Style;
 	Style.SetNormal(SettingsTabBrush(NormalColor));
 	Style.SetHovered(SettingsTabBrush(FLinearColor(0.0f, 0.0f, 0.0f, 0xA6 / 255.0f)));
