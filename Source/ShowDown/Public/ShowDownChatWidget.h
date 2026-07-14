@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Blueprint/UserWidget.h"
+#include "ShowDownUserWidget.h"
 #include "ShowDownTypes.h"
 #include "ShowDownChatWidget.generated.h"
 
@@ -20,7 +20,7 @@ class UVerticalBox;
 class UWidget;
 
 UCLASS()
-class SHOWDOWN_API UShowDownChatWidget : public UUserWidget
+class SHOWDOWN_API UShowDownChatWidget : public UShowDownUserWidget
 {
 	GENERATED_BODY()
 

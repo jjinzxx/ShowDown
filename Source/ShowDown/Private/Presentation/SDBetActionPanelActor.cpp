@@ -173,10 +173,6 @@ void ASDBetActionPanelActor::Tick(float DeltaSeconds)
 		}
 	}
 
-	if (!bBulletTargetVisible && !HasActiveBulletAnimation())
-	{
-		SetActorHiddenInGame(true);
-	}
 	RefreshTickState();
 }
 
@@ -298,16 +294,16 @@ void ASDBetActionPanelActor::EnsureBulletPreview()
 
 void ASDBetActionPanelActor::RefreshVisuals()
 {
+	// AActor::bHidden is replicated. This panel has per-local-player visibility,
+	// so keep its shared container visible and hide only the local visual
+	// components; otherwise a listen server can hide a participant's bullets.
+	SetActorHiddenInGame(false);
 	EnsureButtons();
 	EnsureBulletPreview();
 	RefreshSelectedRaiseTarget();
 
 	LastResolvedLocalPlayerSlot = ResolveLocalPlayerSlot();
 	const bool bPanelVisible = IsPanelVisibleForLocalPlayer();
-	if (bPanelVisible)
-	{
-		SetActorHiddenInGame(false);
-	}
 	RefreshBulletPreview(bPanelVisible);
 
 	for (ESDBetActionPanelButtonKind ButtonKind : ButtonKinds)
@@ -341,7 +337,7 @@ void ASDBetActionPanelActor::RefreshVisuals()
 
 void ASDBetActionPanelActor::RefreshBulletPreview(bool bVisible)
 {
-	const float LayoutScale = FMath::Max(0.1f, PanelVisualScale);
+	const float LayoutScale = FMath::Max(0.1f, PanelState.PanelVisualScale);
 	const int32 LoadedCount = FMath::Clamp(PanelState.LoadedBulletCount, 0, 6);
 	const int32 RaiseTarget = FMath::Clamp(SelectedRaiseTarget, LoadedCount, 6);
 	bool bHasVisibleBulletPresentation = bBulletTargetVisible;
@@ -369,7 +365,7 @@ void ASDBetActionPanelActor::RefreshBulletPreview(bool bVisible)
 
 	const FRotator PanelRotation = CachedBulletPanelRotation;
 	const FVector RightDirection = FRotationMatrix(PanelRotation).GetUnitAxis(EAxis::Y);
-	const FVector BulletRowWorldOffset = PanelRotation.RotateVector(BulletRowOffset * LayoutScale);
+	const FVector BulletRowWorldOffset = PanelRotation.RotateVector(PanelState.BulletRowOffset * LayoutScale);
 
 	for (int32 BulletIndex = 0; BulletIndex < BulletPreviewMeshes.Num(); ++BulletIndex)
 	{
@@ -393,7 +389,7 @@ void ASDBetActionPanelActor::RefreshBulletPreview(bool bVisible)
 		BulletMesh->SetWorldLocationAndRotation(
 			CachedBulletPanelLocation
 				+ BulletRowWorldOffset
-				+ RightDirection * ((static_cast<float>(VisualSlotIndex) - 2.5f) * BulletSpacing * LayoutScale),
+				+ RightDirection * ((static_cast<float>(VisualSlotIndex) - 2.5f) * PanelState.BulletSpacing * LayoutScale),
 			PanelRotation + FRotator(-90.0f, 0.0f, 0.0f));
 		if (bAlreadyLoaded && BulletPreviewNormalMaterial)
 		{
@@ -440,10 +436,6 @@ void ASDBetActionPanelActor::StartBulletVisibilityAnimation(bool bVisible)
 		BulletTransitionElapsedTimes[BulletIndex] = -static_cast<float>(DelayIndex) * StaggerDelay;
 	}
 
-	if (bVisible)
-	{
-		SetActorHiddenInGame(false);
-	}
 	RefreshTickState();
 }
 
@@ -549,8 +541,8 @@ void ASDBetActionPanelActor::UpdateBulletAnimations(float DeltaSeconds)
 
 void ASDBetActionPanelActor::ApplyBulletAnimatedVisuals()
 {
-	const float LayoutScale = FMath::Max(0.1f, PanelVisualScale);
-	const float BaseBulletScale = FMath::Max(0.001f, BulletPreviewScale) * (LayoutScale / 0.35f);
+	const float LayoutScale = FMath::Max(0.1f, PanelState.PanelVisualScale);
+	const float BaseBulletScale = FMath::Max(0.001f, PanelState.BulletPreviewScale) * (LayoutScale / 0.35f);
 	const float Duration = FMath::Clamp(PanelState.BulletAnimationDuration, 0.05f, 1.0f);
 	const float BounceStrength = FMath::Clamp(PanelState.BulletBounceStrength, 0.0f, 0.5f);
 
@@ -744,7 +736,7 @@ void ASDBetActionPanelActor::HandleButtonClicked(ESDBetActionPanelButtonKind But
 
 FTransform ASDBetActionPanelActor::BuildButtonTransform(ESDBetActionPanelButtonKind ButtonKind) const
 {
-	const float LayoutScale = FMath::Max(0.1f, PanelVisualScale);
+	const float LayoutScale = FMath::Max(0.1f, PanelState.PanelVisualScale);
 	const FRotator PanelRotation = PanelState.WorldRotation;
 	const FVector RightDirection = FRotationMatrix(PanelRotation).GetUnitAxis(EAxis::Y);
 	const FVector2D PrimarySize = GetButtonSize(ESDBetActionPanelButtonKind::Primary);
@@ -757,17 +749,17 @@ FTransform ASDBetActionPanelActor::BuildButtonTransform(ESDBetActionPanelButtonK
 	const float RaiseStepOffset = (RaiseSize.X * 0.5f) + RowGap + (StepSize.X * 0.5f);
 
 	float RightOffset = 0.0f;
-	float HeightOffset = TopRowHeight;
+	float HeightOffset = PanelState.TopRowHeight;
 
 	switch (ButtonKind)
 	{
 	case ESDBetActionPanelButtonKind::Primary:
 		RightOffset = (FoldSize.X + ActionGap) * 0.5f;
-		HeightOffset = BottomRowHeight;
+		HeightOffset = PanelState.BottomRowHeight;
 		break;
 	case ESDBetActionPanelButtonKind::Fold:
 		RightOffset = -((PrimarySize.X + ActionGap) * 0.5f);
-		HeightOffset = BottomRowHeight;
+		HeightOffset = PanelState.BottomRowHeight;
 		break;
 	case ESDBetActionPanelButtonKind::RaiseDown:
 		RightOffset = RaiseStepOffset;
@@ -791,20 +783,20 @@ FTransform ASDBetActionPanelActor::BuildButtonTransform(ESDBetActionPanelButtonK
 
 FVector2D ASDBetActionPanelActor::GetButtonSize(ESDBetActionPanelButtonKind ButtonKind) const
 {
-	const float LayoutScale = FMath::Max(0.1f, PanelVisualScale);
+	const float LayoutScale = FMath::Max(0.1f, PanelState.PanelVisualScale);
 	switch (ButtonKind)
 	{
 	case ESDBetActionPanelButtonKind::Primary:
-		return FVector2D(PrimaryButtonWidth, ButtonHeight) * LayoutScale;
+		return FVector2D(PanelState.PrimaryButtonWidth, PanelState.ButtonHeight) * LayoutScale;
 	case ESDBetActionPanelButtonKind::RaiseDown:
 	case ESDBetActionPanelButtonKind::RaiseUp:
-		return FVector2D(StepButtonWidth, ButtonHeight) * LayoutScale;
+		return FVector2D(PanelState.StepButtonWidth, PanelState.ButtonHeight) * LayoutScale;
 	case ESDBetActionPanelButtonKind::RaiseSubmit:
-		return FVector2D(RaiseButtonWidth, ButtonHeight) * LayoutScale;
+		return FVector2D(PanelState.RaiseButtonWidth, PanelState.ButtonHeight) * LayoutScale;
 	case ESDBetActionPanelButtonKind::Fold:
-		return FVector2D(FoldButtonWidth, ButtonHeight) * LayoutScale;
+		return FVector2D(PanelState.FoldButtonWidth, PanelState.ButtonHeight) * LayoutScale;
 	default:
-		return FVector2D(PrimaryButtonWidth, ButtonHeight) * LayoutScale;
+		return FVector2D(PanelState.PrimaryButtonWidth, PanelState.ButtonHeight) * LayoutScale;
 	}
 }
 

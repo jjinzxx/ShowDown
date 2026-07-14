@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Blueprint/UserWidget.h"
+#include "ShowDownUserWidget.h"
 #include "Engine/TimerHandle.h"
 #include "ShowDownEosSubsystem.h"
 #include "ShowDownMultiplayerWidget.generated.h"
@@ -17,7 +17,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnShowDownJoinRoomRequest, const FS
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnShowDownJoinPublicRoomRequest, int32, SearchResultIndex);
 
 UCLASS()
-class SHOWDOWN_API UShowDownPublicRoomEntryWidget : public UUserWidget
+class SHOWDOWN_API UShowDownPublicRoomEntryWidget : public UShowDownUserWidget
 {
 	GENERATED_BODY()
 
@@ -57,7 +57,7 @@ private:
 };
 
 UCLASS()
-class SHOWDOWN_API UShowDownMultiplayerWidget : public UUserWidget
+class SHOWDOWN_API UShowDownMultiplayerWidget : public UShowDownUserWidget
 {
 	GENERATED_BODY()
 

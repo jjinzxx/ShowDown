@@ -9,6 +9,8 @@
 
 class UBoxComponent;
 class ACameraActor;
+class AGameStateBase;
+class AShowDownGameStateBase;
 class AShowDownCharacter;
 class UAudioComponent;
 class UPointLightComponent;
@@ -601,9 +603,11 @@ private:
 		const FString& TargetName,
 		int32 BulletCount,
 		bool bHit);
+	void HandleGameStateSet(AGameStateBase* GameState);
 
 	AActor* FindMultiplayerShotTarget(EShowDownPlayerSlot TargetSlot) const;
 	void PlayMultiplayerRoulettePresentation(EShowDownPlayerSlot TargetSlot, bool bHit);
+	void TryStartPendingMultiplayerRoulettePresentation();
 	bool ShouldTreatSlotAsLocalPlayer(EShowDownPlayerSlot TargetSlot) const;
 	bool ShouldTreatTargetAsLocalPlayer(AActor* TargetActor) const;
 	bool UpdateRevolverPlacementDevPreview();
@@ -698,8 +702,10 @@ private:
 	bool bHasGunShotCameraReferenceTransform = false;
 	bool bCinematicCameraShakeActive = false;
 	bool bTinnitusFadeOutStarted = false;
+	bool bHitSequenceBlackoutActive = false;
 	UPROPERTY(Transient)
 	TObjectPtr<UAudioComponent> TinnitusAudioComponent;
+	TWeakObjectPtr<AShowDownGameStateBase> BoundShowDownGameState;
 	TWeakObjectPtr<AActor> ForcedShotTargetActor;
 	EShowDownPlayerSlot CurrentShotTargetSlot = EShowDownPlayerSlot::None;
 	FVector ForcedShotSourceLocation = FVector::ZeroVector;
@@ -712,4 +718,12 @@ private:
 	FTransform EliminationOverviewStartTransform;
 	FTransform EliminationOverviewTargetTransform;
 	FSDArtToneSettings HitSequenceBaseSettings;
+
+	struct FPendingMultiplayerRoulettePresentation
+	{
+		EShowDownPlayerSlot TargetSlot = EShowDownPlayerSlot::None;
+		bool bHit = false;
+	};
+
+	TArray<FPendingMultiplayerRoulettePresentation> PendingMultiplayerRoulettePresentations;
 };

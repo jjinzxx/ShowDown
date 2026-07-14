@@ -9,6 +9,15 @@ class UMaterialInstanceDynamic;
 class UPostProcessComponent;
 class USceneComponent;
 
+UENUM(BlueprintType)
+enum class ESDVisionBlendEase : uint8
+{
+	Linear UMETA(DisplayName = "Linear"),
+	EaseIn UMETA(DisplayName = "Ease In"),
+	EaseOut UMETA(DisplayName = "Ease Out"),
+	EaseInOut UMETA(DisplayName = "Ease In Out")
+};
+
 USTRUCT(BlueprintType)
 struct FSDVisionState
 {
@@ -44,8 +53,111 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision")
 	void SetVisionAlpha(float Alpha);
 
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision", meta = (ClampMin = "0.0", ClampMax = "1.0", AdvancedDisplay = "EaseMode,EaseExponent"))
+	void BlendToVisionAlpha(
+		float TargetAlpha,
+		float Duration = 0.35f,
+		ESDVisionBlendEase EaseMode = ESDVisionBlendEase::EaseInOut,
+		float EaseExponent = 2.0f);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision", meta = (AdvancedDisplay = "EaseMode,EaseExponent"))
+	void BlendToFocusedVision(
+		float Duration = 0.35f,
+		ESDVisionBlendEase EaseMode = ESDVisionBlendEase::EaseInOut,
+		float EaseExponent = 2.0f);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision", meta = (AdvancedDisplay = "EaseMode,EaseExponent"))
+	void BlendToWideVision(
+		float Duration = 0.35f,
+		ESDVisionBlendEase EaseMode = ESDVisionBlendEase::EaseInOut,
+		float EaseExponent = 2.0f);
+
+	/** Stops the active alpha blend at the value currently on screen. */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision")
+	void CancelVisionBlend();
+
+	/** Immediately applies the active blend's destination, if one exists. */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision")
+	void CompleteVisionBlend();
+
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Vision")
 	float GetVisionAlpha() const { return CurrentVisionAlpha; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Vision")
+	float GetVisionBlendTargetAlpha() const { return bVisionBlendActive ? TargetVisionAlpha : CurrentVisionAlpha; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Vision")
+	bool IsVisionBlending() const { return bVisionBlendActive; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Vision")
+	static float EvaluateVisionBlendEase(
+		float NormalizedAlpha,
+		ESDVisionBlendEase EaseMode = ESDVisionBlendEase::EaseInOut,
+		float EaseExponent = 2.0f);
+
+	/** Immediately changes only DarknessStrength; radius and feather remain unchanged. */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision|Darkness")
+	void SetDarknessStrength(float Strength);
+
+	/** Blends only DarknessStrength; radius and feather remain unchanged. */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision|Darkness", meta = (ClampMin = "0.0", ClampMax = "1.0", AdvancedDisplay = "EaseMode,EaseExponent"))
+	void BlendToDarknessStrength(
+		float TargetStrength,
+		float Duration = 0.35f,
+		ESDVisionBlendEase EaseMode = ESDVisionBlendEase::EaseInOut,
+		float EaseExponent = 2.0f);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision|Darkness")
+	void CancelDarknessStrengthBlend();
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision|Darkness")
+	void CompleteDarknessStrengthBlend();
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Vision|Darkness")
+	bool IsDarknessStrengthBlending() const { return bDarknessStrengthBlendActive; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Vision|Darkness")
+	float GetDarknessStrength() const { return CurrentState.DarknessStrength; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Vision|Darkness")
+	float GetDarknessStrengthBlendTarget() const
+	{
+		return bDarknessStrengthBlendActive ? TargetDarknessStrength : CurrentState.DarknessStrength;
+	}
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision|Center")
+	void SetVisionCenterActor(AActor* NewVisionCenterActor);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision|Center")
+	void SetVisionCenterWorldLocation(FVector NewWorldLocation);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision|Center", meta = (AdvancedDisplay = "EaseMode,EaseExponent"))
+	void BlendVisionCenterToActor(
+		AActor* TargetActor,
+		float Duration = 0.35f,
+		ESDVisionBlendEase EaseMode = ESDVisionBlendEase::EaseInOut,
+		float EaseExponent = 2.0f);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision|Center", meta = (AdvancedDisplay = "EaseMode,EaseExponent"))
+	void BlendVisionCenterToWorldLocation(
+		FVector TargetWorldLocation,
+		float Duration = 0.35f,
+		ESDVisionBlendEase EaseMode = ESDVisionBlendEase::EaseInOut,
+		float EaseExponent = 2.0f);
+
+	/** Stops the active center blend at its currently displayed world location. */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision|Center")
+	void CancelVisionCenterBlend();
+
+	/** Immediately applies the active center blend's destination, if one exists. */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Vision|Center")
+	void CompleteVisionCenterBlend();
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Vision|Center")
+	bool IsVisionCenterBlending() const { return bVisionCenterBlendActive; }
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Vision|Center")
+	FVector GetVisionCenterWorldLocation() const;
 
 protected:
 	virtual void BeginPlay() override;
@@ -84,6 +196,10 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision")
 	bool bApplyInitialStateOnBeginPlay = true;
 
+	/** Safe startup value applied before the first rendered game frame. Runtime cues can then blend from it. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float InitialDarknessStrength = 0.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision")
 	bool bTrackVisionCenterEveryTick = true;
 
@@ -102,7 +218,10 @@ private:
 	void ApplyPostProcessState();
 	void ApplyDarknessMaterialState();
 	void UpdateTickState();
-	FVector GetVisionCenterWorldLocation() const;
+	void AdvanceVisionBlend(float DeltaSeconds);
+	void AdvanceDarknessStrengthBlend(float DeltaSeconds);
+	void AdvanceVisionCenterBlend(float DeltaSeconds);
+	FVector GetVisionCenterBlendTargetLocation() const;
 	bool ShouldApplyPostProcessInCurrentWorld() const;
 	static FSDVisionState LerpVisionState(const FSDVisionState& From, const FSDVisionState& To, float Alpha);
 	static bool IsMatchingBlendable(const UObject* BlendableObject, const UMaterialInterface* Material, const UMaterialInstanceDynamic* MID);
@@ -111,5 +230,36 @@ private:
 	TObjectPtr<UMaterialInstanceDynamic> DarknessMID;
 
 	FSDVisionState CurrentState;
+	FSDVisionState VisionBlendStartState;
+	FSDVisionState TargetVisionState;
 	float CurrentVisionAlpha = 0.0f;
+	float VisionBlendStartAlpha = 0.0f;
+	float TargetVisionAlpha = 0.0f;
+	float VisionBlendDuration = 0.0f;
+	float VisionBlendElapsed = 0.0f;
+	float VisionBlendEaseExponent = 2.0f;
+	ESDVisionBlendEase VisionBlendEaseMode = ESDVisionBlendEase::EaseInOut;
+	bool bVisionBlendActive = false;
+	float DarknessStrengthBlendStart = 0.0f;
+	float TargetDarknessStrength = 0.0f;
+	float DarknessStrengthBlendDuration = 0.0f;
+	float DarknessStrengthBlendElapsed = 0.0f;
+	float DarknessStrengthBlendEaseExponent = 2.0f;
+	ESDVisionBlendEase DarknessStrengthBlendEaseMode = ESDVisionBlendEase::EaseInOut;
+	bool bDarknessStrengthBlendActive = false;
+
+	FVector ExplicitVisionCenterWorldLocation = FVector::ZeroVector;
+	FVector VisionCenterBlendStartLocation = FVector::ZeroVector;
+	FVector TargetVisionCenterWorldLocation = FVector::ZeroVector;
+	FVector BlendedVisionCenterWorldLocation = FVector::ZeroVector;
+	float VisionCenterBlendDuration = 0.0f;
+	float VisionCenterBlendElapsed = 0.0f;
+	float VisionCenterBlendEaseExponent = 2.0f;
+	ESDVisionBlendEase VisionCenterBlendEaseMode = ESDVisionBlendEase::EaseInOut;
+	bool bUseExplicitVisionCenterLocation = false;
+	bool bVisionCenterBlendTargetsActor = false;
+	bool bVisionCenterBlendActive = false;
+
+	UPROPERTY(Transient)
+	TObjectPtr<AActor> TargetVisionCenterActor;
 };

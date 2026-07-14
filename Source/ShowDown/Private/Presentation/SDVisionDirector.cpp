@@ -39,6 +39,9 @@ ASDVisionDirector::ASDVisionDirector()
 	WideVision.DarknessStrength = 0.25f;
 
 	CurrentState = FocusedVision;
+	VisionBlendStartState = CurrentState;
+	TargetVisionState = CurrentState;
+	TargetDarknessStrength = CurrentState.DarknessStrength;
 }
 
 void ASDVisionDirector::BeginPlay()
@@ -48,14 +51,24 @@ void ASDVisionDirector::BeginPlay()
 	PostProcessComponent->bUnbound = bUnboundPostProcess;
 	PostProcessComponent->Priority = PostProcessPriority;
 
-	if (bApplyInitialStateOnBeginPlay)
-	{
-		ApplyFocusedVision();
-	}
-	else
-	{
-		UpdateTickState();
-	}
+	// Establish one safe state before the first rendered game frame. Applying the
+	// focused preset first could briefly expose its (often fully black) darkness.
+	bVisionBlendActive = false;
+	bDarknessStrengthBlendActive = false;
+	bVisionCenterBlendActive = false;
+	CurrentVisionAlpha = bApplyInitialStateOnBeginPlay
+		? 0.0f
+		: FMath::Clamp(EditorPreviewVisionAlpha, 0.0f, 1.0f);
+	CurrentState = LerpVisionState(FocusedVision, WideVision, CurrentVisionAlpha);
+	CurrentState.DarknessStrength = FMath::Clamp(InitialDarknessStrength, 0.0f, 1.0f);
+	VisionBlendStartState = CurrentState;
+	TargetVisionState = CurrentState;
+	VisionBlendStartAlpha = CurrentVisionAlpha;
+	TargetVisionAlpha = CurrentVisionAlpha;
+	DarknessStrengthBlendStart = CurrentState.DarknessStrength;
+	TargetDarknessStrength = CurrentState.DarknessStrength;
+	ApplyCurrentState();
+	UpdateTickState();
 }
 
 void ASDVisionDirector::OnConstruction(const FTransform& Transform)
@@ -67,6 +80,13 @@ void ASDVisionDirector::OnConstruction(const FTransform& Transform)
 
 	CurrentVisionAlpha = EditorPreviewVisionAlpha;
 	CurrentState = LerpVisionState(FocusedVision, WideVision, CurrentVisionAlpha);
+	bVisionBlendActive = false;
+	bDarknessStrengthBlendActive = false;
+	bVisionCenterBlendActive = false;
+	VisionBlendStartState = CurrentState;
+	TargetVisionState = CurrentState;
+	TargetVisionAlpha = CurrentVisionAlpha;
+	TargetDarknessStrength = CurrentState.DarknessStrength;
 	ApplyCurrentState();
 }
 
@@ -74,7 +94,19 @@ void ASDVisionDirector::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	if (bTrackVisionCenterEveryTick)
+	const bool bWasVisionBlending = bVisionBlendActive;
+	const bool bWasDarknessBlending = bDarknessStrengthBlendActive;
+	const bool bWasCenterBlending = bVisionCenterBlendActive;
+
+	AdvanceVisionBlend(DeltaSeconds);
+	AdvanceDarknessStrengthBlend(DeltaSeconds);
+	AdvanceVisionCenterBlend(DeltaSeconds);
+
+	if (bWasVisionBlending || bWasDarknessBlending)
+	{
+		ApplyCurrentState();
+	}
+	else if (bTrackVisionCenterEveryTick || bWasCenterBlending)
 	{
 		ApplyDarknessMaterialState();
 	}
@@ -96,6 +128,13 @@ void ASDVisionDirector::PostEditChangeProperty(FPropertyChangedEvent& PropertyCh
 	PostProcessComponent->Priority = PostProcessPriority;
 	CurrentVisionAlpha = EditorPreviewVisionAlpha;
 	CurrentState = LerpVisionState(FocusedVision, WideVision, CurrentVisionAlpha);
+	bVisionBlendActive = false;
+	bDarknessStrengthBlendActive = false;
+	bVisionCenterBlendActive = false;
+	VisionBlendStartState = CurrentState;
+	TargetVisionState = CurrentState;
+	TargetVisionAlpha = CurrentVisionAlpha;
+	TargetDarknessStrength = CurrentState.DarknessStrength;
 	ApplyCurrentState();
 }
 #endif
@@ -112,10 +151,277 @@ void ASDVisionDirector::ApplyWideVision()
 
 void ASDVisionDirector::SetVisionAlpha(float Alpha)
 {
+	bVisionBlendActive = false;
+	bDarknessStrengthBlendActive = false;
 	CurrentVisionAlpha = FMath::Clamp(Alpha, 0.0f, 1.0f);
 	CurrentState = LerpVisionState(FocusedVision, WideVision, CurrentVisionAlpha);
+	VisionBlendStartAlpha = CurrentVisionAlpha;
+	TargetVisionAlpha = CurrentVisionAlpha;
+	VisionBlendStartState = CurrentState;
+	TargetVisionState = CurrentState;
+	DarknessStrengthBlendStart = CurrentState.DarknessStrength;
+	TargetDarknessStrength = CurrentState.DarknessStrength;
 	ApplyCurrentState();
 	UpdateTickState();
+}
+
+void ASDVisionDirector::BlendToVisionAlpha(
+	float TargetAlpha,
+	float Duration,
+	ESDVisionBlendEase EaseMode,
+	float EaseExponent)
+{
+	const float ClampedTargetAlpha = FMath::Clamp(TargetAlpha, 0.0f, 1.0f);
+	const FSDVisionState NewTargetState = LerpVisionState(FocusedVision, WideVision, ClampedTargetAlpha);
+
+	if (Duration <= KINDA_SMALL_NUMBER)
+	{
+		SetVisionAlpha(ClampedTargetAlpha);
+		return;
+	}
+
+	// Alpha and direct-darkness blends both own DarknessStrength, so they are
+	// deliberately mutually exclusive. CurrentState is already the exact value
+	// displayed, making this handoff and any retarget continuous.
+	bDarknessStrengthBlendActive = false;
+	VisionBlendStartAlpha = CurrentVisionAlpha;
+	TargetVisionAlpha = ClampedTargetAlpha;
+	VisionBlendStartState = CurrentState;
+	TargetVisionState = NewTargetState;
+	VisionBlendDuration = Duration;
+	VisionBlendElapsed = 0.0f;
+	VisionBlendEaseMode = EaseMode;
+	VisionBlendEaseExponent = FMath::Max(1.0f, EaseExponent);
+	bVisionBlendActive = true;
+
+	UpdateTickState();
+}
+
+void ASDVisionDirector::BlendToFocusedVision(
+	float Duration,
+	ESDVisionBlendEase EaseMode,
+	float EaseExponent)
+{
+	BlendToVisionAlpha(0.0f, Duration, EaseMode, EaseExponent);
+}
+
+void ASDVisionDirector::BlendToWideVision(
+	float Duration,
+	ESDVisionBlendEase EaseMode,
+	float EaseExponent)
+{
+	BlendToVisionAlpha(1.0f, Duration, EaseMode, EaseExponent);
+}
+
+void ASDVisionDirector::CancelVisionBlend()
+{
+	if (!bVisionBlendActive)
+	{
+		return;
+	}
+
+	bVisionBlendActive = false;
+	VisionBlendStartAlpha = CurrentVisionAlpha;
+	TargetVisionAlpha = CurrentVisionAlpha;
+	VisionBlendStartState = CurrentState;
+	TargetVisionState = CurrentState;
+	UpdateTickState();
+}
+
+void ASDVisionDirector::CompleteVisionBlend()
+{
+	if (!bVisionBlendActive)
+	{
+		return;
+	}
+
+	SetVisionAlpha(TargetVisionAlpha);
+}
+
+float ASDVisionDirector::EvaluateVisionBlendEase(
+	float NormalizedAlpha,
+	ESDVisionBlendEase EaseMode,
+	float EaseExponent)
+{
+	const float ClampedAlpha = FMath::Clamp(NormalizedAlpha, 0.0f, 1.0f);
+	const float ClampedExponent = FMath::Max(1.0f, EaseExponent);
+
+	switch (EaseMode)
+	{
+	case ESDVisionBlendEase::EaseIn:
+		return FMath::InterpEaseIn(0.0f, 1.0f, ClampedAlpha, ClampedExponent);
+	case ESDVisionBlendEase::EaseOut:
+		return FMath::InterpEaseOut(0.0f, 1.0f, ClampedAlpha, ClampedExponent);
+	case ESDVisionBlendEase::EaseInOut:
+		return FMath::InterpEaseInOut(0.0f, 1.0f, ClampedAlpha, ClampedExponent);
+	case ESDVisionBlendEase::Linear:
+	default:
+		return ClampedAlpha;
+	}
+}
+
+void ASDVisionDirector::SetDarknessStrength(float Strength)
+{
+	bVisionBlendActive = false;
+	bDarknessStrengthBlendActive = false;
+	CurrentState.DarknessStrength = FMath::Clamp(Strength, 0.0f, 1.0f);
+	DarknessStrengthBlendStart = CurrentState.DarknessStrength;
+	TargetDarknessStrength = CurrentState.DarknessStrength;
+	ApplyCurrentState();
+	UpdateTickState();
+}
+
+void ASDVisionDirector::BlendToDarknessStrength(
+	float TargetStrength,
+	float Duration,
+	ESDVisionBlendEase EaseMode,
+	float EaseExponent)
+{
+	const float ClampedTargetStrength = FMath::Clamp(TargetStrength, 0.0f, 1.0f);
+	if (Duration <= KINDA_SMALL_NUMBER)
+	{
+		SetDarknessStrength(ClampedTargetStrength);
+		return;
+	}
+
+	bVisionBlendActive = false;
+	DarknessStrengthBlendStart = CurrentState.DarknessStrength;
+	TargetDarknessStrength = ClampedTargetStrength;
+	DarknessStrengthBlendDuration = Duration;
+	DarknessStrengthBlendElapsed = 0.0f;
+	DarknessStrengthBlendEaseMode = EaseMode;
+	DarknessStrengthBlendEaseExponent = FMath::Max(1.0f, EaseExponent);
+	bDarknessStrengthBlendActive = true;
+
+	UpdateTickState();
+}
+
+void ASDVisionDirector::CancelDarknessStrengthBlend()
+{
+	if (!bDarknessStrengthBlendActive)
+	{
+		return;
+	}
+
+	bDarknessStrengthBlendActive = false;
+	DarknessStrengthBlendStart = CurrentState.DarknessStrength;
+	TargetDarknessStrength = CurrentState.DarknessStrength;
+	UpdateTickState();
+}
+
+void ASDVisionDirector::CompleteDarknessStrengthBlend()
+{
+	if (!bDarknessStrengthBlendActive)
+	{
+		return;
+	}
+
+	SetDarknessStrength(TargetDarknessStrength);
+}
+
+void ASDVisionDirector::SetVisionCenterActor(AActor* NewVisionCenterActor)
+{
+	bVisionCenterBlendActive = false;
+	TargetVisionCenterActor = nullptr;
+	VisionCenterActor = NewVisionCenterActor;
+	bUseExplicitVisionCenterLocation = false;
+	ApplyDarknessMaterialState();
+	UpdateTickState();
+}
+
+void ASDVisionDirector::SetVisionCenterWorldLocation(FVector NewWorldLocation)
+{
+	bVisionCenterBlendActive = false;
+	TargetVisionCenterActor = nullptr;
+	VisionCenterActor = nullptr;
+	bUseExplicitVisionCenterLocation = true;
+	ExplicitVisionCenterWorldLocation = NewWorldLocation;
+	ApplyDarknessMaterialState();
+	UpdateTickState();
+}
+
+void ASDVisionDirector::BlendVisionCenterToActor(
+	AActor* TargetActor,
+	float Duration,
+	ESDVisionBlendEase EaseMode,
+	float EaseExponent)
+{
+	if (Duration <= KINDA_SMALL_NUMBER)
+	{
+		SetVisionCenterActor(TargetActor);
+		return;
+	}
+
+	VisionCenterBlendStartLocation = GetVisionCenterWorldLocation();
+	BlendedVisionCenterWorldLocation = VisionCenterBlendStartLocation;
+	TargetVisionCenterActor = TargetActor;
+	bVisionCenterBlendTargetsActor = true;
+	VisionCenterBlendDuration = Duration;
+	VisionCenterBlendElapsed = 0.0f;
+	VisionCenterBlendEaseMode = EaseMode;
+	VisionCenterBlendEaseExponent = FMath::Max(1.0f, EaseExponent);
+	bVisionCenterBlendActive = true;
+	UpdateTickState();
+}
+
+void ASDVisionDirector::BlendVisionCenterToWorldLocation(
+	FVector TargetWorldLocation,
+	float Duration,
+	ESDVisionBlendEase EaseMode,
+	float EaseExponent)
+{
+	if (Duration <= KINDA_SMALL_NUMBER)
+	{
+		SetVisionCenterWorldLocation(TargetWorldLocation);
+		return;
+	}
+
+	VisionCenterBlendStartLocation = GetVisionCenterWorldLocation();
+	BlendedVisionCenterWorldLocation = VisionCenterBlendStartLocation;
+	TargetVisionCenterWorldLocation = TargetWorldLocation;
+	TargetVisionCenterActor = nullptr;
+	bVisionCenterBlendTargetsActor = false;
+	VisionCenterBlendDuration = Duration;
+	VisionCenterBlendElapsed = 0.0f;
+	VisionCenterBlendEaseMode = EaseMode;
+	VisionCenterBlendEaseExponent = FMath::Max(1.0f, EaseExponent);
+	bVisionCenterBlendActive = true;
+	UpdateTickState();
+}
+
+void ASDVisionDirector::CancelVisionCenterBlend()
+{
+	if (!bVisionCenterBlendActive)
+	{
+		return;
+	}
+
+	const FVector CurrentLocation = GetVisionCenterWorldLocation();
+	bVisionCenterBlendActive = false;
+	TargetVisionCenterActor = nullptr;
+	VisionCenterActor = nullptr;
+	bUseExplicitVisionCenterLocation = true;
+	ExplicitVisionCenterWorldLocation = CurrentLocation;
+	BlendedVisionCenterWorldLocation = CurrentLocation;
+	ApplyDarknessMaterialState();
+	UpdateTickState();
+}
+
+void ASDVisionDirector::CompleteVisionCenterBlend()
+{
+	if (!bVisionCenterBlendActive)
+	{
+		return;
+	}
+
+	if (bVisionCenterBlendTargetsActor)
+	{
+		SetVisionCenterActor(TargetVisionCenterActor);
+	}
+	else
+	{
+		SetVisionCenterWorldLocation(TargetVisionCenterWorldLocation);
+	}
 }
 
 void ASDVisionDirector::EnsureDarknessMaterialInstance()
@@ -205,12 +511,139 @@ void ASDVisionDirector::ApplyDarknessMaterialState()
 
 void ASDVisionDirector::UpdateTickState()
 {
-	SetActorTickEnabled(bTrackVisionCenterEveryTick);
+	SetActorTickEnabled(
+		bTrackVisionCenterEveryTick
+		|| bVisionBlendActive
+		|| bDarknessStrengthBlendActive
+		|| bVisionCenterBlendActive);
 }
 
 FVector ASDVisionDirector::GetVisionCenterWorldLocation() const
 {
-	return VisionCenterActor ? VisionCenterActor->GetActorLocation() : GetActorLocation();
+	if (bVisionCenterBlendActive)
+	{
+		return BlendedVisionCenterWorldLocation;
+	}
+
+	if (IsValid(VisionCenterActor))
+	{
+		return VisionCenterActor->GetActorLocation();
+	}
+
+	return bUseExplicitVisionCenterLocation
+		? ExplicitVisionCenterWorldLocation
+		: GetActorLocation();
+}
+
+void ASDVisionDirector::AdvanceVisionBlend(float DeltaSeconds)
+{
+	if (!bVisionBlendActive)
+	{
+		return;
+	}
+
+	VisionBlendElapsed += FMath::Max(0.0f, DeltaSeconds);
+	const float NormalizedAlpha = VisionBlendDuration <= KINDA_SMALL_NUMBER
+		? 1.0f
+		: FMath::Clamp(VisionBlendElapsed / VisionBlendDuration, 0.0f, 1.0f);
+	const float EasedAlpha = EvaluateVisionBlendEase(
+		NormalizedAlpha,
+		VisionBlendEaseMode,
+		VisionBlendEaseExponent);
+
+	CurrentVisionAlpha = FMath::Lerp(VisionBlendStartAlpha, TargetVisionAlpha, EasedAlpha);
+	CurrentState = LerpVisionState(VisionBlendStartState, TargetVisionState, EasedAlpha);
+
+	if (NormalizedAlpha >= 1.0f)
+	{
+		CurrentVisionAlpha = TargetVisionAlpha;
+		CurrentState = TargetVisionState;
+		bVisionBlendActive = false;
+		VisionBlendStartAlpha = CurrentVisionAlpha;
+		VisionBlendStartState = CurrentState;
+	}
+}
+
+void ASDVisionDirector::AdvanceDarknessStrengthBlend(float DeltaSeconds)
+{
+	if (!bDarknessStrengthBlendActive)
+	{
+		return;
+	}
+
+	DarknessStrengthBlendElapsed += FMath::Max(0.0f, DeltaSeconds);
+	const float NormalizedAlpha = DarknessStrengthBlendDuration <= KINDA_SMALL_NUMBER
+		? 1.0f
+		: FMath::Clamp(DarknessStrengthBlendElapsed / DarknessStrengthBlendDuration, 0.0f, 1.0f);
+	const float EasedAlpha = EvaluateVisionBlendEase(
+		NormalizedAlpha,
+		DarknessStrengthBlendEaseMode,
+		DarknessStrengthBlendEaseExponent);
+
+	CurrentState.DarknessStrength = FMath::Lerp(
+		DarknessStrengthBlendStart,
+		TargetDarknessStrength,
+		EasedAlpha);
+
+	if (NormalizedAlpha >= 1.0f)
+	{
+		CurrentState.DarknessStrength = TargetDarknessStrength;
+		bDarknessStrengthBlendActive = false;
+		DarknessStrengthBlendStart = CurrentState.DarknessStrength;
+	}
+}
+
+void ASDVisionDirector::AdvanceVisionCenterBlend(float DeltaSeconds)
+{
+	if (!bVisionCenterBlendActive)
+	{
+		return;
+	}
+
+	VisionCenterBlendElapsed += FMath::Max(0.0f, DeltaSeconds);
+	const float NormalizedAlpha = VisionCenterBlendDuration <= KINDA_SMALL_NUMBER
+		? 1.0f
+		: FMath::Clamp(VisionCenterBlendElapsed / VisionCenterBlendDuration, 0.0f, 1.0f);
+	const float EasedAlpha = EvaluateVisionBlendEase(
+		NormalizedAlpha,
+		VisionCenterBlendEaseMode,
+		VisionCenterBlendEaseExponent);
+	BlendedVisionCenterWorldLocation = FMath::Lerp(
+		VisionCenterBlendStartLocation,
+		GetVisionCenterBlendTargetLocation(),
+		EasedAlpha);
+
+	if (NormalizedAlpha < 1.0f)
+	{
+		return;
+	}
+
+	if (bVisionCenterBlendTargetsActor)
+	{
+		VisionCenterActor = TargetVisionCenterActor;
+		bUseExplicitVisionCenterLocation = false;
+	}
+	else
+	{
+		VisionCenterActor = nullptr;
+		bUseExplicitVisionCenterLocation = true;
+		ExplicitVisionCenterWorldLocation = TargetVisionCenterWorldLocation;
+	}
+
+	bVisionCenterBlendActive = false;
+	TargetVisionCenterActor = nullptr;
+}
+
+FVector ASDVisionDirector::GetVisionCenterBlendTargetLocation() const
+{
+	if (bVisionCenterBlendTargetsActor)
+	{
+		return IsValid(TargetVisionCenterActor)
+			? TargetVisionCenterActor->GetActorLocation()
+			: GetActorLocation();
+	}
+
+	return TargetVisionCenterWorldLocation;
 }
 
 bool ASDVisionDirector::ShouldApplyPostProcessInCurrentWorld() const

@@ -187,6 +187,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|UI")
 	void DisableGameplayChat();
 
+	/**
+	 * Fades every viewport UI layer with the local hit-recovery blackout.
+	 * A top-level mask is used so each widget keeps its own visibility state and
+	 * naturally returns to that state when the player opens their eyes again.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|UI", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	void SetHitBlackoutUiOpacity(float Opacity);
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Input")
 	bool bHandleShowDownGameplayInput = true;
 
@@ -445,6 +453,7 @@ private:
 	void HandleVoicePushToTalkInput();
 	bool CanCreateLocalPlayerWidgets() const;
 	void EnsureChatWidget();
+	void RemoveLocalChatWidgetsExcept(UShowDownChatWidget* WidgetToKeep);
 	void EnsureLeaveConfirmWidget();
 	bool TryApplyPendingMultiplayerSeatCamera();
 	bool TryApplyPendingMultiplayerCharacterCamera();
@@ -534,6 +543,7 @@ private:
 	bool bEliminatedSpectatorViewActive = false;
 
 	TSharedPtr<SWidget> CenterCrosshairWidget;
+	TSharedPtr<SWidget> HitBlackoutOverlayWidget;
 	TArray<FSDPrimitiveCustomDepthState> FocusedPrimitiveStates;
 
 	bool bChatOpen = false;

@@ -1,5 +1,6 @@
 #include "ShowDownHubFlowManager.h"
 
+#include "Audio/ShowDownAudioSubsystem.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Blueprint/UserWidget.h"
@@ -81,6 +82,14 @@ void AShowDownHubFlowManager::BeginPlay()
 	{
 		UE_LOG(LogTemp, Log, TEXT("HubFlowManager disabled on networked gameplay map."));
 		return;
+	}
+
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UShowDownAudioSubsystem* AudioSubsystem = GameInstance->GetSubsystem<UShowDownAudioSubsystem>())
+		{
+			AudioSubsystem->SetCrowdBedEnabled(false, 0.0f);
+		}
 	}
 
 #if UE_BUILD_SHIPPING
@@ -554,6 +563,22 @@ void AShowDownHubFlowManager::ApplySinglePlayerVoiceSettings()
 		VoiceSubsystem->TTSPlaybackSpeed = FMath::Clamp(SinglePlayerVoiceSpeed, 0.5f, 2.0f);
 		VoiceSubsystem->TTSPlaybackPitch = FMath::Clamp(SinglePlayerVoicePitch, 0.5f, 2.0f);
 	}
+}
+
+void AShowDownHubFlowManager::PrepareForMultiplayerGameplay()
+{
+	// Remove the lobby/menu layer explicitly. RemoveAllViewportWidgets would also
+	// clear screen-space WidgetComponent layers (character name tags) while those
+	// components still believe they are registered with the viewport.
+	if (TransitionWidget)
+	{
+		TransitionWidget->RemoveFromParent();
+		TransitionWidget = nullptr;
+	}
+	TransitionOperation = EShowDownHubTransitionOperation::None;
+	SetActiveWidget(nullptr);
+	MultiplayerWidget = nullptr;
+	LobbyWidget = nullptr;
 }
 
 void AShowDownHubFlowManager::OpenMultiplayerLevel()

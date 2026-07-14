@@ -1,5 +1,6 @@
 #include "ShowDownSettingsWidget.h"
 
+#include "Audio/ShowDownAudioSubsystem.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
 #include "Components/Button.h"
@@ -52,6 +53,11 @@ void ApplySettingsTabStyle(UButton* Button, bool bActive)
 	Style.SetDisabled(SettingsTabBrush(FLinearColor(0.08f, 0.08f, 0.08f, 0.45f)));
 	Button->SetStyle(Style);
 }
+UShowDownAudioSubsystem* AudioSubsystemFor(const UWidget* Widget)
+{
+	UGameInstance* GameInstance = Widget ? Widget->GetGameInstance() : nullptr;
+	return GameInstance ? GameInstance->GetSubsystem<UShowDownAudioSubsystem>() : nullptr;
+}
 }
 
 TSharedRef<SWidget> UShowDownSettingsWidget::RebuildWidget()
@@ -79,6 +85,11 @@ void UShowDownSettingsWidget::NativeConstruct()
 	GConfig->GetFloat(UserSettingsSection, TEXT("MusicVolume"), PendingMusicVolume, GGameUserSettingsIni);
 	GConfig->GetFloat(UserSettingsSection, TEXT("EffectVolume"), PendingEffectVolume, GGameUserSettingsIni);
 	GConfig->GetFloat(UserSettingsSection, TEXT("DialogVolume"), PendingDialogVolume, GGameUserSettingsIni);
+	if (UShowDownAudioSubsystem* AudioSubsystem = AudioSubsystemFor(this))
+	{
+		AudioSubsystem->SetUserMusicVolume(PendingMusicVolume);
+		AudioSubsystem->SetUserEffectVolume(PendingEffectVolume);
+	}
 	if (EditableTextBox_CharacterName) EditableTextBox_CharacterName->SetText(FText::FromString(PendingCharacterName));
 	if (Slider_MouseSensitivity) Slider_MouseSensitivity->SetValue(SliderFromSensitivity(PendingMouseSensitivity));
 	if (Slider_Brightness) Slider_Brightness->SetValue(SliderFromBrightness(PendingBrightness));
@@ -306,8 +317,8 @@ void UShowDownSettingsWidget::HandlePostProcessClicked() { PendingPostProcess=(P
 void UShowDownSettingsWidget::HandleEffectsClicked() { PendingEffects=(PendingEffects+1)%4; RefreshLabels(); }
 void UShowDownSettingsWidget::HandleMouseSensitivityChanged(float Value) { PendingMouseSensitivity=SensitivityFromSlider(Value); RefreshLabels(); }
 void UShowDownSettingsWidget::HandleMasterVolumeChanged(float Value) { PendingMasterVolume=Value; RefreshLabels(); if(UWorld* World=GetWorld()){FAudioDeviceHandle Device=World->GetAudioDevice(); if(Device.IsValid()) Device->SetTransientPrimaryVolume(Value);} }
-void UShowDownSettingsWidget::HandleMusicVolumeChanged(float Value) { PendingMusicVolume=Value; RefreshLabels(); }
-void UShowDownSettingsWidget::HandleEffectVolumeChanged(float Value) { PendingEffectVolume=Value; RefreshLabels(); }
+void UShowDownSettingsWidget::HandleMusicVolumeChanged(float Value) { PendingMusicVolume=Value; RefreshLabels(); if(UShowDownAudioSubsystem* AudioSubsystem=AudioSubsystemFor(this)) AudioSubsystem->SetUserMusicVolume(Value); }
+void UShowDownSettingsWidget::HandleEffectVolumeChanged(float Value) { PendingEffectVolume=Value; RefreshLabels(); if(UShowDownAudioSubsystem* AudioSubsystem=AudioSubsystemFor(this)) AudioSubsystem->SetUserEffectVolume(Value); }
 void UShowDownSettingsWidget::HandleDialogVolumeChanged(float Value) { PendingDialogVolume=Value; RefreshLabels(); }
 void UShowDownSettingsWidget::HandleApplyClicked()
 {

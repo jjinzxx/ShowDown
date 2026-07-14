@@ -2,6 +2,7 @@
 
 #include "ShowDownGameModeBase.h"
 
+#include "Audio/ShowDownAudioSubsystem.h"
 #include "Card.h"
 #include "CardSystem.h"
 #include "Collector.h"
@@ -461,6 +462,13 @@ void AShowDownGameModeBase::StartSinglePlayer()
 		return;
 	}
 	bSinglePlayerMatchStarted = true;
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UShowDownAudioSubsystem* AudioSubsystem = GameInstance->GetSubsystem<UShowDownAudioSubsystem>())
+		{
+			AudioSubsystem->SetCrowdBedEnabled(true);
+		}
+	}
 	ClearInitialCardDealPresentation();
 	bInitialCardDealPresentationPlayed = false;
 	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
@@ -662,6 +670,13 @@ void AShowDownGameModeBase::ResetForHubReturn()
 	// every callback bound to it so a delayed reveal, roulette, or AI retry from
 	// the previous game cannot mutate the freshly reset board.
 	GetWorldTimerManager().ClearAllTimersForObject(this);
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UShowDownAudioSubsystem* AudioSubsystem = GameInstance->GetSubsystem<UShowDownAudioSubsystem>())
+		{
+			AudioSubsystem->SetCrowdBedEnabled(false);
+		}
+	}
 	ClearMultiplayerRoundTimers();
 	ClearCardRevealPresentationTimers();
 	ClearInitialCardDealPresentation();
@@ -4776,10 +4791,6 @@ ASDBetActionPanelActor* AShowDownGameModeBase::EnsureBetActionPanelActor()
 		PanelClass,
 		FTransform::Identity,
 		SpawnParams);
-	if (BetActionPanelActor)
-	{
-		BetActionPanelActor->PanelVisualScale = FMath::Max(0.1f, BetActionPanelVisualScale);
-	}
 	return BetActionPanelActor;
 }
 
@@ -5033,7 +5044,23 @@ void AShowDownGameModeBase::ClearBetActionPanel()
 	EmptyState.BulletAnimationDuration = FMath::Clamp(BetActionBulletAnimationDuration, 0.05f, 1.0f);
 	EmptyState.BulletRevealStaggerDelay = FMath::Clamp(BetActionBulletRevealStagger, 0.0f, 0.25f);
 	EmptyState.BulletBounceStrength = FMath::Clamp(BetActionBulletBounceStrength, 0.0f, 0.5f);
+	PopulateBetActionPanelLayoutState(EmptyState);
 	PanelActor->SetPanelState(EmptyState);
+}
+
+void AShowDownGameModeBase::PopulateBetActionPanelLayoutState(FSDBetActionPanelState& PanelState) const
+{
+	PanelState.PanelVisualScale = FMath::Max(0.1f, BetActionPanelVisualScale);
+	PanelState.ButtonHeight = FMath::Max(1.0f, BetActionButtonHeight);
+	PanelState.PrimaryButtonWidth = FMath::Max(1.0f, BetActionPrimaryButtonWidth);
+	PanelState.RaiseButtonWidth = FMath::Max(1.0f, BetActionRaiseButtonWidth);
+	PanelState.StepButtonWidth = FMath::Max(1.0f, BetActionStepButtonWidth);
+	PanelState.FoldButtonWidth = FMath::Max(1.0f, BetActionFoldButtonWidth);
+	PanelState.TopRowHeight = BetActionRaiseRowHeight;
+	PanelState.BottomRowHeight = BetActionPrimaryRowHeight;
+	PanelState.BulletSpacing = FMath::Max(0.1f, BetActionBulletSpacing);
+	PanelState.BulletPreviewScale = FMath::Max(0.001f, BetActionBulletScale);
+	PanelState.BulletRowOffset = BetActionBulletRowOffset;
 }
 
 void AShowDownGameModeBase::SetMultiplayerRaisePreviewTarget(ASDPlayerState* SubmittingPlayer, int32 TargetBet)
@@ -5073,18 +5100,6 @@ void AShowDownGameModeBase::RefreshBetActionPanel()
 	{
 		return;
 	}
-	PanelActor->PanelVisualScale = FMath::Max(0.1f, BetActionPanelVisualScale);
-	PanelActor->ButtonHeight = FMath::Max(1.0f, BetActionButtonHeight);
-	PanelActor->PrimaryButtonWidth = FMath::Max(1.0f, BetActionPrimaryButtonWidth);
-	PanelActor->RaiseButtonWidth = FMath::Max(1.0f, BetActionRaiseButtonWidth);
-	PanelActor->StepButtonWidth = FMath::Max(1.0f, BetActionStepButtonWidth);
-	PanelActor->FoldButtonWidth = FMath::Max(1.0f, BetActionFoldButtonWidth);
-	PanelActor->TopRowHeight = BetActionRaiseRowHeight;
-	PanelActor->BottomRowHeight = BetActionPrimaryRowHeight;
-	PanelActor->BulletSpacing = FMath::Max(0.1f, BetActionBulletSpacing);
-	PanelActor->BulletPreviewScale = FMath::Max(0.001f, BetActionBulletScale);
-	PanelActor->BulletRowOffset = BetActionBulletRowOffset;
-
 	FSDBetActionPanelState NewState;
 	NewState.Revision = ++BetActionPanelRevision;
 	NewState.MaxRaiseTarget = 6;
@@ -5094,6 +5109,7 @@ void AShowDownGameModeBase::RefreshBetActionPanel()
 	NewState.BulletAnimationDuration = FMath::Clamp(BetActionBulletAnimationDuration, 0.05f, 1.0f);
 	NewState.BulletRevealStaggerDelay = FMath::Clamp(BetActionBulletRevealStagger, 0.0f, 0.25f);
 	NewState.BulletBounceStrength = FMath::Clamp(BetActionBulletBounceStrength, 0.0f, 0.5f);
+	PopulateBetActionPanelLayoutState(NewState);
 
 	if (bMultiplayerMatchStarted)
 	{
@@ -5596,7 +5612,9 @@ FTransform AShowDownGameModeBase::BuildCardRevealPresentationTransform(
 			&& ShowDownCardRevealLayout::TryBuildRadialTransform(
 				TableCenter,
 				SeatLocation,
-				CardRevealSideSpacing,
+				ShowDownCardRevealLayout::ResolveRadialCenterDistance(
+					CardRevealSideSpacing,
+					CardCount),
 				CardRevealTableYaw,
 				CardRevealHeightOffset,
 				CardRevealRotationOffset,

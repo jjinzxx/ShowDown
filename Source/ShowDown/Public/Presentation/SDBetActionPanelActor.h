@@ -63,6 +63,39 @@ struct FSDBetActionPanelState
 	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions")
 	bool bCanFold = false;
 
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions|Layout")
+	float PanelVisualScale = 0.35f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions|Layout")
+	float ButtonHeight = 12.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions|Layout")
+	float PrimaryButtonWidth = 46.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions|Layout")
+	float RaiseButtonWidth = 58.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions|Layout")
+	float StepButtonWidth = 18.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions|Layout")
+	float FoldButtonWidth = 46.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions|Layout")
+	float TopRowHeight = 7.5f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions|Layout")
+	float BottomRowHeight = -7.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions|Layout")
+	float BulletSpacing = 10.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions|Layout")
+	float BulletPreviewScale = 0.08f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions|Layout")
+	FVector BulletRowOffset = FVector(0.0f, 0.0f, 18.0f);
+
 	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Bet Actions|Animation")
 	float ButtonAnimationDuration = 0.34f;
 
@@ -104,28 +137,6 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Bet Actions")
 	TSubclassOf<ASDBetActionButtonActor> ButtonActorClass;
-
-	float PanelVisualScale = 0.35f;
-
-	float ButtonHeight = 12.0f;
-
-	float PrimaryButtonWidth = 46.0f;
-
-	float RaiseButtonWidth = 58.0f;
-
-	float StepButtonWidth = 18.0f;
-
-	float FoldButtonWidth = 46.0f;
-
-	float TopRowHeight = 7.5f;
-
-	float BottomRowHeight = -7.0f;
-
-	float BulletSpacing = 10.0f;
-
-	float BulletPreviewScale = 0.08f;
-
-	FVector BulletRowOffset = FVector(0.0f, 0.0f, 18.0f);
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Bet Actions")
 	void SetPanelState(const FSDBetActionPanelState& NewState);

@@ -163,6 +163,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Chat")
 	void SubmitDialogueInput(const FString& Text);
 
+	// The ShowDown player controller owns gameplay chat. This only tears down
+	// the legacy pawn-owned widget when ownership changes or the pawn exits.
+	void ReleaseChatWidget();
+
 	FString GetChatSenderName() const;
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Betting")
@@ -198,6 +202,7 @@ protected:
 	// Called when the game starts or when spawned
 	virtual void PreInitializeComponents() override;
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void PossessedBy(AController* NewController) override;
 public:
 	// Called every frame
