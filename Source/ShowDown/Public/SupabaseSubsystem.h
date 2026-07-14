@@ -269,8 +269,8 @@ private:
 	// Supabase 프로젝트 기본 URL입니다.
 	FString SupabaseUrl = TEXT("https://xfyzrqsbdweckjgxefjr.supabase.co");
 
-	// Supabase anon public key입니다.
-	FString SupabaseAnonKey = TEXT("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhmeXpycXNiZHdlY2tqZ3hlZmpyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEyMDI4NzQsImV4cCI6MjA5Njc3ODg3NH0.-kUBpHDLFPsL6MHPtdQUu_AgiFILyDxh5T8aFNMIKR8");
+	// Public client key. Authorization still uses the signed-in user's access token.
+	FString SupabasePublishableKey = TEXT("sb_publishable_CFQn2cVa58AV-iRDqq0QfQ_Hy4rARoV");
 
 	
 	// 로그인 성공 시 Supabase가 내려주는 인증 토큰입니다.

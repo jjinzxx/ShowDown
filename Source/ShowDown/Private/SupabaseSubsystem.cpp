@@ -77,8 +77,8 @@ void USupabaseSubsystem::LoginWithEmail(const FString& Email, const FString& Pas
 	Request->SetURL(Url);
 	Request->SetVerb(TEXT("POST"));
 
-	// anon public key를 apikey 헤더에 넣어 Supabase 프로젝트에 접근합니다.
-	Request->SetHeader(TEXT("apikey"), SupabaseAnonKey);
+	// Publishable key identifies this desktop client to Supabase.
+	Request->SetHeader(TEXT("apikey"), SupabasePublishableKey);
 	Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
 
 	// Supabase 로그인 API가 요구하는 JSON body를 만듭니다.
@@ -183,9 +183,9 @@ void USupabaseSubsystem::LoginWithId(const FString& Id, const FString& Password)
 	Request->SetURL(SupabaseUrl + TEXT("/functions/v1/login-with-id"));
 	Request->SetVerb(TEXT("POST"));
 
-	// Edge Function 접근에도 anon 키가 필요합니다(아직 로그인 전이라 사용자 토큰은 없음).
-	Request->SetHeader(TEXT("apikey"), SupabaseAnonKey);
-	Request->SetHeader(TEXT("Authorization"), FString::Printf(TEXT("Bearer %s"), *SupabaseAnonKey));
+	// This pre-login function has verify_jwt disabled, so it receives only the
+	// publishable API key. Opaque sb_publishable keys are not bearer JWTs.
+	Request->SetHeader(TEXT("apikey"), SupabasePublishableKey);
 	Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
 
 	// 요청 body: { "id": "...", "password": "..." }
@@ -355,7 +355,7 @@ TSharedRef<IHttpRequest, ESPMode::ThreadSafe> USupabaseSubsystem::CreateAuthoriz
 	Request->SetVerb(Verb);
 
 	// Supabase REST API 요청에는 apikey와 Authorization 헤더가 필요합니다.
-	Request->SetHeader(TEXT("apikey"), SupabaseAnonKey);
+	Request->SetHeader(TEXT("apikey"), SupabasePublishableKey);
 	Request->SetHeader(TEXT("Authorization"), FString::Printf(TEXT("Bearer %s"), *AccessToken));
 	Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
 
