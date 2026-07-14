@@ -231,10 +231,13 @@ void UShowDownAudioSubsystem::StartPersistentLoops(UWorld* World)
 
 	if (!IsValid(BackgroundMusicComponent) && AudioConfig->BackgroundMusicSound)
 	{
-		BackgroundMusicComponent = UGameplayStatics::SpawnSound2D(
+		// Keep the component multiplier at full scale. FadeIn's level is
+		// multiplied by this value, so spawning at zero makes the loop
+		// permanently silent even after a non-zero fade target is applied.
+		BackgroundMusicComponent = UGameplayStatics::CreateSound2D(
 			World,
 			AudioConfig->BackgroundMusicSound,
-			0.0f,
+			1.0f,
 			1.0f,
 			0.0f,
 			nullptr,
@@ -253,10 +256,10 @@ void UShowDownAudioSubsystem::StartPersistentLoops(UWorld* World)
 
 	if (!IsValid(CrowdBedComponent) && AudioConfig->CrowdBedSound)
 	{
-		CrowdBedComponent = UGameplayStatics::SpawnSound2D(
+		CrowdBedComponent = UGameplayStatics::CreateSound2D(
 			World,
 			AudioConfig->CrowdBedSound,
-			0.0f,
+			1.0f,
 			1.0f,
 			0.0f,
 			nullptr,
