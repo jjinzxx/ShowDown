@@ -477,6 +477,12 @@ void AShowDownPlayerController::ClientLeaveMultiplayerRoomToHub_Implementation()
 	ClientTravel(TEXT("/Game/Maps/L_ShowdownMain"), TRAVEL_Absolute);
 }
 
+void AShowDownPlayerController::ClientWasKicked_Implementation(const FText& KickReason)
+{
+	UE_LOG(LogTemp, Warning, TEXT("Removed from multiplayer lobby: %s"), *KickReason.ToString());
+	ClientLeaveMultiplayerRoomToHub_Implementation();
+}
+
 bool AShowDownPlayerController::TryApplyPendingMultiplayerSeatCamera()
 {
 	if (!bPendingMultiplayerSeatCamera || PendingMultiplayerSeatIndex == INDEX_NONE || !GetWorld())
@@ -3139,12 +3145,34 @@ void AShowDownPlayerController::ClientShowStatusMessage_Implementation(const FSt
 	}
 }
 
+void AShowDownPlayerController::ClientReportLobbyKickResult_Implementation(bool bSuccess)
+{
+	if (AShowDownHubFlowManager* HubFlowManager = Cast<AShowDownHubFlowManager>(
+		UGameplayStatics::GetActorOfClass(this, AShowDownHubFlowManager::StaticClass())))
+	{
+		HubFlowManager->ShowLobbyKickResult(bSuccess);
+	}
+
+	ClientShowStatusMessage_Implementation(bSuccess
+		? TEXT("참가자를 방에서 내보냈습니다.")
+		: TEXT("참가자를 강퇴할 수 없습니다."));
+}
+
 void AShowDownPlayerController::ServerRequestMultiplayerRestart_Implementation()
 {
 	if (AShowDownGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<AShowDownGameModeBase>() : nullptr)
 	{
 		GameMode->RequestMultiplayerRestartFromController(this);
 	}
+}
+
+void AShowDownPlayerController::ServerRequestLobbyKick_Implementation(const FString& TargetPlayerId)
+{
+	AShowDownGameModeBase* GameMode = GetWorld()
+		? GetWorld()->GetAuthGameMode<AShowDownGameModeBase>()
+		: nullptr;
+	const bool bKicked = GameMode && GameMode->RequestLobbyKickFromController(this, TargetPlayerId);
+	ClientReportLobbyKickResult(bKicked);
 }
 
 void AShowDownPlayerController::ServerNotifyInitialCardDealCameraReady_Implementation()

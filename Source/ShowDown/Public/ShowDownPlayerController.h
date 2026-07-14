@@ -44,6 +44,7 @@ public:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void OnPossess(APawn* InPawn) override;
 	virtual void PlayerTick(float DeltaTime) override;
+	virtual void ClientWasKicked_Implementation(const FText& KickReason) override;
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Input")
 	void HandlePrimaryClick();
@@ -355,6 +356,9 @@ public:
 	void ServerRequestMultiplayerRestart();
 
 	UFUNCTION(Server, Reliable)
+	void ServerRequestLobbyKick(const FString& TargetPlayerId);
+
+	UFUNCTION(Server, Reliable)
 	void ServerNotifyInitialCardDealCameraReady();
 
 	UFUNCTION(Server, Unreliable)
@@ -362,6 +366,9 @@ public:
 
 	UFUNCTION(Client, Reliable)
 	void ClientShowStatusMessage(const FString& Message);
+
+	UFUNCTION(Client, Reliable)
+	void ClientReportLobbyKickResult(bool bSuccess);
 
 	UFUNCTION(Client, Reliable)
 	void ClientShowMultiplayerRank(const TArray<FString>& PlayerNames);

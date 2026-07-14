@@ -47,6 +47,9 @@ private:
 	UPROPERTY()
 	UTextBlock* Text_PlayerCount = nullptr;
 
+	UPROPERTY()
+	UTextBlock* Text_Join = nullptr;
+
 	void RefreshRoomInfo();
 
 	UFUNCTION()

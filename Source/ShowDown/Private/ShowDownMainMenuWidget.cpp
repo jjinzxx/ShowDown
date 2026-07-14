@@ -176,9 +176,6 @@ void UShowDownMainMenuWidget::BuildFigmaLayout()
 	EditableTextBox_Nickname = WidgetTree->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass(), TEXT("EditableTextBox_Nickname"));
 	EditableTextBox_Nickname->SetVisibility(ESlateVisibility::Collapsed);
 	Root->AddChild(EditableTextBox_Nickname);
-	Button_ChangeNickname = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), TEXT("Button_ChangeNickname"));
-	Button_ChangeNickname->SetVisibility(ESlateVisibility::Collapsed);
-	Root->AddChild(Button_ChangeNickname);
 }
 
 void UShowDownMainMenuWidget::NativeDestruct()
@@ -244,17 +241,17 @@ void UShowDownMainMenuWidget::RefreshPlayerInfo()
 	{
 		if (Text_Nickname)
 		{
-			Text_Nickname->SetText(FText::FromString(TEXT("Nickname: Unknown")));
+			Text_Nickname->SetText(FText::FromString(TEXT("이름 없음")));
 		}
 
 		if (Text_Coin)
 		{
-			Text_Coin->SetText(FText::FromString(TEXT("Coin: 0")));
+			Text_Coin->SetText(FText::FromString(TEXT("◉ 0")));
 		}
 
 		if (Text_Score)
 		{
-			Text_Score->SetText(FText::FromString(TEXT("Score: 0")));
+			Text_Score->SetText(FText::FromString(TEXT("▣ 0")));
 		}
 
 		return;
@@ -262,23 +259,21 @@ void UShowDownMainMenuWidget::RefreshPlayerInfo()
 
 	if (Text_Nickname && !bEditingNickname)
 	{
-		Text_Nickname->SetText(
-			FText::FromString(FString::Printf(TEXT("Nickname: %s"), *SupabaseSubsystem->GetNickname()))
-		);
+		Text_Nickname->SetText(FText::FromString(SupabaseSubsystem->GetNickname()));
 	}
 
 	if (Text_Coin)
 	{
-		Text_Coin->SetText(
-			FText::FromString(FString::Printf(TEXT("Coin: %d"), SupabaseSubsystem->GetCoin()))
-		);
+		Text_Coin->SetText(FText::FromString(FString::Printf(
+			TEXT("◉ %s"),
+			*FText::AsNumber(SupabaseSubsystem->GetCoin()).ToString())));
 	}
 
 	if (Text_Score)
 	{
-		Text_Score->SetText(
-			FText::FromString(FString::Printf(TEXT("Score: %d"), SupabaseSubsystem->GetScore()))
-		);
+		Text_Score->SetText(FText::FromString(FString::Printf(
+			TEXT("▣ %s"),
+			*FText::AsNumber(SupabaseSubsystem->GetScore()).ToString())));
 	}
 }
 

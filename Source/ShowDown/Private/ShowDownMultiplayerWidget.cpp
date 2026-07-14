@@ -9,6 +9,7 @@
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/ScrollBox.h"
+#include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
@@ -65,11 +66,35 @@ void UShowDownPublicRoomEntryWidget::RefreshRoomInfo()
 	}
 	if (Text_RoomCode)
 	{
-		Text_RoomCode->SetText(FText::FromString(FString::Printf(TEXT("#%s"), *RoomInfo.RoomCode)));
+		Text_RoomCode->SetText(FText::FromString(RoomInfo.RoomCode));
 	}
 	if (Text_PlayerCount)
 	{
-		Text_PlayerCount->SetText(FText::FromString(FString::Printf(TEXT("플레이어: %d/%d"), RoomInfo.CurrentPlayers, RoomInfo.MaxPlayers)));
+		Text_PlayerCount->SetText(FText::FromString(FString::Printf(TEXT("%d/%d"), RoomInfo.CurrentPlayers, RoomInfo.MaxPlayers)));
+	}
+
+	const bool bRoomFull = RoomInfo.MaxPlayers > 0 && RoomInfo.CurrentPlayers >= RoomInfo.MaxPlayers;
+	if (Text_Join)
+	{
+		Text_Join->SetText(FText::FromString(bRoomFull ? TEXT("입장불가") : TEXT("참가")));
+	}
+	if (Button_Join)
+	{
+		FButtonStyle Style;
+		if (bRoomFull)
+		{
+			const FSlateBrush FullBrush = MultiplayerFlatBrush(FLinearColor(0.34f, 0.16f, 0.17f, 0.96f));
+			Style.SetNormal(FullBrush).SetHovered(FullBrush).SetPressed(FullBrush).SetDisabled(FullBrush);
+		}
+		else
+		{
+			Style.SetNormal(MultiplayerFlatBrush(FLinearColor(0.16f, 0.43f, 0.20f, 0.96f)));
+			Style.SetHovered(MultiplayerFlatBrush(FLinearColor(0.22f, 0.55f, 0.27f, 1.0f)));
+			Style.SetPressed(MultiplayerFlatBrush(FLinearColor(0.10f, 0.32f, 0.14f, 1.0f)));
+			Style.SetDisabled(MultiplayerFlatBrush(FLinearColor(0.10f, 0.22f, 0.12f, 0.55f)));
+		}
+		Button_Join->SetStyle(Style);
+		Button_Join->SetIsEnabled(!bRoomFull);
 	}
 }
 
@@ -84,61 +109,56 @@ TSharedRef<SWidget> UShowDownPublicRoomEntryWidget::RebuildWidget()
 	WidgetTree->RootWidget = RootBox;
 
 	UBorder* CardBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("RoomEntryBorder"));
-	CardBorder->SetBrushColor(SectionColor);
-	CardBorder->SetPadding(FMargin(18.0f, 14.0f));
+	CardBorder->SetBrushColor(FLinearColor(0.30f, 0.30f, 0.30f, 0.84f));
+	CardBorder->SetPadding(FMargin(12.0f, 3.0f));
 	if (UVerticalBoxSlot* CardSlot = RootBox->AddChildToVerticalBox(CardBorder))
 	{
-		CardSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 12.0f));
+		CardSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 7.0f));
 	}
 
-	UVerticalBox* CardBox = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("RoomEntryBox"));
-	CardBorder->SetContent(CardBox);
-
-	UHorizontalBox* HeaderBox = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("RoomEntryHeader"));
-	if (UVerticalBoxSlot* HeaderSlot = CardBox->AddChildToVerticalBox(HeaderBox))
-	{
-		HeaderSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 6.0f));
-	}
+	UHorizontalBox* HeaderBox = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("RoomEntryRow"));
+	CardBorder->SetContent(HeaderBox);
 
 	Text_RoomName = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_RoomName"));
 	Text_RoomName->SetColorAndOpacity(FSlateColor(FLinearColor::White));
-	Text_RoomName->SetFont(FSlateFontInfo(MultiplayerPretendardRegularFont(), 22));
+	Text_RoomName->SetFont(FSlateFontInfo(MultiplayerPretendardRegularFont(), 17));
 	if (UHorizontalBoxSlot* NameSlot = HeaderBox->AddChildToHorizontalBox(Text_RoomName))
 	{
 		NameSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		NameSlot->SetVerticalAlignment(VAlign_Center);
 	}
 
 	Text_RoomCode = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_RoomCode"));
-	Text_RoomCode->SetColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.75f, 0.32f, 1.0f)));
-	Text_RoomCode->SetFont(FSlateFontInfo(MultiplayerPretendardRegularFont(), 16));
-	Text_RoomCode->SetJustification(ETextJustify::Right);
-	if (UHorizontalBoxSlot* CodeSlot = HeaderBox->AddChildToHorizontalBox(Text_RoomCode))
-	{
-		CodeSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
-	}
+	Text_RoomCode->SetVisibility(ESlateVisibility::Collapsed);
 
 	Text_PlayerCount = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_PlayerCount"));
-	Text_PlayerCount->SetColorAndOpacity(FSlateColor(TextMutedColor));
-	Text_PlayerCount->SetFont(FSlateFontInfo(MultiplayerPretendardRegularFont(), 15));
-	if (UVerticalBoxSlot* PlayerSlot = CardBox->AddChildToVerticalBox(Text_PlayerCount))
+	Text_PlayerCount->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+	Text_PlayerCount->SetFont(FSlateFontInfo(MultiplayerPretendardRegularFont(), 16));
+	Text_PlayerCount->SetJustification(ETextJustify::Center);
+	if (UHorizontalBoxSlot* PlayerSlot = HeaderBox->AddChildToHorizontalBox(Text_PlayerCount))
 	{
-		PlayerSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 10.0f));
+		PlayerSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
+		PlayerSlot->SetPadding(FMargin(20.0f, 0.0f));
+		PlayerSlot->SetVerticalAlignment(VAlign_Center);
 	}
 
 	Button_Join = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), TEXT("Button_JoinPublicRoom"));
-	// Use fill-only brushes so the idle join button has no default Slate
-	// outline. Hover/press are still obvious through the brighter fill.
 	Button_Join->SetStyle(MultiplayerJoinButtonStyle());
 	Button_Join->SetBackgroundColor(FLinearColor::White);
-	UTextBlock* ButtonText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_JoinPublicRoom"));
-	ButtonText->SetText(FText::FromString(TEXT("로비 참가")));
-	ButtonText->SetJustification(ETextJustify::Center);
-	ButtonText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
-	ButtonText->SetFont(FSlateFontInfo(MultiplayerPretendardRegularFont(), 18));
-	Button_Join->SetContent(ButtonText);
-	if (UVerticalBoxSlot* ButtonSlot = CardBox->AddChildToVerticalBox(Button_Join))
+	Text_Join = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_JoinPublicRoom"));
+	Text_Join->SetText(FText::FromString(TEXT("참가")));
+	Text_Join->SetJustification(ETextJustify::Center);
+	Text_Join->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+	Text_Join->SetFont(FSlateFontInfo(MultiplayerPretendardRegularFont(), 16));
+	Button_Join->SetContent(Text_Join);
+	USizeBox* JoinButtonWidth = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("JoinButtonWidth"));
+	JoinButtonWidth->SetWidthOverride(118.0f);
+	JoinButtonWidth->SetHeightOverride(36.0f);
+	JoinButtonWidth->SetContent(Button_Join);
+	if (UHorizontalBoxSlot* ButtonSlot = HeaderBox->AddChildToHorizontalBox(JoinButtonWidth))
 	{
-		ButtonSlot->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 0.0f));
+		ButtonSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
+		ButtonSlot->SetVerticalAlignment(VAlign_Fill);
 	}
 	RefreshRoomInfo();
 
@@ -165,6 +185,10 @@ void UShowDownPublicRoomEntryWidget::NativeDestruct()
 
 void UShowDownPublicRoomEntryWidget::HandleJoinClicked()
 {
+	if (RoomInfo.MaxPlayers > 0 && RoomInfo.CurrentPlayers >= RoomInfo.MaxPlayers)
+	{
+		return;
+	}
 	OnJoinRequested.Broadcast(RoomInfo.SearchResultIndex);
 }
 
@@ -365,10 +389,10 @@ void UShowDownMultiplayerWidget::BuildDefaultLayout()
 		HeaderSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 18.0f));
 	}
 
-	UTextBlock* TitleText = CreateTextBlock(TEXT("MULTIPLAY"), 32, FLinearColor::White);
-	if (UHorizontalBoxSlot* TitleSlot = HeaderBox->AddChildToHorizontalBox(TitleText))
+	USizeBox* HeaderSpacer = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("HeaderSpacer"));
+	if (UHorizontalBoxSlot* SpacerSlot = HeaderBox->AddChildToHorizontalBox(HeaderSpacer))
 	{
-		TitleSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		SpacerSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 	}
 
 	Button_Back = CreateMenuButton(TEXT("닫기"));

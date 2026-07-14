@@ -59,6 +59,9 @@ private:
 	UPROPERTY(meta=(BindWidget)) UCanvasPanel* Panel_General = nullptr;
 	UPROPERTY(meta=(BindWidget)) UCanvasPanel* Panel_Graphics = nullptr;
 	UPROPERTY(meta=(BindWidget)) UCanvasPanel* Panel_Sound = nullptr;
+	UPROPERTY(meta=(BindWidget)) UEditableTextBox* EditableTextBox_Nickname = nullptr;
+	UPROPERTY(meta=(BindWidget)) UButton* Button_ChangeNickname = nullptr;
+	UPROPERTY(meta=(BindWidget)) UTextBlock* Text_NicknameStatus = nullptr;
 	UPROPERTY(meta=(BindWidget)) UEditableTextBox* EditableTextBox_CharacterName = nullptr;
 	UPROPERTY(meta=(BindWidget)) USlider* Slider_MouseSensitivity = nullptr;
 	UPROPERTY(meta=(BindWidget)) USlider* Slider_Brightness = nullptr;
@@ -80,9 +83,13 @@ private:
 	float PendingEffectVolume = 1.0f;
 	float PendingDialogVolume = 1.0f;
 	FString PendingCharacterName = TEXT("상대");
+	bool bNicknameUpdatePending = false;
 
 	void BuildLayout();
 	void RefreshLabels();
+	void RefreshNicknameEditor();
+	void SetNicknameUpdatePending(bool bPending);
+	void SetNicknameStatus(const FString& Message, const FLinearColor& Color);
 	UButton* CreateButton(const FString& Label, UTextBlock*& OutLabel, const FLinearColor& Color);
 
 	UFUNCTION() void HandleQualityClicked();
@@ -103,5 +110,8 @@ private:
 	UFUNCTION() void HandleGeneralTabClicked();
 	UFUNCTION() void HandleGraphicsTabClicked();
 	UFUNCTION() void HandleSoundTabClicked();
+	UFUNCTION() void HandleChangeNicknameClicked();
+	UFUNCTION() void HandleNicknameUpdated(bool bSuccess, const FString& Message);
+	UFUNCTION() void HandlePlayerDataLoaded(bool bSuccess, const FString& Message);
 	void ShowSettingsPanel(UCanvasPanel* PanelToShow);
 };

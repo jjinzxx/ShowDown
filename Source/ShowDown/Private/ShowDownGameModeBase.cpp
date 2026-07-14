@@ -39,6 +39,7 @@
 #include "EngineUtils.h"
 #include "Engine/GameInstance.h"
 #include "GameFramework/PlayerState.h"
+#include "GameFramework/GameSession.h"
 #include "Misc/ConfigCacheIni.h"
 
 namespace
@@ -507,6 +508,71 @@ void AShowDownGameModeBase::RefreshMultiplayerLobbyPlayers()
 	{
 		RefreshNetworkPlayerSlots();
 	}
+}
+
+bool AShowDownGameModeBase::RequestLobbyKickFromController(
+	AController* RequestingController,
+	const FString& TargetPlayerId)
+{
+	if (!HasAuthority()
+		|| GetNetMode() == NM_Standalone
+		|| bMultiplayerMatchStarted
+		|| !RequestingController
+		|| TargetPlayerId.IsEmpty())
+	{
+		return false;
+	}
+
+	const ASDPlayerState* RequestingPlayerState = RequestingController->GetPlayerState<ASDPlayerState>();
+	if (!RequestingPlayerState || !RequestingPlayerState->bHostPlayer)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Rejected lobby kick request from a non-host player."));
+		return false;
+	}
+
+	APlayerController* TargetController = nullptr;
+	if (UWorld* World = GetWorld())
+	{
+		for (FConstPlayerControllerIterator Iterator = World->GetPlayerControllerIterator(); Iterator; ++Iterator)
+		{
+			APlayerController* CandidateController = Iterator->Get();
+			const ASDPlayerState* CandidateState = CandidateController
+				? CandidateController->GetPlayerState<ASDPlayerState>()
+				: nullptr;
+			if (!CandidateState
+				|| CandidateController == RequestingController
+				|| CandidateState->bHostPlayer)
+			{
+				continue;
+			}
+
+			if (FString::FromInt(CandidateState->GetPlayerId()) == TargetPlayerId)
+			{
+				TargetController = CandidateController;
+				break;
+			}
+		}
+	}
+
+	if (!TargetController || !GameSession)
+	{
+		return false;
+	}
+
+	const ASDPlayerState* TargetState = TargetController->GetPlayerState<ASDPlayerState>();
+	const FString TargetName = TargetState ? TargetState->GetPlayerName() : TargetPlayerId;
+	const bool bKicked = GameSession->KickPlayer(
+		TargetController,
+		FText::FromString(TEXT("방장이 로비에서 내보냈습니다.")));
+	UE_LOG(
+		LogTemp,
+		Log,
+		TEXT("Lobby kick %s. Requester=%s Target=%s(%s)"),
+		bKicked ? TEXT("succeeded") : TEXT("failed"),
+		*RequestingPlayerState->GetPlayerName(),
+		*TargetName,
+		*TargetPlayerId);
+	return bKicked;
 }
 
 void AShowDownGameModeBase::SetMultiplayerVoiceTalking(AController* RequestingController, bool bIsTalking)

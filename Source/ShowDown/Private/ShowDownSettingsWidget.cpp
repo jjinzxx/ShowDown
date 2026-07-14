@@ -13,10 +13,12 @@
 #include "GameFramework/GameUserSettings.h"
 #include "AudioDevice.h"
 #include "Engine/Engine.h"
+#include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Misc/ConfigCacheIni.h"
 #include "ShowDownPlayerController.h"
 #include "Styling/CoreStyle.h"
+#include "SupabaseSubsystem.h"
 
 namespace
 {
@@ -26,6 +28,30 @@ float SliderFromSensitivity(float Value) { return FMath::GetMappedRangeValueClam
 float BrightnessFromSlider(float Value) { return FMath::Lerp(0.5f, 1.5f, FMath::Clamp(Value, 0.0f, 1.0f)); }
 float SliderFromBrightness(float Value) { return FMath::GetMappedRangeValueClamped(FVector2D(0.5f, 1.5f), FVector2D(0.0f, 1.0f), Value); }
 UTextBlock* ButtonLabel(UButton* Button) { return Button ? Cast<UTextBlock>(Button->GetContent()) : nullptr; }
+FSlateBrush SettingsTabBrush(const FLinearColor& Color)
+{
+	FSlateBrush Brush;
+	Brush.DrawAs = ESlateBrushDrawType::Box;
+	Brush.TintColor = FSlateColor(Color);
+	Brush.Margin = FMargin(0.0f);
+	return Brush;
+}
+void ApplySettingsTabStyle(UButton* Button, bool bActive)
+{
+	if (!Button)
+	{
+		return;
+	}
+	const FLinearColor NormalColor = bActive
+		? FLinearColor(0.0f, 0.0f, 0.0f, 0x99 / 255.0f)
+		: FLinearColor(0x19 / 255.0f, 0x19 / 255.0f, 0x19 / 255.0f, 0xFF / 255.0f);
+	FButtonStyle Style;
+	Style.SetNormal(SettingsTabBrush(NormalColor));
+	Style.SetHovered(SettingsTabBrush(FLinearColor(0.0f, 0.0f, 0.0f, 0xA6 / 255.0f)));
+	Style.SetPressed(SettingsTabBrush(FLinearColor(0.0f, 0.0f, 0.0f, 0xB3 / 255.0f)));
+	Style.SetDisabled(SettingsTabBrush(FLinearColor(0.08f, 0.08f, 0.08f, 0.45f)));
+	Button->SetStyle(Style);
+}
 }
 
 TSharedRef<SWidget> UShowDownSettingsWidget::RebuildWidget()
@@ -61,6 +87,7 @@ void UShowDownSettingsWidget::NativeConstruct()
 	if (Slider_EffectVolume) Slider_EffectVolume->SetValue(PendingEffectVolume);
 	if (Slider_DialogVolume) Slider_DialogVolume->SetValue(PendingDialogVolume);
 	RefreshLabels();
+	if (Button_ChangeNickname) Button_ChangeNickname->OnClicked.AddUniqueDynamic(this, &UShowDownSettingsWidget::HandleChangeNicknameClicked);
 	if (Button_Quality) Button_Quality->OnClicked.AddUniqueDynamic(this, &UShowDownSettingsWidget::HandleQualityClicked);
 	if (Button_WindowMode) Button_WindowMode->OnClicked.AddUniqueDynamic(this, &UShowDownSettingsWidget::HandleWindowModeClicked);
 	if (Button_VSync) Button_VSync->OnClicked.AddUniqueDynamic(this, &UShowDownSettingsWidget::HandleVSyncClicked);
@@ -79,11 +106,29 @@ void UShowDownSettingsWidget::NativeConstruct()
 	if (Button_TabGeneral) Button_TabGeneral->OnClicked.AddUniqueDynamic(this, &UShowDownSettingsWidget::HandleGeneralTabClicked);
 	if (Button_TabGraphics) Button_TabGraphics->OnClicked.AddUniqueDynamic(this, &UShowDownSettingsWidget::HandleGraphicsTabClicked);
 	if (Button_TabSound) Button_TabSound->OnClicked.AddUniqueDynamic(this, &UShowDownSettingsWidget::HandleSoundTabClicked);
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (USupabaseSubsystem* SupabaseSubsystem = GameInstance->GetSubsystem<USupabaseSubsystem>())
+		{
+			SupabaseSubsystem->OnNicknameUpdated.AddUniqueDynamic(this, &UShowDownSettingsWidget::HandleNicknameUpdated);
+			SupabaseSubsystem->OnPlayerDataLoaded.AddUniqueDynamic(this, &UShowDownSettingsWidget::HandlePlayerDataLoaded);
+			RefreshNicknameEditor();
+			SetNicknameUpdatePending(false);
+			SetNicknameStatus(TEXT(""), FLinearColor::White);
+		}
+		else
+		{
+			if (EditableTextBox_Nickname) EditableTextBox_Nickname->SetIsEnabled(false);
+			if (Button_ChangeNickname) Button_ChangeNickname->SetIsEnabled(false);
+			SetNicknameStatus(TEXT("로그인 정보를 확인할 수 없습니다."), FLinearColor::Red);
+		}
+	}
 	ShowSettingsPanel(Panel_General);
 }
 
 void UShowDownSettingsWidget::NativeDestruct()
 {
+	if (Button_ChangeNickname) Button_ChangeNickname->OnClicked.RemoveDynamic(this, &UShowDownSettingsWidget::HandleChangeNicknameClicked);
 	if (Button_Quality) Button_Quality->OnClicked.RemoveDynamic(this, &UShowDownSettingsWidget::HandleQualityClicked);
 	if (Button_WindowMode) Button_WindowMode->OnClicked.RemoveDynamic(this, &UShowDownSettingsWidget::HandleWindowModeClicked);
 	if (Button_VSync) Button_VSync->OnClicked.RemoveDynamic(this, &UShowDownSettingsWidget::HandleVSyncClicked);
@@ -102,6 +147,14 @@ void UShowDownSettingsWidget::NativeDestruct()
 	if (Button_TabGeneral) Button_TabGeneral->OnClicked.RemoveDynamic(this, &UShowDownSettingsWidget::HandleGeneralTabClicked);
 	if (Button_TabGraphics) Button_TabGraphics->OnClicked.RemoveDynamic(this, &UShowDownSettingsWidget::HandleGraphicsTabClicked);
 	if (Button_TabSound) Button_TabSound->OnClicked.RemoveDynamic(this, &UShowDownSettingsWidget::HandleSoundTabClicked);
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (USupabaseSubsystem* SupabaseSubsystem = GameInstance->GetSubsystem<USupabaseSubsystem>())
+		{
+			SupabaseSubsystem->OnNicknameUpdated.RemoveDynamic(this, &UShowDownSettingsWidget::HandleNicknameUpdated);
+			SupabaseSubsystem->OnPlayerDataLoaded.RemoveDynamic(this, &UShowDownSettingsWidget::HandlePlayerDataLoaded);
+		}
+	}
 	Super::NativeDestruct();
 }
 
@@ -120,12 +173,6 @@ void UShowDownSettingsWidget::BuildLayout()
 
 	UVerticalBox* Stack = WidgetTree->ConstructWidget<UVerticalBox>();
 	Panel->SetContent(Stack);
-	UTextBlock* Title = WidgetTree->ConstructWidget<UTextBlock>();
-	Title->SetText(FText::FromString(TEXT("OPTION")));
-	Title->SetJustification(ETextJustify::Center);
-	Title->SetColorAndOpacity(FSlateColor(FLinearColor::White));
-	Title->SetFont(FSlateFontInfo(LoadObject<UObject>(nullptr, TEXT("/Game/UI/Font/Pretendard/static/Pretendard-Regular_Font.Pretendard-Regular_Font")), 32));
-	Stack->AddChildToVerticalBox(Title)->SetPadding(FMargin(0, 0, 0, 28));
 
 	Button_Quality = CreateButton(TEXT(""), Text_Quality, FLinearColor(0.04f, 0.06f, 0.07f, 0.95f));
 	Button_WindowMode = CreateButton(TEXT(""), Text_WindowMode, FLinearColor(0.04f, 0.06f, 0.07f, 0.95f));
@@ -164,16 +211,20 @@ UButton* UShowDownSettingsWidget::CreateButton(const FString& Label, UTextBlock*
 
 void UShowDownSettingsWidget::RefreshLabels()
 {
-	static const TCHAR* OverallQualityNames[] = { TEXT("LOW"), TEXT("MEDIUM"), TEXT("HIGH"), TEXT("EPIC") };
-	const FText QualityLabel = FText::FromString(FString::Printf(TEXT("GRAPHICS QUALITY     %s"), OverallQualityNames[FMath::Clamp(PendingQuality, 0, 3)]));
-	const TCHAR* Mode = PendingWindowMode == EWindowMode::Fullscreen ? TEXT("FULLSCREEN") : PendingWindowMode == EWindowMode::Windowed ? TEXT("WINDOWED") : TEXT("BORDERLESS");
-	const FText WindowModeLabel = FText::FromString(FString::Printf(TEXT("DISPLAY MODE     %s"), Mode));
-	const FText VSyncLabel = FText::FromString(FString::Printf(TEXT("V-SYNC     %s"), bPendingVSync ? TEXT("ON") : TEXT("OFF")));
+	static const TCHAR* OverallQualityNames[] = { TEXT("낮음"), TEXT("중간"), TEXT("높음"), TEXT("최상") };
+	const FText QualityLabel = FText::FromString(OverallQualityNames[FMath::Clamp(PendingQuality, 0, 3)]);
+	const TCHAR* Mode = PendingWindowMode == EWindowMode::Fullscreen
+		? TEXT("전체 화면")
+		: PendingWindowMode == EWindowMode::Windowed
+			? TEXT("창 모드")
+			: TEXT("테두리 없는 창");
+	const FText WindowModeLabel = FText::FromString(Mode);
+	const FText VSyncLabel = FText::FromString(bPendingVSync ? TEXT("켜짐") : TEXT("꺼짐"));
 	static const TCHAR* QualityNames[] = { TEXT("하"), TEXT("중"), TEXT("상"), TEXT("최상") };
-	const FText ResolutionLabel = FText::FromString(FString::Printf(TEXT("화면 비율     %dx%d @60Hz"), PendingResolution.X, PendingResolution.Y));
-	const FText BrightnessLabel = FText::FromString(FString::Printf(TEXT("밝기     %.1f"), PendingBrightness));
-	const FText PostProcessLabel = FText::FromString(FString::Printf(TEXT("포스트이펙트     %s"), QualityNames[FMath::Clamp(PendingPostProcess,0,3)]));
-	const FText EffectsLabel = FText::FromString(FString::Printf(TEXT("특수효과 품질     %s"), QualityNames[FMath::Clamp(PendingEffects,0,3)]));
+	const FText ResolutionLabel = FText::FromString(FString::Printf(TEXT("%dx%d @60Hz"), PendingResolution.X, PendingResolution.Y));
+	const FText BrightnessLabel = FText::FromString(FString::Printf(TEXT("%.1f"), PendingBrightness));
+	const FText PostProcessLabel = FText::FromString(QualityNames[FMath::Clamp(PendingPostProcess,0,3)]);
+	const FText EffectsLabel = FText::FromString(QualityNames[FMath::Clamp(PendingEffects,0,3)]);
 	if (Text_Quality) Text_Quality->SetText(QualityLabel);
 	if (Text_WindowMode) Text_WindowMode->SetText(WindowModeLabel);
 	if (Text_VSync) Text_VSync->SetText(VSyncLabel);
@@ -193,6 +244,48 @@ void UShowDownSettingsWidget::RefreshLabels()
 	if (UTextBlock* Label=ButtonLabel(Button_Brightness)) Label->SetText(BrightnessLabel);
 	if (UTextBlock* Label=ButtonLabel(Button_PostProcess)) Label->SetText(PostProcessLabel);
 	if (UTextBlock* Label=ButtonLabel(Button_Effects)) Label->SetText(EffectsLabel);
+}
+
+void UShowDownSettingsWidget::RefreshNicknameEditor()
+{
+	if (!EditableTextBox_Nickname)
+	{
+		return;
+	}
+
+	USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
+		: nullptr;
+	const FString CurrentNickname = SupabaseSubsystem ? SupabaseSubsystem->GetNickname() : FString();
+	EditableTextBox_Nickname->SetText(FText::FromString(CurrentNickname));
+	EditableTextBox_Nickname->SetHintText(FText::FromString(
+		CurrentNickname.IsEmpty() ? TEXT("2~16자 닉네임") : CurrentNickname));
+}
+
+void UShowDownSettingsWidget::SetNicknameUpdatePending(bool bPending)
+{
+	bNicknameUpdatePending = bPending;
+	if (EditableTextBox_Nickname)
+	{
+		EditableTextBox_Nickname->SetIsEnabled(!bPending);
+	}
+	if (Button_ChangeNickname)
+	{
+		Button_ChangeNickname->SetIsEnabled(!bPending);
+		if (UTextBlock* Label = Cast<UTextBlock>(Button_ChangeNickname->GetContent()))
+		{
+			Label->SetText(FText::FromString(bPending ? TEXT("변경 중") : TEXT("변경")));
+		}
+	}
+}
+
+void UShowDownSettingsWidget::SetNicknameStatus(const FString& Message, const FLinearColor& Color)
+{
+	if (Text_NicknameStatus)
+	{
+		Text_NicknameStatus->SetText(FText::FromString(Message));
+		Text_NicknameStatus->SetColorAndOpacity(FSlateColor(Color));
+	}
 }
 
 void UShowDownSettingsWidget::HandleQualityClicked() { PendingQuality = (PendingQuality + 1) % 4; RefreshLabels(); }
@@ -245,14 +338,87 @@ void UShowDownSettingsWidget::HandleApplyClicked()
 		if (Text_Status) Text_Status->SetText(FText::FromString(TEXT("Settings applied")));
 	}
 }
-void UShowDownSettingsWidget::HandleBackClicked() { OnBackRequested.Broadcast(); }
-void UShowDownSettingsWidget::HandleQuitClicked() { OnQuitRequested.Broadcast(); }
+void UShowDownSettingsWidget::HandleBackClicked() { HandleApplyClicked(); OnBackRequested.Broadcast(); }
+void UShowDownSettingsWidget::HandleQuitClicked() { HandleApplyClicked(); OnQuitRequested.Broadcast(); }
 void UShowDownSettingsWidget::HandleGeneralTabClicked() { ShowSettingsPanel(Panel_General); }
 void UShowDownSettingsWidget::HandleGraphicsTabClicked() { ShowSettingsPanel(Panel_Graphics); }
 void UShowDownSettingsWidget::HandleSoundTabClicked() { ShowSettingsPanel(Panel_Sound); }
+
+void UShowDownSettingsWidget::HandleChangeNicknameClicked()
+{
+	if (bNicknameUpdatePending)
+	{
+		return;
+	}
+
+	const FString NewNickname = EditableTextBox_Nickname
+		? EditableTextBox_Nickname->GetText().ToString().TrimStartAndEnd()
+		: FString();
+	if (NewNickname.Len() < 2 || NewNickname.Len() > 16)
+	{
+		SetNicknameStatus(TEXT("닉네임은 2~16자로 입력해 주세요."), FLinearColor::Red);
+		return;
+	}
+
+	USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
+		: nullptr;
+	if (!SupabaseSubsystem)
+	{
+		SetNicknameStatus(TEXT("로그인 정보를 확인할 수 없습니다."), FLinearColor::Red);
+		return;
+	}
+	if (NewNickname == SupabaseSubsystem->GetNickname())
+	{
+		SetNicknameStatus(TEXT("현재 닉네임과 같습니다."), FLinearColor::Yellow);
+		return;
+	}
+
+	SetNicknameUpdatePending(true);
+	SetNicknameStatus(TEXT("닉네임 변경 중..."), FLinearColor::Yellow);
+	SupabaseSubsystem->UpdateNickname(NewNickname);
+}
+
+void UShowDownSettingsWidget::HandleNicknameUpdated(bool bSuccess, const FString& Message)
+{
+	if (!bSuccess && Message == TEXT("Updating nickname..."))
+	{
+		SetNicknameUpdatePending(true);
+		SetNicknameStatus(TEXT("닉네임 변경 중..."), FLinearColor::Yellow);
+		return;
+	}
+
+	SetNicknameUpdatePending(false);
+	if (bSuccess)
+	{
+		RefreshNicknameEditor();
+		SetNicknameStatus(TEXT("닉네임이 변경되었습니다."), FLinearColor::Green);
+		return;
+	}
+
+	const FString ErrorMessage = Message == TEXT("Nickname must be 2-16 characters.")
+		? TEXT("닉네임은 2~16자로 입력해 주세요.")
+		: Message == TEXT("Access token is empty.") || Message == TEXT("User id is empty.")
+			? TEXT("로그인 정보를 확인할 수 없습니다.")
+			: TEXT("닉네임 변경에 실패했습니다.");
+	SetNicknameStatus(ErrorMessage, FLinearColor::Red);
+}
+
+void UShowDownSettingsWidget::HandlePlayerDataLoaded(bool bSuccess, const FString& Message)
+{
+	(void)Message;
+	if (bSuccess && !bNicknameUpdatePending && EditableTextBox_Nickname && !EditableTextBox_Nickname->HasKeyboardFocus())
+	{
+		RefreshNicknameEditor();
+	}
+}
+
 void UShowDownSettingsWidget::ShowSettingsPanel(UCanvasPanel* PanelToShow)
 {
 	if (Panel_General) Panel_General->SetVisibility(PanelToShow == Panel_General ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	if (Panel_Graphics) Panel_Graphics->SetVisibility(PanelToShow == Panel_Graphics ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	if (Panel_Sound) Panel_Sound->SetVisibility(PanelToShow == Panel_Sound ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	ApplySettingsTabStyle(Button_TabGeneral, PanelToShow == Panel_General);
+	ApplySettingsTabStyle(Button_TabGraphics, PanelToShow == Panel_Graphics);
+	ApplySettingsTabStyle(Button_TabSound, PanelToShow == Panel_Sound);
 }

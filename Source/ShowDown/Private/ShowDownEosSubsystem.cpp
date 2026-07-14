@@ -1340,12 +1340,6 @@ void UShowDownEosSubsystem::HandleFindSessionsComplete(bool bWasSuccessful)
 					continue;
 				}
 
-				if (SearchResult.Session.NumOpenPublicConnections <= 0)
-				{
-					++RejectedFullRooms;
-					continue;
-				}
-
 				FString RoomName;
 				SearchResult.Session.SessionSettings.Get(ShowDownRoomNameKey, RoomName);
 				if (RoomName.IsEmpty())

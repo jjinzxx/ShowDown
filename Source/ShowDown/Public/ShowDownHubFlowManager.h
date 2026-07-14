@@ -80,6 +80,8 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Flow")
 	void ShowLobby();
 
+	void ShowLobbyKickResult(bool bSuccess);
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Flow")
 	void ShowSettings();
 
@@ -335,6 +337,9 @@ private:
 
 	UFUNCTION()
 	void HandleLobbyLeaveRequested();
+
+	UFUNCTION()
+	void HandleLobbyKickRequested(const FString& PlayerId);
 
 	UFUNCTION()
 	void HandleShopRequested();

@@ -78,7 +78,7 @@ private:
 	UEditableTextBox* EditableTextBox_Nickname;
 
 	// 닉네임 변경 버튼입니다.
-	UPROPERTY(meta = (BindWidget))
+	UPROPERTY(meta = (BindWidgetOptional))
 	UButton* Button_ChangeNickname;
 
 	// 싱글 플레이 시작 버튼입니다.

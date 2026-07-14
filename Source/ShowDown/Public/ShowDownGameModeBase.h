@@ -198,6 +198,7 @@ public:
 	void StartMultiplayerGame();
 
 	void RefreshMultiplayerLobbyPlayers();
+	bool RequestLobbyKickFromController(AController* RequestingController, const FString& TargetPlayerId);
 	void SetMultiplayerVoiceTalking(AController* RequestingController, bool bIsTalking);
 	void NotifyInitialCardDealCameraReady(AController* ReadyController);
 

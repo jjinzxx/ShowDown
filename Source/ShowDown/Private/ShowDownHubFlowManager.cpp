@@ -401,10 +401,26 @@ void AShowDownHubFlowManager::ShowLobby()
 
 	LobbyWidget->OnStartRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleLobbyStartRequested);
 	LobbyWidget->OnLeaveRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleLobbyLeaveRequested);
+	LobbyWidget->OnKickRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleLobbyKickRequested);
 
 	SetActiveWidget(LobbyWidget);
 	SetUiOnlyInput(LobbyWidget);
 	OnScreenChanged.Broadcast(EShowDownHubFlowScreen::Lobby);
+}
+
+void AShowDownHubFlowManager::ShowLobbyKickResult(bool bSuccess)
+{
+	if (!LobbyWidget)
+	{
+		return;
+	}
+
+	LobbyWidget->SetInteractionPending(false);
+	LobbyWidget->ShowStatusMessage(
+		bSuccess
+			? TEXT("참가자를 방에서 내보냈습니다.")
+			: TEXT("참가자를 강퇴할 수 없습니다."),
+		bSuccess ? FLinearColor::Green : FLinearColor::Red);
 }
 
 void AShowDownHubFlowManager::ShowSettings()
@@ -1186,6 +1202,31 @@ void AShowDownHubFlowManager::HandleLobbyLeaveRequested()
 
 	HideTransitionOverlay();
 	ShowMainMenu();
+}
+
+void AShowDownHubFlowManager::HandleLobbyKickRequested(const FString& PlayerId)
+{
+	if (PlayerId.IsEmpty())
+	{
+		if (LobbyWidget)
+		{
+			LobbyWidget->SetInteractionPending(false);
+			LobbyWidget->ShowStatusMessage(TEXT("강퇴할 참가자를 확인할 수 없습니다."), FLinearColor::Red);
+		}
+		return;
+	}
+
+	if (AShowDownPlayerController* PlayerController = Cast<AShowDownPlayerController>(GetPrimaryPlayerController()))
+	{
+		PlayerController->ServerRequestLobbyKick(PlayerId);
+		return;
+	}
+
+	if (LobbyWidget)
+	{
+		LobbyWidget->SetInteractionPending(false);
+		LobbyWidget->ShowStatusMessage(TEXT("강퇴 요청을 보낼 수 없습니다."), FLinearColor::Red);
+	}
 }
 
 void AShowDownHubFlowManager::HandleShopRequested()
