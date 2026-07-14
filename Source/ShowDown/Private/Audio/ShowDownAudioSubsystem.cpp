@@ -164,6 +164,12 @@ void UShowDownAudioSubsystem::NotifyPhaseChanged(EShowDownPhase NewPhase)
 	RestoreIdleMix(AudioConfig->MixRestoreDuration);
 }
 
+void UShowDownAudioSubsystem::SetCrowdBedEnabled(bool bEnabled, float FadeDuration)
+{
+	bCrowdBedEnabled = bEnabled;
+	SetCrowdMixVolume(CurrentCrowdConfigVolume, FMath::Max(0.0f, FadeDuration));
+}
+
 void UShowDownAudioSubsystem::SetUserMusicVolume(float Volume)
 {
 	UserMusicVolume = ClampUserVolume(Volume);
@@ -270,9 +276,12 @@ void UShowDownAudioSubsystem::StartPersistentLoops(UWorld* World)
 			CrowdBedComponent->OnAudioFinished.AddUniqueDynamic(
 				this,
 				&UShowDownAudioSubsystem::HandleCrowdBedFinished);
-			CrowdBedComponent->FadeIn(
-				FMath::Max(0.0f, AudioConfig->LoopFadeInDuration),
-				FMath::Max(0.0f, AudioConfig->CrowdIdleVolume) * UserEffectVolume);
+			if (bCrowdBedEnabled)
+			{
+				CrowdBedComponent->FadeIn(
+					FMath::Max(0.0f, AudioConfig->LoopFadeInDuration),
+					FMath::Max(0.0f, AudioConfig->CrowdIdleVolume) * UserEffectVolume);
+			}
 		}
 	}
 }
@@ -326,9 +335,25 @@ void UShowDownAudioSubsystem::SetCrowdMixVolume(float ConfigVolume, float FadeDu
 		return;
 	}
 
+	if (!bCrowdBedEnabled)
+	{
+		if (CrowdBedComponent->IsPlaying())
+		{
+			CrowdBedComponent->FadeOut(FMath::Max(0.0f, FadeDuration), 0.0f);
+		}
+		return;
+	}
+
+	const float TargetVolume = CurrentCrowdConfigVolume * UserEffectVolume;
+	if (!CrowdBedComponent->IsPlaying())
+	{
+		CrowdBedComponent->FadeIn(FMath::Max(0.0f, FadeDuration), TargetVolume);
+		return;
+	}
+
 	CrowdBedComponent->AdjustVolume(
 		FMath::Max(0.0f, FadeDuration),
-		CurrentCrowdConfigVolume * UserEffectVolume);
+		TargetVolume);
 }
 
 void UShowDownAudioSubsystem::SetMusicMixMultiplier(float Multiplier, float FadeDuration)
@@ -410,9 +435,12 @@ void UShowDownAudioSubsystem::HandleBackgroundMusicFinished()
 
 void UShowDownAudioSubsystem::HandleCrowdBedFinished()
 {
-	if (CrowdBedComponent && AudioConfig && AudioConfig->CrowdBedSound)
+	if (bCrowdBedEnabled && CrowdBedComponent && AudioConfig && AudioConfig->CrowdBedSound)
 	{
-		CrowdBedComponent->Play(0.0f);
+		CrowdBedComponent->FadeIn(
+			0.0f,
+			CurrentCrowdConfigVolume * UserEffectVolume,
+			0.0f);
 	}
 }
 

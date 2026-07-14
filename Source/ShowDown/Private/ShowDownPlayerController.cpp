@@ -1,4 +1,5 @@
 #include "ShowDownPlayerController.h"
+#include "Audio/ShowDownAudioSubsystem.h"
 #include "ShowDownPauseMenuWidget.h"
 #include "ShowDownSettingsWidget.h"
 #include "ShowDownHubFlowManager.h"
@@ -342,6 +343,12 @@ void AShowDownPlayerController::ClientEnterMultiplayerGameplay_Implementation()
 	}
 
 	bGameplayChatEnabled = true;
+	if (UShowDownAudioSubsystem* AudioSubsystem = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<UShowDownAudioSubsystem>()
+		: nullptr)
+	{
+		AudioSubsystem->SetCrowdBedEnabled(true);
+	}
 	SubmitLocalEquippedCharacterSkin();
 	if (UShowDownEosSubsystem* EosSubsystem = GetGameInstance()
 		? GetGameInstance()->GetSubsystem<UShowDownEosSubsystem>()
@@ -552,6 +559,13 @@ void AShowDownPlayerController::ClientUseMultiplayerSeatCamera_Implementation(
 
 void AShowDownPlayerController::ClientLeaveMultiplayerRoomToHub_Implementation()
 {
+	if (UShowDownAudioSubsystem* AudioSubsystem = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<UShowDownAudioSubsystem>()
+		: nullptr)
+	{
+		AudioSubsystem->SetCrowdBedEnabled(false);
+	}
+
 	if (UShowDownEosSubsystem* EosSubsystem = GetGameInstance()
 		? GetGameInstance()->GetSubsystem<UShowDownEosSubsystem>()
 		: nullptr)

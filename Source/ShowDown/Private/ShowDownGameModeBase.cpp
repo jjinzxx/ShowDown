@@ -2,6 +2,7 @@
 
 #include "ShowDownGameModeBase.h"
 
+#include "Audio/ShowDownAudioSubsystem.h"
 #include "Card.h"
 #include "CardSystem.h"
 #include "Collector.h"
@@ -460,6 +461,13 @@ void AShowDownGameModeBase::StartSinglePlayer()
 		return;
 	}
 	bSinglePlayerMatchStarted = true;
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UShowDownAudioSubsystem* AudioSubsystem = GameInstance->GetSubsystem<UShowDownAudioSubsystem>())
+		{
+			AudioSubsystem->SetCrowdBedEnabled(true);
+		}
+	}
 	ClearInitialCardDealPresentation();
 	bInitialCardDealPresentationPlayed = false;
 	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
@@ -596,6 +604,13 @@ void AShowDownGameModeBase::ResetForHubReturn()
 	// every callback bound to it so a delayed reveal, roulette, or AI retry from
 	// the previous game cannot mutate the freshly reset board.
 	GetWorldTimerManager().ClearAllTimersForObject(this);
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UShowDownAudioSubsystem* AudioSubsystem = GameInstance->GetSubsystem<UShowDownAudioSubsystem>())
+		{
+			AudioSubsystem->SetCrowdBedEnabled(false);
+		}
+	}
 	ClearMultiplayerRoundTimers();
 	ClearCardRevealPresentationTimers();
 	ClearInitialCardDealPresentation();

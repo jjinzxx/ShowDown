@@ -1,5 +1,6 @@
 #include "ShowDownHubFlowManager.h"
 
+#include "Audio/ShowDownAudioSubsystem.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Blueprint/UserWidget.h"
@@ -81,6 +82,14 @@ void AShowDownHubFlowManager::BeginPlay()
 	{
 		UE_LOG(LogTemp, Log, TEXT("HubFlowManager disabled on networked gameplay map."));
 		return;
+	}
+
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UShowDownAudioSubsystem* AudioSubsystem = GameInstance->GetSubsystem<UShowDownAudioSubsystem>())
+		{
+			AudioSubsystem->SetCrowdBedEnabled(false, 0.0f);
+		}
 	}
 
 #if UE_BUILD_SHIPPING

@@ -42,6 +42,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Audio|Presentation")
 	void NotifyPhaseChanged(EShowDownPhase NewPhase);
 
+	/** Enables the ambient crowd bed only while the local player is in a match. */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Audio|Crowd")
+	void SetCrowdBedEnabled(bool bEnabled, float FadeDuration = 0.35f);
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Audio|Settings")
 	void SetUserMusicVolume(float Volume);
 
@@ -98,4 +102,5 @@ private:
 	float UserEffectVolume = 1.0f;
 	float CurrentCrowdConfigVolume = 0.0f;
 	float CurrentMusicMixMultiplier = 1.0f;
+	bool bCrowdBedEnabled = false;
 };
