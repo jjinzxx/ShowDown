@@ -488,6 +488,10 @@ bool FShowDownCharacterSkinCatalogTest::RunTest(const FString& Parameters)
 		TEXT("Product-style robot aliases resolve to the runtime id"),
 		UShowDownCharacterSkinCatalog::CanonicalizeSkinId(TEXT("  CHARACTER_ROBOT  ")),
 		FString(TEXT("robot")));
+	TestEqual(
+		TEXT("Miku's product-style alias resolves independently from Micu"),
+		UShowDownCharacterSkinCatalog::CanonicalizeSkinId(TEXT("character_miku")),
+		FString(TEXT("miku")));
 
 	FShowDownCharacterSkinDefinition Definition;
 	FString ResolvedSkinId;
@@ -510,7 +514,8 @@ bool FShowDownCharacterSkinCatalogTest::RunTest(const FString& Parameters)
 			ResolvedSkinId));
 	TestEqual(TEXT("Unknown ids fall back to robot"), ResolvedSkinId, FString(TEXT("robot")));
 
-	for (const FString SkinId : { FString(TEXT("robot")), FString(TEXT("hoodman")), FString(TEXT("micu")) })
+	for (const FString SkinId :
+		{ FString(TEXT("robot")), FString(TEXT("hoodman")), FString(TEXT("micu")), FString(TEXT("miku")) })
 	{
 		TestTrue(
 			*FString::Printf(TEXT("Built-in skin '%s' is registered"), *SkinId),

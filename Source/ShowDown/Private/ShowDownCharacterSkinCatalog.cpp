@@ -7,6 +7,7 @@ namespace
 	const FString RobotSkinId(TEXT("robot"));
 	const FString HoodmanSkinId(TEXT("hoodman"));
 	const FString MicuSkinId(TEXT("micu"));
+	const FString MikuSkinId(TEXT("miku"));
 
 	FShowDownCharacterSkinDefinition MakeBuiltInSkinDefinition(
 		const FString& SkinId,
@@ -35,7 +36,11 @@ namespace
 			MakeBuiltInSkinDefinition(
 				MicuSkinId,
 				NSLOCTEXT("ShowDownCharacterSkins", "Micu", "Micu"),
-				TEXT("/Game/Character/micu/Tut_Hip_Hop_Dance__1_.Tut_Hip_Hop_Dance__1_"))
+				TEXT("/Game/Character/micu/Tut_Hip_Hop_Dance__1_.Tut_Hip_Hop_Dance__1_")),
+			MakeBuiltInSkinDefinition(
+				MikuSkinId,
+				NSLOCTEXT("ShowDownCharacterSkins", "Miku", "Miku"),
+				TEXT("/Game/Character/miku/miku.miku"))
 		};
 		return Definitions;
 	}
@@ -65,6 +70,10 @@ FString UShowDownCharacterSkinCatalog::CanonicalizeSkinId(const FString& SkinId)
 	if (CanonicalId == TEXT("character_micu"))
 	{
 		return MicuSkinId;
+	}
+	if (CanonicalId == TEXT("character_miku"))
+	{
+		return MikuSkinId;
 	}
 
 	return CanonicalId;

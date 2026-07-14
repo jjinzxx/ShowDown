@@ -27,7 +27,7 @@ struct SHOWDOWN_API FShowDownCharacterSkinDefinition
 };
 
 /**
- * Optional editor-authored skin catalog. The three shipping characters are
+ * Optional editor-authored skin catalog. The four shipping characters are
  * also registered in code so the game works without creating or assigning a
  * catalog asset. Entries in an assigned catalog override built-ins that use
  * the same id and can add future skins without changing the character class.

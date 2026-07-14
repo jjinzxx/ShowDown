@@ -155,7 +155,7 @@ private:
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera")
 	ACameraActor* ShopCamera;
 
-	// Optional data asset for future character skins. Robot, hoodman, and micu
+	// Optional data asset for future character skins. Robot, hoodman, micu, and miku
 	// still resolve in code when this is left empty.
 	UPROPERTY(EditDefaultsOnly, Category = "ShowDown|Shop Preview")
 	TObjectPtr<UShowDownCharacterSkinCatalog> CharacterSkinCatalog;
