@@ -229,6 +229,20 @@ UButton* ShopButton(
 	return ShopButtonWidget;
 }
 
+UBorder* FrameShopButton(
+	UWidgetTree* Tree,
+	UButton* ButtonWidget,
+	const TCHAR* BorderName,
+	const FLinearColor& BorderColor,
+	const float BorderThickness = 1.25f)
+{
+	UBorder* Frame = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), BorderName);
+	Frame->SetBrushColor(BorderColor);
+	Frame->SetPadding(FMargin(BorderThickness));
+	Frame->SetContent(ButtonWidget);
+	return Frame;
+}
+
 void Reset(UWidgetBlueprint* BP)
 {
 	BP->Modify();
@@ -303,32 +317,14 @@ bool BuildShop(UWidgetBlueprint* BP)
 		TEXT("RootCanvas"));
 	Tree->RootWidget = Root;
 
-	// Keep the center transparent for the editor-placed 3D preview actor. The
-	// dark edge panels and the top/bottom bands frame it without replacing the
-	// level art or forcing a particular camera composition.
+	// Keep the level art visible behind the editor-placed preview actor. The
+	// approved composition keeps only the existing header shade; bottom controls
+	// float over the scene without full-width or side overlays.
 	UBorder* TopShade = Tree->ConstructWidget<UBorder>(
 		UBorder::StaticClass(),
 		TEXT("Border_TopShade"));
 	TopShade->SetBrushColor(FLinearColor(0.025f, 0.008f, 0.014f, 0.86f));
 	AddAnchored(Root, TopShade, 0.0f, 0.0f, 1.0f, 0.0f, FMargin(0.0f, 0.0f, 0.0f, 214.0f));
-
-	UBorder* BottomShade = Tree->ConstructWidget<UBorder>(
-		UBorder::StaticClass(),
-		TEXT("Border_BottomShade"));
-	BottomShade->SetBrushColor(FLinearColor(0.018f, 0.006f, 0.011f, 0.91f));
-	AddAnchored(Root, BottomShade, 0.0f, 1.0f, 1.0f, 1.0f, FMargin(0.0f, -258.0f, 0.0f, 258.0f));
-
-	UBorder* LeftShade = Tree->ConstructWidget<UBorder>(
-		UBorder::StaticClass(),
-		TEXT("Border_LeftShade"));
-	LeftShade->SetBrushColor(FLinearColor(0.01f, 0.004f, 0.008f, 0.30f));
-	AddAnchored(Root, LeftShade, 0.0f, 0.0f, 0.25f, 1.0f);
-
-	UBorder* RightShade = Tree->ConstructWidget<UBorder>(
-		UBorder::StaticClass(),
-		TEXT("Border_RightShade"));
-	RightShade->SetBrushColor(FLinearColor(0.01f, 0.004f, 0.008f, 0.30f));
-	AddAnchored(Root, RightShade, 0.75f, 0.0f, 1.0f, 1.0f);
 
 	UBorder* HeaderLine = Tree->ConstructWidget<UBorder>(
 		UBorder::StaticClass(),
@@ -341,12 +337,17 @@ bool BuildShop(UWidgetBlueprint* BP)
 		TEXT("Button_Back"),
 		TEXT("Text_BackLabel"),
 		TEXT("<  뒤로"),
-		FLinearColor(0.055f, 0.028f, 0.036f, 0.92f),
-		FLinearColor(0.30f, 0.075f, 0.09f, 0.98f),
-		FLinearColor(0.16f, 0.035f, 0.045f, 1.0f),
+		FLinearColor(0.018f, 0.018f, 0.016f, 0.76f),
+		FLinearColor(0.16f, 0.12f, 0.055f, 0.92f),
+		FLinearColor(0.09f, 0.065f, 0.025f, 0.98f),
 		FLinearColor(0.96f, 0.84f, 0.60f, 1.0f),
 		18);
-	AddAnchored(Root, BackButton, 0.0f, 0.0f, 0.0f, 0.0f, FMargin(50.0f, 42.0f, 210.0f, 56.0f));
+	UBorder* BackButtonFrame = FrameShopButton(
+		Tree,
+		BackButton,
+		TEXT("Border_BackButtonFrame"),
+		FLinearColor(0.72f, 0.52f, 0.20f, 0.76f));
+	AddAnchored(Root, BackButtonFrame, 0.0f, 0.0f, 0.0f, 0.0f, FMargin(50.0f, 42.0f, 210.0f, 56.0f));
 
 	UTextBlock* CoinText = Text(
 		Tree,
@@ -404,43 +405,59 @@ bool BuildShop(UWidgetBlueprint* BP)
 	PriceText->SetColorAndOpacity(FSlateColor(FLinearColor(0.97f, 0.81f, 0.43f, 1.0f)));
 	PriceText->SetShadowColorAndOpacity(FLinearColor::Black);
 	PriceText->SetShadowOffset(FVector2D(1.0f, 2.0f));
-	AddAnchored(Root, PriceText, 0.5f, 1.0f, 0.5f, 1.0f, FMargin(-280.0f, -220.0f, 560.0f, 44.0f));
+	AddAnchored(Root, PriceText, 0.5f, 1.0f, 0.5f, 1.0f, FMargin(-280.0f, -174.0f, 560.0f, 40.0f));
 
 	UButton* PreviousButton = ShopButton(
 		Tree,
 		TEXT("Button_Previous"),
 		TEXT("Text_PreviousLabel"),
 		TEXT("<  이전"),
-		FLinearColor(0.045f, 0.025f, 0.032f, 0.94f),
-		FLinearColor(0.28f, 0.065f, 0.08f, 1.0f),
-		FLinearColor(0.14f, 0.03f, 0.04f, 1.0f),
+		FLinearColor(0.012f, 0.012f, 0.011f, 0.46f),
+		FLinearColor(0.15f, 0.11f, 0.045f, 0.88f),
+		FLinearColor(0.075f, 0.055f, 0.022f, 0.94f),
 		FLinearColor(0.96f, 0.84f, 0.60f, 1.0f),
 		20);
-	AddAnchored(Root, PreviousButton, 0.0f, 1.0f, 0.0f, 1.0f, FMargin(78.0f, -154.0f, 270.0f, 72.0f));
+	UBorder* PreviousButtonFrame = FrameShopButton(
+		Tree,
+		PreviousButton,
+		TEXT("Border_PreviousButtonFrame"),
+		FLinearColor(0.72f, 0.52f, 0.20f, 0.66f));
+	AddAnchored(Root, PreviousButtonFrame, 0.0f, 1.0f, 0.0f, 1.0f, FMargin(66.0f, -112.0f, 260.0f, 58.0f));
 
 	UButton* PrimaryActionButton = ShopButton(
 		Tree,
 		TEXT("Button_PrimaryAction"),
 		TEXT("Text_PrimaryAction"),
 		TEXT("불러오는 중"),
-		FLinearColor(0.72f, 0.45f, 0.10f, 1.0f),
-		FLinearColor(0.96f, 0.70f, 0.22f, 1.0f),
-		FLinearColor(0.53f, 0.28f, 0.055f, 1.0f),
-		FLinearColor(0.055f, 0.025f, 0.018f, 1.0f),
+		FLinearColor(0.018f, 0.018f, 0.016f, 0.84f),
+		FLinearColor(0.20f, 0.15f, 0.065f, 0.96f),
+		FLinearColor(0.10f, 0.075f, 0.028f, 1.0f),
+		FLinearColor(0.96f, 0.84f, 0.60f, 1.0f),
 		24);
-	AddAnchored(Root, PrimaryActionButton, 0.5f, 1.0f, 0.5f, 1.0f, FMargin(-225.0f, -162.0f, 450.0f, 82.0f));
+	UBorder* PrimaryActionButtonFrame = FrameShopButton(
+		Tree,
+		PrimaryActionButton,
+		TEXT("Border_PrimaryActionButtonFrame"),
+		FLinearColor(0.76f, 0.56f, 0.22f, 0.82f),
+		1.5f);
+	AddAnchored(Root, PrimaryActionButtonFrame, 0.5f, 1.0f, 0.5f, 1.0f, FMargin(-190.0f, -120.0f, 380.0f, 66.0f));
 
 	UButton* NextButton = ShopButton(
 		Tree,
 		TEXT("Button_Next"),
 		TEXT("Text_NextLabel"),
 		TEXT("다음  >"),
-		FLinearColor(0.045f, 0.025f, 0.032f, 0.94f),
-		FLinearColor(0.28f, 0.065f, 0.08f, 1.0f),
-		FLinearColor(0.14f, 0.03f, 0.04f, 1.0f),
+		FLinearColor(0.012f, 0.012f, 0.011f, 0.46f),
+		FLinearColor(0.15f, 0.11f, 0.045f, 0.88f),
+		FLinearColor(0.075f, 0.055f, 0.022f, 0.94f),
 		FLinearColor(0.96f, 0.84f, 0.60f, 1.0f),
 		20);
-	AddAnchored(Root, NextButton, 1.0f, 1.0f, 1.0f, 1.0f, FMargin(-348.0f, -154.0f, 270.0f, 72.0f));
+	UBorder* NextButtonFrame = FrameShopButton(
+		Tree,
+		NextButton,
+		TEXT("Border_NextButtonFrame"),
+		FLinearColor(0.72f, 0.52f, 0.20f, 0.66f));
+	AddAnchored(Root, NextButtonFrame, 1.0f, 1.0f, 1.0f, 1.0f, FMargin(-326.0f, -112.0f, 260.0f, 58.0f));
 
 	UTextBlock* StatusText = Text(
 		Tree,
@@ -449,7 +466,7 @@ bool BuildShop(UWidgetBlueprint* BP)
 		14,
 		ETextJustify::Center);
 	StatusText->SetAutoWrapText(true);
-	AddAnchored(Root, StatusText, 0.5f, 1.0f, 0.5f, 1.0f, FMargin(-420.0f, -67.0f, 840.0f, 42.0f));
+	AddAnchored(Root, StatusText, 0.5f, 1.0f, 0.5f, 1.0f, FMargin(-420.0f, -44.0f, 840.0f, 30.0f));
 
 	return Save(BP);
 }

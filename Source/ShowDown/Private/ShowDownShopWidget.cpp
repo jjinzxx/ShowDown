@@ -15,8 +15,8 @@
 
 namespace
 {
-	const FLinearColor ShopInk(0.93f, 0.94f, 0.96f, 1.0f);
-	const FLinearColor ShopMutedInk(0.62f, 0.64f, 0.68f, 1.0f);
+	const FLinearColor ShopInk(0.96f, 0.90f, 0.76f, 1.0f);
+	const FLinearColor ShopMutedInk(0.72f, 0.69f, 0.62f, 1.0f);
 	const FLinearColor ShopError(0.94f, 0.2f, 0.18f, 1.0f);
 	const FLinearColor ShopSuccess(0.35f, 0.88f, 0.55f, 1.0f);
 
@@ -32,18 +32,18 @@ namespace
 	FButtonStyle MakeShopButtonStyle(const FLinearColor& Accent)
 	{
 		FButtonStyle Style;
-		Style.SetNormal(MakeFlatBrush(FLinearColor(0.025f, 0.025f, 0.03f, 0.9f)));
+		Style.SetNormal(MakeFlatBrush(FLinearColor(0.012f, 0.012f, 0.011f, 0.64f)));
 		Style.SetHovered(MakeFlatBrush(FLinearColor(
-			FMath::Max(0.08f, Accent.R * 0.32f),
-			FMath::Max(0.08f, Accent.G * 0.32f),
-			FMath::Max(0.08f, Accent.B * 0.32f),
-			0.96f)));
+			FMath::Max(0.08f, Accent.R * 0.26f),
+			FMath::Max(0.06f, Accent.G * 0.24f),
+			FMath::Max(0.025f, Accent.B * 0.18f),
+			0.92f)));
 		Style.SetPressed(MakeFlatBrush(FLinearColor(
-			Accent.R * 0.2f,
-			Accent.G * 0.2f,
-			Accent.B * 0.2f,
-			1.0f)));
-		Style.SetDisabled(MakeFlatBrush(FLinearColor(0.035f, 0.035f, 0.04f, 0.5f)));
+			Accent.R * 0.13f,
+			Accent.G * 0.12f,
+			Accent.B * 0.09f,
+			0.98f)));
+		Style.SetDisabled(MakeFlatBrush(FLinearColor(0.018f, 0.018f, 0.017f, 0.58f)));
 		Style.SetNormalPadding(FMargin(14.0f, 7.0f));
 		Style.SetPressedPadding(FMargin(14.0f, 9.0f, 14.0f, 5.0f));
 		return Style;
@@ -323,7 +323,7 @@ void UShowDownShopWidget::BuildWidgetTreeIfNeeded()
 	auto MakeButton = [this, &MakeText](const TCHAR* Name, const TCHAR* Label)
 	{
 		UButton* Button = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), Name);
-		Button->SetStyle(MakeShopButtonStyle(FLinearColor(0.72f, 0.12f, 0.08f, 1.0f)));
+		Button->SetStyle(MakeShopButtonStyle(FLinearColor(0.76f, 0.56f, 0.22f, 1.0f)));
 		UTextBlock* LabelText = MakeText(
 			*FString::Printf(TEXT("%s_Label"), Name),
 			20,
@@ -333,15 +333,29 @@ void UShowDownShopWidget::BuildWidgetTreeIfNeeded()
 		return Button;
 	};
 
-	UBorder* ScreenTint = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("ScreenTint"));
-	ScreenTint->SetBrushColor(FLinearColor(0.0f, 0.0f, 0.0f, 0.16f));
-	UCanvasPanelSlot* TintSlot = Root->AddChildToCanvas(ScreenTint);
-	TintSlot->SetAnchors(FAnchors(0.0f, 0.0f, 1.0f, 1.0f));
-	TintSlot->SetOffsets(FMargin(0.0f));
+	auto AddFramedButton = [this, &AddPointAnchored](
+		UButton* Button,
+		const TCHAR* FrameName,
+		const FVector2D& Anchor,
+		const FVector2D& Alignment,
+		const FVector2D& Size,
+		const FLinearColor& FrameColor)
+	{
+		UBorder* Frame = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), FrameName);
+		Frame->SetBrushColor(FrameColor);
+		Frame->SetPadding(FMargin(1.25f));
+		Frame->SetContent(Button);
+		return AddPointAnchored(Frame, Anchor, Alignment, FVector2D::ZeroVector, Size);
+	};
 
 	Button_Back = MakeButton(TEXT("Button_Back"), TEXT("뒤로"));
-	AddPointAnchored(Button_Back, FVector2D(0.03f, 0.055f), FVector2D::ZeroVector,
-		FVector2D::ZeroVector, FVector2D(190.0f, 52.0f));
+	AddFramedButton(
+		Button_Back,
+		TEXT("Border_BackButtonFrame"),
+		FVector2D(0.03f, 0.055f),
+		FVector2D::ZeroVector,
+		FVector2D(190.0f, 52.0f),
+		FLinearColor(0.72f, 0.52f, 0.20f, 0.76f));
 
 	Text_Coin = MakeText(TEXT("Text_Coin"), 20, ETextJustify::Right);
 	AddPointAnchored(Text_Coin, FVector2D(0.97f, 0.06f), FVector2D(1.0f, 0.0f),
@@ -368,25 +382,40 @@ void UShowDownShopWidget::BuildWidgetTreeIfNeeded()
 		FVector2D::ZeroVector, FVector2D(720.0f, 72.0f));
 
 	Text_Price = MakeText(TEXT("Text_Price"), 24, ETextJustify::Center);
-	AddPointAnchored(Text_Price, FVector2D(0.5f, 0.76f), FVector2D(0.5f, 0.5f),
+	AddPointAnchored(Text_Price, FVector2D(0.5f, 0.84f), FVector2D(0.5f, 0.5f),
 		FVector2D::ZeroVector, FVector2D(340.0f, 44.0f));
 
 	Button_Previous = MakeButton(TEXT("Button_Previous"), TEXT("◀ 이전"));
-	AddPointAnchored(Button_Previous, FVector2D(0.15f, 0.86f), FVector2D(0.5f, 0.5f),
-		FVector2D::ZeroVector, FVector2D(240.0f, 66.0f));
+	AddFramedButton(
+		Button_Previous,
+		TEXT("Border_PreviousButtonFrame"),
+		FVector2D(0.15f, 0.91f),
+		FVector2D(0.5f, 0.5f),
+		FVector2D(260.0f, 58.0f),
+		FLinearColor(0.72f, 0.52f, 0.20f, 0.66f));
 
 	Button_PrimaryAction = MakeButton(TEXT("Button_PrimaryAction"), TEXT("불러오는 중"));
 	Text_PrimaryAction = Cast<UTextBlock>(Button_PrimaryAction->GetContent());
-	AddPointAnchored(Button_PrimaryAction, FVector2D(0.5f, 0.86f), FVector2D(0.5f, 0.5f),
-		FVector2D::ZeroVector, FVector2D(320.0f, 72.0f));
+	AddFramedButton(
+		Button_PrimaryAction,
+		TEXT("Border_PrimaryActionButtonFrame"),
+		FVector2D(0.5f, 0.91f),
+		FVector2D(0.5f, 0.5f),
+		FVector2D(380.0f, 66.0f),
+		FLinearColor(0.76f, 0.56f, 0.22f, 0.82f));
 
 	Button_Next = MakeButton(TEXT("Button_Next"), TEXT("다음 ▶"));
-	AddPointAnchored(Button_Next, FVector2D(0.85f, 0.86f), FVector2D(0.5f, 0.5f),
-		FVector2D::ZeroVector, FVector2D(240.0f, 66.0f));
+	AddFramedButton(
+		Button_Next,
+		TEXT("Border_NextButtonFrame"),
+		FVector2D(0.85f, 0.91f),
+		FVector2D(0.5f, 0.5f),
+		FVector2D(260.0f, 58.0f),
+		FLinearColor(0.72f, 0.52f, 0.20f, 0.66f));
 
 	Text_Status = MakeText(TEXT("Text_Status"), 16, ETextJustify::Center);
 	Text_Status->SetColorAndOpacity(FSlateColor(ShopMutedInk));
-	AddPointAnchored(Text_Status, FVector2D(0.5f, 0.94f), FVector2D(0.5f, 0.5f),
+	AddPointAnchored(Text_Status, FVector2D(0.5f, 0.975f), FVector2D(0.5f, 0.5f),
 		FVector2D::ZeroVector, FVector2D(900.0f, 42.0f));
 }
 
