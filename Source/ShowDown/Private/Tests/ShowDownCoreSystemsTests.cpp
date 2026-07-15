@@ -1583,11 +1583,22 @@ bool FShowDownAudioConfigTest::RunTest(const FString& Parameters)
 		TEXT("Spotlight transitions use the imported spotlight cue"),
 		AudioConfig->SpotlightTransitionSound,
 		TEXT("/Game/Audio/SW_Spotlight.SW_Spotlight"));
+	TestSoundPath(
+		TEXT("The red loser spotlight uses the imported warning cue"),
+		AudioConfig->LoserSpotlightWarningSound,
+		TEXT("/Game/Audio/SW_LoserWarning.SW_LoserWarning"));
 
 	const USoundWave* CrowdBedWave = Cast<USoundWave>(AudioConfig->CrowdBedSound);
 	const USoundWave* BackgroundMusicWave = Cast<USoundWave>(AudioConfig->BackgroundMusicSound);
+	const USoundWave* LoserWarningWave = Cast<USoundWave>(AudioConfig->LoserSpotlightWarningSound);
 	TestTrue(TEXT("Crowd bed is configured to loop"), CrowdBedWave && CrowdBedWave->IsLooping());
 	TestTrue(TEXT("Background music is configured to loop"), BackgroundMusicWave && BackgroundMusicWave->IsLooping());
+	TestTrue(
+		TEXT("The loser spotlight warning is an imported non-looping SoundWave"),
+		LoserWarningWave && !LoserWarningWave->IsLooping());
+	TestTrue(
+		TEXT("The loser spotlight warning contains playable audio"),
+		LoserWarningWave && LoserWarningWave->GetDuration() > 0.0f);
 	TestTrue(
 		TEXT("Background music has an audible configured volume"),
 		AudioConfig->BackgroundMusicVolume > 0.0f);
@@ -1618,6 +1629,9 @@ bool FShowDownAudioConfigTest::RunTest(const FString& Parameters)
 	TestTrue(
 		TEXT("Spotlight transitions have an audible configured volume"),
 		AudioConfig->SpotlightTransitionVolume > 0.0f);
+	TestTrue(
+		TEXT("The loser spotlight warning has an audible configured volume"),
+		AudioConfig->LoserSpotlightWarningVolume > 0.0f);
 	return true;
 }
 

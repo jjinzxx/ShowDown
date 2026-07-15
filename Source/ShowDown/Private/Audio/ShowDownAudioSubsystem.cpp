@@ -229,6 +229,21 @@ void UShowDownAudioSubsystem::NotifySpotlightChanged()
 	SpotlightTransitionComponent->Play(0.0f);
 }
 
+void UShowDownAudioSubsystem::NotifyLoserSpotlightShown()
+{
+	EnsurePersistentLoops();
+	UWorld* World = ResolvePlaybackWorld();
+	if (!AudioConfig || !CanPlayInWorld(World) || !AudioConfig->LoserSpotlightWarningSound)
+	{
+		return;
+	}
+
+	UGameplayStatics::PlaySound2D(
+		World,
+		AudioConfig->LoserSpotlightWarningSound,
+		FMath::Max(0.0f, AudioConfig->LoserSpotlightWarningVolume) * UserEffectVolume);
+}
+
 void UShowDownAudioSubsystem::NotifyPhaseChanged(EShowDownPhase NewPhase)
 {
 	EnsurePersistentLoops();

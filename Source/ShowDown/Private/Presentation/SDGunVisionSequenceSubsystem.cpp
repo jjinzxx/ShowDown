@@ -814,6 +814,21 @@ void USDGunVisionSequenceSubsystem::PlaySpotlightTransitionSound() const
 	}
 }
 
+void USDGunVisionSequenceSubsystem::PlayLoserSpotlightWarningSound() const
+{
+	if (const UWorld* World = GetWorld())
+	{
+		if (UGameInstance* GameInstance = World->GetGameInstance())
+		{
+			if (UShowDownAudioSubsystem* AudioSubsystem =
+				GameInstance->GetSubsystem<UShowDownAudioSubsystem>())
+			{
+				AudioSubsystem->NotifyLoserSpotlightShown();
+			}
+		}
+	}
+}
+
 void USDGunVisionSequenceSubsystem::RefreshTurnSpotlightSoundState()
 {
 	const AShowDownGameStateBase* GameState = BoundGameState.Get();
@@ -1160,6 +1175,10 @@ void USDGunVisionSequenceSubsystem::HandleTableCinematicCue(
 			if (bSpotlightChanged)
 			{
 				PlaySpotlightTransitionSound();
+			}
+			if (bTargetsChanged && PlayerSlotMask != 0)
+			{
+				PlayLoserSpotlightWarningSound();
 			}
 		}
 		break;

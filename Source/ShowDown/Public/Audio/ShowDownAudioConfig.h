@@ -33,6 +33,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Sounds")
 	TObjectPtr<USoundBase> SpotlightTransitionSound;
 
+	/** One-shot played when the red loser spotlight first appears. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Sounds")
+	TObjectPtr<USoundBase> LoserSpotlightWarningSound;
+
 	// Slate button styles require a SoundWave resource rather than an arbitrary
 	// SoundBase, so UI click audio is deliberately typed more narrowly.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Sounds")
@@ -64,6 +68,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "One Shots", meta = (ClampMin = "0.0", UIMax = "2.0"))
 	float SpotlightTransitionVolume = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "One Shots", meta = (ClampMin = "0.0", UIMax = "2.0"))
+	float LoserSpotlightWarningVolume = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "UI", meta = (ClampMin = "0.0", UIMax = "2.0"))
 	float ButtonClickVolume = 0.55f;

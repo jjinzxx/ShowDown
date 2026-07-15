@@ -44,6 +44,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Audio|Presentation")
 	void NotifySpotlightChanged();
 
+	/** Plays the dedicated warning cue for the red loser spotlight. */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Audio|Presentation")
+	void NotifyLoserSpotlightShown();
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Audio|Presentation")
 	void NotifyPhaseChanged(EShowDownPhase NewPhase);
 

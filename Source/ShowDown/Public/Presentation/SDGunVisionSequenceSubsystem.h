@@ -119,6 +119,7 @@ private:
 	bool SetTableSpotlightEnabled(bool bEnabled);
 	bool SetZeroDarknessSpotlightEnabled(bool bEnabled);
 	void PlaySpotlightTransitionSound() const;
+	void PlayLoserSpotlightWarningSound() const;
 	void RefreshTurnSpotlightSoundState();
 	void ApplyPhasePresentationPolicy(EShowDownPhase Phase);
 	bool IsRoulettePhase() const;
