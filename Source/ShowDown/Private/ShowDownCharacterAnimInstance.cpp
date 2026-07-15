@@ -24,6 +24,11 @@ void UShowDownCharacterAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 		bIsShooting = false;
 		bIsSelectingCard = false;
 		bIsBetting = false;
+		bIsFolding = false;
+		bIsRaising = false;
+		bIsCallingOrChecking = false;
+		bIsReviving = false;
+		bIsReactingToRedLight = false;
 		bIsHitReacting = false;
 		HeadLookPitch = 0.0f;
 		HeadLookYaw = 0.0f;
@@ -38,7 +43,15 @@ void UShowDownCharacterAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 	CharacterAnimState = OwningShowDownCharacter->GetCharacterAnimState();
 	bIsShooting = CharacterAnimState == EShowDownCharacterAnimState::Shoot;
 	bIsSelectingCard = CharacterAnimState == EShowDownCharacterAnimState::SelectCard;
-	bIsBetting = CharacterAnimState == EShowDownCharacterAnimState::Betting;
+	bIsFolding = CharacterAnimState == EShowDownCharacterAnimState::Fold;
+	bIsRaising = CharacterAnimState == EShowDownCharacterAnimState::Raise;
+	bIsCallingOrChecking = CharacterAnimState == EShowDownCharacterAnimState::CallCheck;
+	bIsBetting = CharacterAnimState == EShowDownCharacterAnimState::Betting
+		|| bIsFolding
+		|| bIsRaising
+		|| bIsCallingOrChecking;
+	bIsReviving = CharacterAnimState == EShowDownCharacterAnimState::Revive;
+	bIsReactingToRedLight = CharacterAnimState == EShowDownCharacterAnimState::RedLight;
 	bIsHitReacting = CharacterAnimState == EShowDownCharacterAnimState::Hit;
 	HeadLookPitch = OwningShowDownCharacter->GetHeadLookPitch();
 	HeadLookYaw = OwningShowDownCharacter->GetHeadLookYaw();
@@ -62,7 +75,15 @@ void UShowDownCharacterAnimInstance::SetCharacterAnimState(EShowDownCharacterAni
 	CharacterAnimState = NewState;
 	bIsShooting = CharacterAnimState == EShowDownCharacterAnimState::Shoot;
 	bIsSelectingCard = CharacterAnimState == EShowDownCharacterAnimState::SelectCard;
-	bIsBetting = CharacterAnimState == EShowDownCharacterAnimState::Betting;
+	bIsFolding = CharacterAnimState == EShowDownCharacterAnimState::Fold;
+	bIsRaising = CharacterAnimState == EShowDownCharacterAnimState::Raise;
+	bIsCallingOrChecking = CharacterAnimState == EShowDownCharacterAnimState::CallCheck;
+	bIsBetting = CharacterAnimState == EShowDownCharacterAnimState::Betting
+		|| bIsFolding
+		|| bIsRaising
+		|| bIsCallingOrChecking;
+	bIsReviving = CharacterAnimState == EShowDownCharacterAnimState::Revive;
+	bIsReactingToRedLight = CharacterAnimState == EShowDownCharacterAnimState::RedLight;
 	bIsHitReacting = CharacterAnimState == EShowDownCharacterAnimState::Hit;
 }
 

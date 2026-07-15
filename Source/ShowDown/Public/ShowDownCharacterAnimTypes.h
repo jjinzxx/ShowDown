@@ -11,6 +11,11 @@ enum class EShowDownCharacterAnimState : uint8
 	Betting UMETA(DisplayName = "Betting"),
 	Shoot UMETA(DisplayName = "Shoot"),
 	Hit UMETA(DisplayName = "Hit"),
+	Fold UMETA(DisplayName = "Fold"),
+	Raise UMETA(DisplayName = "Raise"),
+	CallCheck UMETA(DisplayName = "Call / Check"),
+	Revive UMETA(DisplayName = "Revive"),
+	RedLight UMETA(DisplayName = "Card Reveal Red Light"),
 };
 
 UENUM(BlueprintType)

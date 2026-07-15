@@ -73,6 +73,16 @@ namespace
 			return TEXT("SelectCard");
 		case EShowDownCharacterAnimState::Betting:
 			return TEXT("Betting");
+		case EShowDownCharacterAnimState::Fold:
+			return TEXT("Fold");
+		case EShowDownCharacterAnimState::Raise:
+			return TEXT("Raise");
+		case EShowDownCharacterAnimState::CallCheck:
+			return TEXT("CallCheck");
+		case EShowDownCharacterAnimState::Revive:
+			return TEXT("Revive");
+		case EShowDownCharacterAnimState::RedLight:
+			return TEXT("RedLight");
 		case EShowDownCharacterAnimState::Shoot:
 			return TEXT("Shoot");
 		case EShowDownCharacterAnimState::Hit:
@@ -476,6 +486,49 @@ void AShowDownCharacter::PlayBettingAnimation(float Duration)
 	PlayCharacterActionAnim(EShowDownCharacterAnimState::Betting, Duration, true);
 }
 
+void AShowDownCharacter::PlayBetActionAnimation(EShowDownBetAction Action, float Duration)
+{
+	switch (Action)
+	{
+	case EShowDownBetAction::Fold:
+		PlayFoldAnimation(Duration);
+		break;
+	case EShowDownBetAction::Raise:
+		PlayRaiseAnimation(Duration);
+		break;
+	case EShowDownBetAction::Check:
+	case EShowDownBetAction::Call:
+	default:
+		PlayCallCheckAnimation(Duration);
+		break;
+	}
+}
+
+void AShowDownCharacter::PlayFoldAnimation(float Duration)
+{
+	PlayCharacterActionAnim(EShowDownCharacterAnimState::Fold, Duration, true);
+}
+
+void AShowDownCharacter::PlayRaiseAnimation(float Duration)
+{
+	PlayCharacterActionAnim(EShowDownCharacterAnimState::Raise, Duration, true);
+}
+
+void AShowDownCharacter::PlayCallCheckAnimation(float Duration)
+{
+	PlayCharacterActionAnim(EShowDownCharacterAnimState::CallCheck, Duration, true);
+}
+
+void AShowDownCharacter::PlayReviveAnimation(float Duration)
+{
+	PlayCharacterActionAnim(EShowDownCharacterAnimState::Revive, Duration, true);
+}
+
+void AShowDownCharacter::PlayRedLightAnimation(float Duration)
+{
+	PlayCharacterActionAnim(EShowDownCharacterAnimState::RedLight, Duration, true);
+}
+
 void AShowDownCharacter::SetPlayerViewRotation(FRotator ViewRotation)
 {
 	ViewRotation.Normalize();
@@ -575,10 +628,12 @@ void AShowDownCharacter::CancelHitRecoveryPresentation(bool bRevealCharacter)
 
 float AShowDownCharacter::GetHitRecoveryPresentationDuration() const
 {
+	const float ReviveAnimationDuration = GetAssignedActionAnimationDuration(
+		EShowDownCharacterAnimState::Revive);
 	return CalculateHitRecoveryPresentationDuration(
 		HitDownedHoldDuration,
 		HitResetPulseDuration,
-		HitRecoveryRevealDuration);
+		FMath::Max(HitRecoveryRevealDuration, ReviveAnimationDuration));
 }
 
 float AShowDownCharacter::CalculateHitRecoveryPresentationDuration(
@@ -1086,6 +1141,10 @@ void AShowDownCharacter::HandleTableCinematicCue(
 			|| (CharacterRole == EShowDownCharacterRole::Opponent
 				&& ShowDownTableCinematics::IsSingleSideInMask(PlayerSlotMask, EShowDownSide::Collector));
 		bLoserSpotlightActive = bMultiplayerTarget || bSinglePlayerTarget;
+		if (HasAuthority() && bLoserSpotlightActive)
+		{
+			PlayRedLightAnimation();
+		}
 	}
 	else if (Cue == ESDTableCinematicCue::TriggerPullCompleted)
 	{
@@ -1123,7 +1182,7 @@ void AShowDownCharacter::HandleBetActionCommitted(EShowDownSide Side, EShowDownB
 		return;
 	}
 
-	PlayBettingAnimation();
+	PlayBetActionAnimation(Action);
 }
 
 void AShowDownCharacter::HandleMultiplayerCardSelected(EShowDownPlayerSlot Slot)
@@ -1146,7 +1205,7 @@ void AShowDownCharacter::HandleMultiplayerBetActionCommitted(
 		return;
 	}
 
-	PlayBettingAnimation();
+	PlayBetActionAnimation(Action);
 }
 
 void AShowDownCharacter::ServerSetCharacterIdentity_Implementation(
@@ -1361,6 +1420,11 @@ float AShowDownCharacter::GetDefaultAnimDuration(EShowDownCharacterAnimState Sta
 	{
 	case EShowDownCharacterAnimState::SelectCard:
 	case EShowDownCharacterAnimState::Betting:
+	case EShowDownCharacterAnimState::Fold:
+	case EShowDownCharacterAnimState::Raise:
+	case EShowDownCharacterAnimState::CallCheck:
+	case EShowDownCharacterAnimState::Revive:
+	case EShowDownCharacterAnimState::RedLight:
 	case EShowDownCharacterAnimState::Shoot:
 		return ActionAnimationFallbackReturnDelay;
 	case EShowDownCharacterAnimState::Hit:
@@ -1407,6 +1471,16 @@ UAnimationAsset* AShowDownCharacter::GetAssignedActionAnimation(EShowDownCharact
 		return SelectCardAnimationAsset;
 	case EShowDownCharacterAnimState::Betting:
 		return BettingAnimationAsset;
+	case EShowDownCharacterAnimState::Fold:
+		return FoldAnimationAsset ? FoldAnimationAsset : BettingAnimationAsset;
+	case EShowDownCharacterAnimState::Raise:
+		return RaiseAnimationAsset ? RaiseAnimationAsset : BettingAnimationAsset;
+	case EShowDownCharacterAnimState::CallCheck:
+		return CallCheckAnimationAsset ? CallCheckAnimationAsset : BettingAnimationAsset;
+	case EShowDownCharacterAnimState::Revive:
+		return ReviveAnimationAsset;
+	case EShowDownCharacterAnimState::RedLight:
+		return RedLightAnimationAsset;
 	case EShowDownCharacterAnimState::Shoot:
 		return ShootAnimationAsset;
 	case EShowDownCharacterAnimState::Hit:
@@ -1661,6 +1735,10 @@ void AShowDownCharacter::UpdateHitRecoveryPresentation()
 		&& Elapsed >= RevealTime)
 	{
 		bHitRecoverySurvivorRevealed = true;
+		if (HasAuthority())
+		{
+			PlayReviveAnimation();
+		}
 		SetHitRecoveryVisualConcealed(false);
 	}
 

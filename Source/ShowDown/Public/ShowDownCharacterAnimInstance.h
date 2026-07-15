@@ -36,6 +36,21 @@ public:
 	bool bIsBetting = false;
 
 	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Character Animation")
+	bool bIsFolding = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Character Animation")
+	bool bIsRaising = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Character Animation")
+	bool bIsCallingOrChecking = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Character Animation")
+	bool bIsReviving = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Character Animation")
+	bool bIsReactingToRedLight = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Character Animation")
 	bool bIsHitReacting = false;
 
 	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Character Camera")

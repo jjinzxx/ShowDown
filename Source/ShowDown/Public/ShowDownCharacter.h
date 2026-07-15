@@ -101,6 +101,24 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Character Animation")
 	void PlayBettingAnimation(float Duration = -1.0f);
 
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Character Animation")
+	void PlayBetActionAnimation(EShowDownBetAction Action, float Duration = -1.0f);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Character Animation")
+	void PlayFoldAnimation(float Duration = -1.0f);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Character Animation")
+	void PlayRaiseAnimation(float Duration = -1.0f);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Character Animation")
+	void PlayCallCheckAnimation(float Duration = -1.0f);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Character Animation")
+	void PlayReviveAnimation(float Duration = -1.0f);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Character Animation")
+	void PlayRedLightAnimation(float Duration = -1.0f);
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Character Physics")
 	void StartHitRagdoll();
 
@@ -433,6 +451,26 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Animation")
 	TObjectPtr<UAnimationAsset> BettingAnimationAsset = nullptr;
+
+	/** Used when this character folds. Falls back to Betting Animation when empty. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Animation", meta = (DisplayName = "Fold Animation"))
+	TObjectPtr<UAnimationAsset> FoldAnimationAsset = nullptr;
+
+	/** Used when this character raises. Falls back to Betting Animation when empty. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Animation", meta = (DisplayName = "Raise Animation"))
+	TObjectPtr<UAnimationAsset> RaiseAnimationAsset = nullptr;
+
+	/** Check and call intentionally share one reaction slot. Falls back to Betting Animation when empty. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Animation", meta = (DisplayName = "Call / Check Animation"))
+	TObjectPtr<UAnimationAsset> CallCheckAnimationAsset = nullptr;
+
+	/** Played when a surviving character is shown again after hit recovery. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Animation", meta = (DisplayName = "Revive Animation"))
+	TObjectPtr<UAnimationAsset> ReviveAnimationAsset = nullptr;
+
+	/** Played on the targeted character when the red loser spotlight turns on after card reveal. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Animation", meta = (DisplayName = "Card Reveal Red Light Animation"))
+	TObjectPtr<UAnimationAsset> RedLightAnimationAsset = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Animation")
 	FName ActionMontageSlotName = TEXT("DefaultSlot");
