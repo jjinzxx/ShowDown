@@ -56,7 +56,7 @@ enum class EShowDownPlayerSlot : uint8
 	Player4
 };
 
-/** Server-authored table presentation beats shared by every local view. */
+/** Table presentation beats shared by local views; most are server-authored. */
 UENUM(BlueprintType)
 enum class ESDTableCinematicCue : uint8
 {
@@ -71,7 +71,9 @@ enum class ESDTableCinematicCue : uint8
 	BetFocusEnded,
 	TriggerPullStarted,
 	InitialDealStarted,
-	InitialDealFinished
+	InitialDealFinished,
+	/** Local presentation beat emitted on the exact frame the trigger reaches full travel. */
+	TriggerPullCompleted
 };
 
 namespace ShowDownTableCinematics

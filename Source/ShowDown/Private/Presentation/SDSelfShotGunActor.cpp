@@ -1053,6 +1053,17 @@ void ASDSelfShotGunActor::Interact_Implementation(AActor* Interactor)
 void ASDSelfShotGunActor::FireGun()
 {
 	const bool bLiveShot = ResolveCurrentShotIsLive();
+	// This is the exact local frame where the trigger reaches full travel. Each
+	// peer runs the authored gun presentation locally, so publish a local-only
+	// cue instead of adding another replicated timer that could drift from it.
+	UWorld* World = GetWorld();
+	if (AShowDownGameStateBase* ShowDownGameState =
+		World ? World->GetGameState<AShowDownGameStateBase>() : nullptr)
+	{
+		ShowDownGameState->OnTableCinematicCue.Broadcast(
+			ESDTableCinematicCue::TriggerPullCompleted,
+			0);
+	}
 	StateElapsedTime = 0.0f;
 	MechanismResetElapsedTime = 0.0f;
 	if (ShouldUseGunShotCamera(bLiveShot, bCurrentShotTargetsLocalPlayer)

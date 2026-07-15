@@ -414,7 +414,7 @@ public:
 	float RoundCinematicTableSpotlightToRevealSeconds = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Reveal To Loser Spotlight"))
-	float RoundCinematicRevealToLoserSpotlightSeconds = 4.0f;
+	float RoundCinematicRevealToLoserSpotlightSeconds = 3.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Loser Spotlight Hold"))
 	float RoundCinematicLoserSpotlightHoldSeconds = 3.0f;

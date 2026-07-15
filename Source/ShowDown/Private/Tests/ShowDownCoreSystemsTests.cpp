@@ -1007,7 +1007,7 @@ bool FShowDownRoundCinematicDefaultsTest::RunTest(const FString& Parameters)
 	TestFloatDefault(TEXT("RoundCinematicFinalBetToBlackoutSeconds"), 4.0f);
 	TestFloatDefault(TEXT("RoundCinematicBlackoutToTableSpotlightSeconds"), 2.0f);
 	TestFloatDefault(TEXT("RoundCinematicTableSpotlightToRevealSeconds"), 1.0f);
-	TestFloatDefault(TEXT("RoundCinematicRevealToLoserSpotlightSeconds"), 4.0f);
+	TestFloatDefault(TEXT("RoundCinematicRevealToLoserSpotlightSeconds"), 3.0f);
 	TestFloatDefault(TEXT("RoundCinematicLoserSpotlightHoldSeconds"), 3.0f);
 	TestFloatDefault(TEXT("CollectorCardSelectionDelaySeconds"), 3.0f);
 	TestFloatDefault(TEXT("RoundCinematicPostShotProgressHoldSeconds"), 5.0f);
@@ -1411,14 +1411,45 @@ bool FShowDownGunVisionSequenceTimingTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
+	SequenceSubsystem->bMatchPresentationActivated = false;
+	SequenceSubsystem->bTableSpotlightEnabled = true;
+	SequenceSubsystem->bZeroDarknessSpotlightEnabled = false;
+	SequenceSubsystem->ApplyPhasePresentationPolicy(EShowDownPhase::None);
+	TestFalse(
+		TEXT("The in-game startup policy keeps SpotLight6 off"),
+		SequenceSubsystem->bTableSpotlightEnabled);
+	TestTrue(
+		TEXT("The in-game startup policy begins with SpotLight7 on"),
+		SequenceSubsystem->bZeroDarknessSpotlightEnabled);
+
+	SequenceSubsystem->bTableSpotlightEnabled = true;
+	SequenceSubsystem->bZeroDarknessSpotlightEnabled = false;
+	SequenceSubsystem->ApplyPhasePresentationPolicy(EShowDownPhase::SelectCard);
+	TestFalse(
+		TEXT("Card selection explicitly keeps SpotLight6 off"),
+		SequenceSubsystem->bTableSpotlightEnabled);
+
+	SequenceSubsystem->bTableSpotlightEnabled = false;
+	SequenceSubsystem->bZeroDarknessSpotlightEnabled = true;
+	SequenceSubsystem->HandleTableCinematicCue(ESDTableCinematicCue::PreRevealBlackout, 0);
+	TestTrue(
+		TEXT("Pre-reveal blackout enables SpotLight6 immediately"),
+		SequenceSubsystem->bTableSpotlightEnabled);
+	TestFalse(
+		TEXT("Pre-reveal blackout disables SpotLight7"),
+		SequenceSubsystem->bZeroDarknessSpotlightEnabled);
+
 	GameState->CurrentPhase = EShowDownPhase::Roulette;
 	SequenceSubsystem->BoundGameState = GameState;
 	SequenceSubsystem->DesiredDarknessStrength = 1.0f;
 	SequenceSubsystem->bZeroDarknessSpotlightEnabled = false;
+	const uint8 TargetMask = ShowDownTableCinematics::PlayerSlotToMask(
+		EShowDownPlayerSlot::Player1);
+	SequenceSubsystem->ActiveTargetSpotlightMask = TargetMask;
 
 	SequenceSubsystem->HandleTableCinematicCue(
 		ESDTableCinematicCue::TriggerPullStarted,
-		ShowDownTableCinematics::PlayerSlotToMask(EShowDownPlayerSlot::Player1));
+		TargetMask);
 	TestEqual(
 		TEXT("Starting trigger travel does not change darkness"),
 		SequenceSubsystem->DesiredDarknessStrength,
@@ -1426,6 +1457,22 @@ bool FShowDownGunVisionSequenceTimingTest::RunTest(const FString& Parameters)
 	TestFalse(
 		TEXT("Starting trigger travel does not enable the bright spotlight"),
 		SequenceSubsystem->bZeroDarknessSpotlightEnabled);
+	TestEqual(
+		TEXT("Starting trigger travel keeps the red loser light active"),
+		SequenceSubsystem->ActiveTargetSpotlightMask,
+		TargetMask);
+
+	SequenceSubsystem->HandleTableCinematicCue(
+		ESDTableCinematicCue::TriggerPullCompleted,
+		0);
+	TestEqual(
+		TEXT("Full trigger travel clears the red loser light"),
+		SequenceSubsystem->ActiveTargetSpotlightMask,
+		static_cast<uint8>(0));
+	TestEqual(
+		TEXT("The full-pull cue itself waits for the firing callback to change darkness"),
+		SequenceSubsystem->DesiredDarknessStrength,
+		1.0f);
 
 	SequenceSubsystem->HandleGunFired(GunActor);
 	TestEqual(

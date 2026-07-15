@@ -227,10 +227,10 @@ void USDGunVisionSequenceSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	Super::OnWorldBeginPlay(InWorld);
 	bWorldHasBegunPlay = true;
 	SetTableSpotlightEnabled(false);
-	SetZeroDarknessSpotlightEnabled(false);
-	// Bind the replicated phase only after establishing the authored-off base.
-	// Otherwise a SelectCard phase can correctly enable SpotLight7 and then be
-	// overwritten by the two initialization calls above.
+	// The in-game presentation starts under SpotLight7. Hub teardown explicitly
+	// disables it through ResetMatchPresentationForHub.
+	SetZeroDarknessSpotlightEnabled(true);
+	// Bind the replicated phase only after establishing the startup light state.
 	RefreshExistingBindings();
 	SynchronizePendingVisionDirectors();
 }
@@ -881,7 +881,9 @@ void USDGunVisionSequenceSubsystem::ApplyPhasePresentationPolicy(EShowDownPhase 
 	case EShowDownPhase::None:
 	default:
 		bSpotlightChanged |= SetTableSpotlightEnabled(false);
-		bSpotlightChanged |= SetZeroDarknessSpotlightEnabled(false);
+		// Preserve SpotLight7 while the in-game world is waiting for its first
+		// match cue. Once a match has run, non-gameplay phases return both lights off.
+		bSpotlightChanged |= SetZeroDarknessSpotlightEnabled(!bMatchPresentationActivated);
 		ResetToIdle(false);
 		break;
 	}
@@ -1003,11 +1005,11 @@ void USDGunVisionSequenceSubsystem::HandleGunFired(ASDSelfShotGunActor* GunActor
 	SequenceElapsedTime = 0.0f;
 	SequenceStageDuration = 0.0f;
 	bPostShotBrightHoldActive = true;
+	ActiveTargetSpotlightMask = 0;
 	SetDarknessImmediate(0.0f);
-	if (SetZeroDarknessSpotlightEnabled(true))
-	{
-		PlaySpotlightTransitionSound();
-	}
+	// The red loser light and SpotLight7 switch on the firing frame without the
+	// generic spotlight transition sound; the gun's own live-shot sound owns it.
+	SetZeroDarknessSpotlightEnabled(true);
 }
 
 void USDGunVisionSequenceSubsystem::HandleGunEmptyFired(ASDSelfShotGunActor* GunActor)
@@ -1029,11 +1031,11 @@ void USDGunVisionSequenceSubsystem::HandleGunEmptyFired(ASDSelfShotGunActor* Gun
 	SequenceElapsedTime = 0.0f;
 	SequenceStageDuration = 0.0f;
 	bPostShotBrightHoldActive = true;
+	ActiveTargetSpotlightMask = 0;
 	SetDarknessImmediate(0.0f);
-	if (SetZeroDarknessSpotlightEnabled(true))
-	{
-		PlaySpotlightTransitionSound();
-	}
+	// Empty chambers use their dedicated click sound and likewise suppress the
+	// generic spotlight transition sound on the full-pull frame.
+	SetZeroDarknessSpotlightEnabled(true);
 }
 
 void USDGunVisionSequenceSubsystem::HandleGunPresentationFinished(ASDSelfShotGunActor* GunActor)
@@ -1111,8 +1113,9 @@ void USDGunVisionSequenceSubsystem::HandleTableCinematicCue(
 		{
 			bool bSpotlightChanged = ActiveTargetSpotlightMask != 0;
 			ActiveTargetSpotlightMask = 0;
-			bSpotlightChanged |= SetTableSpotlightEnabled(false);
 			bSpotlightChanged |= SetZeroDarknessSpotlightEnabled(false);
+			// SpotLight6 now comes on with the blackout instead of two seconds later.
+			bSpotlightChanged |= SetTableSpotlightEnabled(true);
 			if (bSpotlightChanged)
 			{
 				PlaySpotlightTransitionSound();
@@ -1192,17 +1195,15 @@ void USDGunVisionSequenceSubsystem::HandleTableCinematicCue(
 		break;
 
 	case ESDTableCinematicCue::TriggerPullStarted:
-		{
-			bool bSpotlightChanged = (ActiveTargetSpotlightMask & PlayerSlotMask) != 0;
-			ActiveTargetSpotlightMask &= ~PlayerSlotMask;
-			bSpotlightChanged |= SetTableSpotlightEnabled(false);
-			// Trigger travel only clears the target cue. Darkness and the bright
-			// spotlight switch together from the real fired/empty-fired callback.
-			if (bSpotlightChanged)
-			{
-				PlaySpotlightTransitionSound();
-			}
-		}
+		// Keep the red loser light unchanged while the trigger is travelling.
+		break;
+
+	case ESDTableCinematicCue::TriggerPullCompleted:
+		// The gun emits this local cue on the exact full-pull frame. Clear the red
+		// target light silently; HandleGunFired/HandleGunEmptyFired owns darkness
+		// and SpotLight7 on that same frame.
+		ActiveTargetSpotlightMask = 0;
+		SetTableSpotlightEnabled(false);
 		break;
 
 	case ESDTableCinematicCue::InitialDealStarted:

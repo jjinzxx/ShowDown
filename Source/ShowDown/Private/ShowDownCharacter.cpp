@@ -1087,20 +1087,11 @@ void AShowDownCharacter::HandleTableCinematicCue(
 				&& ShowDownTableCinematics::IsSingleSideInMask(PlayerSlotMask, EShowDownSide::Collector));
 		bLoserSpotlightActive = bMultiplayerTarget || bSinglePlayerTarget;
 	}
-	else if (Cue == ESDTableCinematicCue::TriggerPullStarted)
+	else if (Cue == ESDTableCinematicCue::TriggerPullCompleted)
 	{
-		const bool bMultiplayerTarget = ShowDownTableCinematics::IsPlayerSlotInMask(
-			PlayerSlotMask,
-			PlayerSlot);
-		const bool bSinglePlayerTarget =
-			(CharacterRole == EShowDownCharacterRole::Player
-				&& ShowDownTableCinematics::IsSingleSideInMask(PlayerSlotMask, EShowDownSide::Player))
-			|| (CharacterRole == EShowDownCharacterRole::Opponent
-				&& ShowDownTableCinematics::IsSingleSideInMask(PlayerSlotMask, EShowDownSide::Collector));
-		if (bMultiplayerTarget || bSinglePlayerTarget)
-		{
-			bLoserSpotlightActive = false;
-		}
+		// The red loser light stays on throughout trigger travel and clears only
+		// on the gun actor's exact full-pull/fire frame.
+		bLoserSpotlightActive = false;
 	}
 	else if (Cue == ESDTableCinematicCue::Reset
 		|| Cue == ESDTableCinematicCue::MatchIntro
