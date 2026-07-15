@@ -48,12 +48,116 @@
 #include "SupabaseSubsystem.h"
 #include "TimerManager.h"
 #include "Widgets/SLeafWidget.h"
+#include "Widgets/Layout/SBorder.h"
+#include "Widgets/Layout/SBox.h"
+#include "Widgets/SBoxPanel.h"
+#include "Widgets/SOverlay.h"
+#include "Widgets/Text/STextBlock.h"
 
 namespace
 {
+	enum class ESDCardSelectionPromptState : uint8
+	{
+		Hidden,
+		Choose,
+		Waiting
+	};
+
 	const TCHAR* DefaultInteractionOutlineMaterialPath = TEXT("/Game/ArtTone/M_PP_InteractionOutline.M_PP_InteractionOutline");
 	constexpr float CharacterHeadLookReplicationInterval = 0.05f;
 	constexpr float CharacterHeadLookReplicationAngleThreshold = 0.5f;
+	constexpr int32 CardSelectionPromptZOrder = 400;
+
+	FSlateFontInfo MakeCardSelectionPromptFont(int32 Size)
+	{
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle("Regular", Size);
+		if (UObject* FontObject = LoadObject<UObject>(
+			nullptr,
+			TEXT("/Game/UI/Font/Pretendard/static/Pretendard-Regular_Font.Pretendard-Regular_Font")))
+		{
+			Font.FontObject = FontObject;
+			Font.Size = Size;
+		}
+		return Font;
+	}
+
+	TSharedRef<SWidget> BuildCardSelectionPromptWidget(
+		ESDCardSelectionPromptState State,
+		bool bMultiplayer,
+		bool bSingleClickSubmit)
+	{
+		const bool bWaiting = State == ESDCardSelectionPromptState::Waiting;
+		const FText Title = bWaiting
+			? FText::FromString(TEXT("카드 선택 완료"))
+			: FText::FromString(TEXT("카드를 선택하세요"));
+		const FText Detail = bWaiting
+			? FText::FromString(bMultiplayer
+				? TEXT("다른 플레이어가 카드를 고르는 중입니다")
+				: TEXT("카드 전달과 다음 단계를 준비하는 중입니다"))
+			: FText::FromString(bSingleClickSubmit
+				? TEXT("상대에게 건넬 카드 한 장을 클릭하세요")
+				: TEXT("한 번 클릭해 선택하고, 다시 클릭해 확정하세요"));
+		const FLinearColor AccentColor = bWaiting
+			? FLinearColor(0.35f, 0.72f, 0.88f, 0.94f)
+			: FLinearColor(1.0f, 0.68f, 0.10f, 0.98f);
+
+		return SNew(SOverlay)
+			.Visibility(EVisibility::HitTestInvisible)
+			+ SOverlay::Slot()
+			.HAlign(HAlign_Center)
+			.VAlign(VAlign_Top)
+			.Padding(FMargin(0.0f, 66.0f, 0.0f, 0.0f))
+			[
+				SNew(SBox)
+				.WidthOverride(650.0f)
+				[
+					SNew(SBorder)
+					.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+					.BorderBackgroundColor(AccentColor)
+					.Padding(FMargin(2.0f))
+					[
+						SNew(SBorder)
+						.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+						.BorderBackgroundColor(FLinearColor(0.012f, 0.016f, 0.024f, 0.94f))
+						.Padding(FMargin(24.0f, 11.0f, 24.0f, 13.0f))
+						[
+							SNew(SVerticalBox)
+							+ SVerticalBox::Slot()
+							.AutoHeight()
+							.HAlign(HAlign_Center)
+							[
+								SNew(STextBlock)
+								.Text(bWaiting ? FText::FromString(TEXT("READY")) : FText::FromString(TEXT("CARD SELECT")))
+								.Font(MakeCardSelectionPromptFont(12))
+								.ColorAndOpacity(FSlateColor(AccentColor))
+								.Justification(ETextJustify::Center)
+							]
+							+ SVerticalBox::Slot()
+							.AutoHeight()
+							.HAlign(HAlign_Center)
+							.Padding(FMargin(0.0f, 1.0f, 0.0f, 2.0f))
+							[
+								SNew(STextBlock)
+								.Text(Title)
+								.Font(MakeCardSelectionPromptFont(27))
+								.ColorAndOpacity(FSlateColor(FLinearColor::White))
+								.Justification(ETextJustify::Center)
+							]
+							+ SVerticalBox::Slot()
+							.AutoHeight()
+							.HAlign(HAlign_Center)
+							[
+								SNew(STextBlock)
+								.Text(Detail)
+								.Font(MakeCardSelectionPromptFont(16))
+								.ColorAndOpacity(FSlateColor(FLinearColor(0.82f, 0.86f, 0.91f, 1.0f)))
+								.Justification(ETextJustify::Center)
+							]
+						]
+					]
+				]
+			];
+	}
 
 	void RestoreMultiplayerNameTagScreenRegistrations(UWorld* World)
 	{
@@ -323,6 +427,8 @@ void AShowDownPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason
 	}
 	SetHoveredCard(nullptr);
 	RemoveCenterCrosshairWidget();
+	ClearCardSelectionHandHighlight();
+	RemoveCardSelectionPrompt();
 	if (MultiplayerLoadingWidget)
 	{
 		MultiplayerLoadingWidget->RemoveFromParent();
@@ -694,6 +800,7 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime);
 	UpdateGunShotCameraOverride(DeltaTime);
+	UpdateCardSelectionPrompt(DeltaTime);
 	if (MultiplayerLoadingWidget)
 	{
 		MultiplayerLoadingElapsedTime += FMath::Max(0.0f, DeltaTime);
@@ -1338,9 +1445,18 @@ void AShowDownPlayerController::RefreshInteractableOutlineMaterialParameters()
 		return;
 	}
 
+	float OutlineThickness = FMath::Max(1.0f, InteractableOutlineThickness);
+	float OutlineOpacity = FMath::Clamp(InteractableOutlineOpacity, 0.0f, 1.0f);
+	if (CardSelectionPromptState == static_cast<uint8>(ESDCardSelectionPromptState::Choose))
+	{
+		const float PulseAlpha = 0.5f + 0.5f * FMath::Sin(CardSelectionPromptAnimationTime * 6.4f);
+		OutlineThickness = FMath::Lerp(2.0f, 3.0f, PulseAlpha);
+		OutlineOpacity = FMath::Lerp(0.45f, 1.0f, PulseAlpha);
+	}
+
 	InteractionOutlineMID->SetVectorParameterValue(TEXT("OutlineColor"), InteractableOutlineColor);
-	InteractionOutlineMID->SetScalarParameterValue(TEXT("OutlineThickness"), FMath::Max(1.0f, InteractableOutlineThickness));
-	InteractionOutlineMID->SetScalarParameterValue(TEXT("OutlineOpacity"), FMath::Clamp(InteractableOutlineOpacity, 0.0f, 1.0f));
+	InteractionOutlineMID->SetScalarParameterValue(TEXT("OutlineThickness"), OutlineThickness);
+	InteractionOutlineMID->SetScalarParameterValue(TEXT("OutlineOpacity"), OutlineOpacity);
 	InteractionOutlineMID->SetScalarParameterValue(TEXT("TargetStencil"), FMath::Clamp(static_cast<float>(InteractableOutlineStencilValue), 1.0f, 255.0f));
 }
 
@@ -1496,6 +1612,9 @@ void AShowDownPlayerController::SubmitSelectedCard(ACard* SelectedCard)
 		}
 		HoveredCard = nullptr;
 	}
+
+	bCardSelectionSubmittedLocally = true;
+	SetCardSelectionPromptState(static_cast<uint8>(ESDCardSelectionPromptState::Waiting));
 
 	if (HasAuthority())
 	{
@@ -2915,6 +3034,186 @@ void AShowDownPlayerController::RemoveCenterCrosshairWidget()
 		GEngine->GameViewport->RemoveViewportWidgetContent(CenterCrosshairWidget.ToSharedRef());
 	}
 	CenterCrosshairWidget.Reset();
+}
+
+bool AShowDownPlayerController::HasLocalSelectableCard() const
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
+	for (TActorIterator<ACard> CardIt(World); CardIt; ++CardIt)
+	{
+		if (IsCardSelectableForLocalPlayer(*CardIt))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+void AShowDownPlayerController::RefreshCardSelectionHandHighlight()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	InitializeInteractableOutlinePostProcess();
+	for (TActorIterator<ACard> CardIt(World); CardIt; ++CardIt)
+	{
+		ACard* Card = *CardIt;
+		if (!IsCardSelectableForLocalPlayer(Card))
+		{
+			continue;
+		}
+
+		TArray<UPrimitiveComponent*> PrimitiveComponents;
+		Card->GetComponents<UPrimitiveComponent>(PrimitiveComponents);
+		for (UPrimitiveComponent* Component : PrimitiveComponents)
+		{
+			if (!IsOutlineablePrimitive(Component)
+				|| CardSelectionPrimitiveStates.ContainsByPredicate(
+					[Component](const FSDPrimitiveCustomDepthState& SavedState)
+					{
+						return SavedState.Component.Get() == Component;
+					}))
+			{
+				continue;
+			}
+
+			FSDPrimitiveCustomDepthState& SavedState = CardSelectionPrimitiveStates.AddDefaulted_GetRef();
+			SavedState.Component = Component;
+			SavedState.bRenderCustomDepth = Component->bRenderCustomDepth;
+			SavedState.CustomDepthStencilValue = Component->CustomDepthStencilValue;
+			Component->SetRenderCustomDepth(true);
+			Component->SetCustomDepthStencilValue(InteractableOutlineStencilValue);
+		}
+	}
+	RefreshInteractableOutlineMaterialParameters();
+}
+
+void AShowDownPlayerController::ClearCardSelectionHandHighlight()
+{
+	// Focus outlines are layered on top of the hand-wide selection outline. Clear
+	// that transient layer first so its saved state cannot restore a stale glow.
+	SetFocusedInteractable(nullptr);
+	for (const FSDPrimitiveCustomDepthState& SavedState : CardSelectionPrimitiveStates)
+	{
+		if (UPrimitiveComponent* Component = SavedState.Component.Get())
+		{
+			Component->SetCustomDepthStencilValue(SavedState.CustomDepthStencilValue);
+			Component->SetRenderCustomDepth(SavedState.bRenderCustomDepth);
+		}
+	}
+	CardSelectionPrimitiveStates.Reset();
+}
+
+void AShowDownPlayerController::UpdateCardSelectionPrompt(float DeltaTime)
+{
+	const AShowDownGameStateBase* ShowDownGameState = GetWorld()
+		? GetWorld()->GetGameState<AShowDownGameStateBase>()
+		: nullptr;
+	const bool bCardSelectionPhase = ShowDownGameState
+		&& ShowDownGameState->CurrentPhase == EShowDownPhase::SelectCard;
+
+	if (!bCardSelectionPhase)
+	{
+		bCardSelectionSubmittedLocally = false;
+		SetCardSelectionPromptState(static_cast<uint8>(ESDCardSelectionPromptState::Hidden));
+		return;
+	}
+
+	ESDCardSelectionPromptState DesiredState = ESDCardSelectionPromptState::Hidden;
+	if (CanCreateLocalPlayerWidgets()
+		&& bHandleShowDownGameplayInput
+		&& !bPauseMenuOpen
+		&& !bChatOpen)
+	{
+		if (bCardSelectionSubmittedLocally)
+		{
+			DesiredState = ESDCardSelectionPromptState::Waiting;
+		}
+		else if (HasLocalSelectableCard())
+		{
+			DesiredState = ESDCardSelectionPromptState::Choose;
+		}
+	}
+
+	SetCardSelectionPromptState(static_cast<uint8>(DesiredState));
+	if (!CardSelectionPromptWidget.IsValid())
+	{
+		return;
+	}
+
+	CardSelectionPromptAnimationTime += FMath::Max(0.0f, DeltaTime);
+	const float FadeAlpha = FMath::Clamp(CardSelectionPromptAnimationTime / 0.18f, 0.0f, 1.0f);
+	const float PulseOpacity = DesiredState == ESDCardSelectionPromptState::Choose
+		? 0.94f + 0.06f * (0.5f + 0.5f * FMath::Sin(CardSelectionPromptAnimationTime * 4.6f))
+		: 0.84f;
+	CardSelectionPromptWidget->SetRenderOpacity(
+		FMath::InterpEaseOut(0.0f, PulseOpacity, FadeAlpha, 2.0f));
+	if (DesiredState == ESDCardSelectionPromptState::Choose)
+	{
+		RefreshCardSelectionHandHighlight();
+	}
+}
+
+void AShowDownPlayerController::SetCardSelectionPromptState(uint8 NewState)
+{
+	const uint8 HiddenState = static_cast<uint8>(ESDCardSelectionPromptState::Hidden);
+	const uint8 ChooseState = static_cast<uint8>(ESDCardSelectionPromptState::Choose);
+	if (CardSelectionPromptState == NewState
+		&& (NewState == HiddenState || CardSelectionPromptWidget.IsValid()))
+	{
+		return;
+	}
+
+	const bool bLeavingChooseState = CardSelectionPromptState == ChooseState && NewState != ChooseState;
+	RemoveCardSelectionPrompt();
+	if (bLeavingChooseState || NewState != ChooseState)
+	{
+		ClearCardSelectionHandHighlight();
+	}
+	CardSelectionPromptState = NewState;
+	CardSelectionPromptAnimationTime = 0.0f;
+	if (NewState == HiddenState || !CanCreateLocalPlayerWidgets())
+	{
+		return;
+	}
+
+	const ESDCardSelectionPromptState State = static_cast<ESDCardSelectionPromptState>(NewState);
+	CardSelectionPromptWidget = BuildCardSelectionPromptWidget(
+		State,
+		IsMultiplayerGameMap(GetWorld()),
+		bSubmitCardsOnSingleClick);
+	CardSelectionPromptWidget->SetRenderOpacity(0.0f);
+	if (GEngine && GEngine->GameViewport)
+	{
+		GEngine->GameViewport->AddViewportWidgetContent(
+			CardSelectionPromptWidget.ToSharedRef(),
+			CardSelectionPromptZOrder);
+	}
+	else
+	{
+		CardSelectionPromptWidget.Reset();
+	}
+}
+
+void AShowDownPlayerController::RemoveCardSelectionPrompt()
+{
+	if (!CardSelectionPromptWidget.IsValid())
+	{
+		return;
+	}
+	if (GEngine && GEngine->GameViewport)
+	{
+		GEngine->GameViewport->RemoveViewportWidgetContent(CardSelectionPromptWidget.ToSharedRef());
+	}
+	CardSelectionPromptWidget.Reset();
 }
 
 void AShowDownPlayerController::SetHitBlackoutUiOpacity(float Opacity)

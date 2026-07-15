@@ -463,6 +463,12 @@ private:
 	void CreateCenterCrosshairWidget();
 	void UpdateCenterCrosshairVisibility();
 	void RemoveCenterCrosshairWidget();
+	void UpdateCardSelectionPrompt(float DeltaTime);
+	void SetCardSelectionPromptState(uint8 NewState);
+	void RemoveCardSelectionPrompt();
+	bool HasLocalSelectableCard() const;
+	void RefreshCardSelectionHandHighlight();
+	void ClearCardSelectionHandHighlight();
 	void SubmitLocalMultiplayerDisplayName();
 	void SubmitLocalEquippedCharacterSkin();
 	void TryBindVoiceChatEvents();
@@ -545,7 +551,12 @@ private:
 
 	TSharedPtr<SWidget> CenterCrosshairWidget;
 	TSharedPtr<SWidget> HitBlackoutOverlayWidget;
+	TSharedPtr<SWidget> CardSelectionPromptWidget;
 	TArray<FSDPrimitiveCustomDepthState> FocusedPrimitiveStates;
+	TArray<FSDPrimitiveCustomDepthState> CardSelectionPrimitiveStates;
+	uint8 CardSelectionPromptState = 0;
+	float CardSelectionPromptAnimationTime = 0.0f;
+	bool bCardSelectionSubmittedLocally = false;
 
 	bool bChatOpen = false;
 	FString LastSubmittedMultiplayerDisplayName;

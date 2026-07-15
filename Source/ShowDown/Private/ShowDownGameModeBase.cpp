@@ -1005,6 +1005,10 @@ void AShowDownGameModeBase::PlayerSelectedCardFromController(AController* Submit
 	RecordCurrentRoundAction(FString::Printf(TEXT("Player gave Collector forehead card rank %d."), CurrentRoundPlayerGaveRank));
 	UE_LOG(LogTemp, Log, TEXT("GameMode received selected card: %s"), *SelectedCard->GetName());
 	BroadcastCardSelectedAction(EShowDownSide::Player);
+	// The phase remains SelectCard while the chosen card travels and the
+	// collector responds. Lock the remaining cards immediately so the completed
+	// choice cannot still look interactive during that presentation.
+	SetPlayerHandSelectable(false);
 
 	CardSystem->RemoveCardFromHand(PlayerState.HandCards, SelectedCard);
 	ReflowHandCards(EShowDownSide::Player);
