@@ -228,6 +228,33 @@ namespace
 
 		return Result.TrimStartAndEnd();
 	}
+
+	bool IsLikelyWhisperHallucination(const FString& Text)
+	{
+		FString Normalized = Text.TrimStartAndEnd().ToLower();
+		Normalized.ReplaceInline(TEXT(" "), TEXT(""));
+		Normalized.ReplaceInline(TEXT("."), TEXT(""));
+		Normalized.ReplaceInline(TEXT(","), TEXT(""));
+		Normalized.ReplaceInline(TEXT("!"), TEXT(""));
+		Normalized.ReplaceInline(TEXT("?"), TEXT(""));
+
+		if ((Normalized.StartsWith(TEXT("[")) && Normalized.EndsWith(TEXT("]")))
+			|| (Normalized.StartsWith(TEXT("(")) && Normalized.EndsWith(TEXT(")"))))
+		{
+			return true;
+		}
+
+		static const TArray<FString> KnownSilentHallucinations = {
+			TEXT("시청해주셔서감사합니다"),
+			TEXT("구독과좋아요부탁드립니다"),
+			TEXT("구독과좋아요부탁드리겠습니다"),
+			TEXT("다음영상에서만나요")
+		};
+
+		const bool bLooksLikeVideoOutro = Normalized.Contains(TEXT("영상"))
+			&& (Normalized.Contains(TEXT("구독")) || Normalized.Contains(TEXT("좋아요")));
+		return bLooksLikeVideoOutro || KnownSilentHallucinations.Contains(Normalized);
+	}
 }
 
 bool UShowDownVoiceSubsystem::IsConfigured() const
@@ -412,6 +439,23 @@ void UShowDownVoiceSubsystem::EndPushToTalk()
 	{
 		LastVoiceError = TEXT("Recording is too short.");
 		BroadcastVoiceStatus(false, TEXT("녹음이 너무 짧습니다."));
+		PendingTranscriptionCallback.ExecuteIfBound(false, FString());
+		PendingTranscriptionCallback.Unbind();
+		return;
+	}
+
+	float SpeechRms = 0.0f;
+	float SpeechPeak = 0.0f;
+	float ActiveSpeechRatio = 0.0f;
+	if (!HasSufficientSpeech(SpeechRms, SpeechPeak, ActiveSpeechRatio))
+	{
+		LastVoiceError = FString::Printf(
+			TEXT("Recording contains no clear speech. rms=%.5f peak=%.5f active=%.4f"),
+			SpeechRms,
+			SpeechPeak,
+			ActiveSpeechRatio);
+		UE_LOG(LogTemp, Log, TEXT("%s"), *LastVoiceError);
+		BroadcastVoiceStatus(false, TEXT("음성이 너무 작거나 감지되지 않았습니다."));
 		PendingTranscriptionCallback.ExecuteIfBound(false, FString());
 		PendingTranscriptionCallback.Unbind();
 		return;
@@ -996,7 +1040,11 @@ void UShowDownVoiceSubsystem::RequestLocalTranscription(TArray<uint8>&& WavData)
 	const FString LanguageArg = TranscriptionLanguage.TrimStartAndEnd().IsEmpty()
 		? FString()
 		: FString::Printf(TEXT(" -l \"%s\""), *TranscriptionLanguage.TrimStartAndEnd());
-	const FString Args = FString::Printf(TEXT("-m \"%s\" -f \"%s\"%s"), *ResolvedModelPath, *WavFilePath, *LanguageArg);
+	const FString Args = FString::Printf(
+		TEXT("-m \"%s\" -f \"%s\"%s -nf -sns -nth 0.45 -et 2.20"),
+		*ResolvedModelPath,
+		*WavFilePath,
+		*LanguageArg);
 
 	int32 ReturnCode = -1;
 	FString StdOut;
@@ -1006,13 +1054,15 @@ void UShowDownVoiceSubsystem::RequestLocalTranscription(TArray<uint8>&& WavData)
 
 	const FString CombinedOutput = StdOut + TEXT("\n") + StdErr;
 	const FString TranscribedText = ExtractWhisperCliText(CombinedOutput);
-	const bool bSuccess = bExecuted && ReturnCode == 0 && !TranscribedText.IsEmpty();
+	const bool bHallucination = IsLikelyWhisperHallucination(TranscribedText);
+	const bool bSuccess = bExecuted && ReturnCode == 0 && !TranscribedText.IsEmpty() && !bHallucination;
 	if (!bSuccess)
 	{
 		LastVoiceError = FString::Printf(
-			TEXT("Local STT failed. executed=%s code=%d output=%s"),
+			TEXT("Local STT failed or rejected hallucination. executed=%s code=%d hallucination=%s output=%s"),
 			bExecuted ? TEXT("true") : TEXT("false"),
 			ReturnCode,
+			bHallucination ? TEXT("true") : TEXT("false"),
 			*CombinedOutput.Left(256));
 		UE_LOG(LogTemp, Warning, TEXT("%s"), *LastVoiceError);
 		BroadcastVoiceStatus(false, TEXT("로컬 STT 실패."));
@@ -1308,6 +1358,66 @@ bool UShowDownVoiceSubsystem::BuildRecordedWav(TArray<uint8>& OutWavData, float&
 	AppendUInt32LE(OutWavData, DataSize);
 	OutWavData.Append(reinterpret_cast<const uint8*>(MonoPcm.GetData()), DataSize);
 	return true;
+}
+
+bool UShowDownVoiceSubsystem::HasSufficientSpeech(float& OutRms, float& OutPeak, float& OutActiveRatio) const
+{
+	TArray<float> Samples;
+	int32 NumChannels = 1;
+	{
+		FScopeLock Lock(&CaptureCriticalSection);
+		Samples = CapturedSamples;
+		NumChannels = FMath::Max(1, CaptureNumChannels);
+	}
+
+	const int32 NumFrames = Samples.Num() / NumChannels;
+	if (NumFrames <= 0)
+	{
+		OutRms = 0.0f;
+		OutPeak = 0.0f;
+		OutActiveRatio = 0.0f;
+		return false;
+	}
+
+	double Mean = 0.0;
+	for (int32 FrameIndex = 0; FrameIndex < NumFrames; ++FrameIndex)
+	{
+		double MixedSample = 0.0;
+		for (int32 ChannelIndex = 0; ChannelIndex < NumChannels; ++ChannelIndex)
+		{
+			MixedSample += Samples[FrameIndex * NumChannels + ChannelIndex];
+		}
+		Mean += MixedSample / static_cast<double>(NumChannels);
+	}
+	Mean /= static_cast<double>(NumFrames);
+
+	double SumSquares = 0.0;
+	int32 ActiveFrames = 0;
+	OutPeak = 0.0f;
+	const float ActiveThreshold = FMath::Max(0.005f, MinimumSpeechPeak * 0.5f);
+	for (int32 FrameIndex = 0; FrameIndex < NumFrames; ++FrameIndex)
+	{
+		double MixedSample = 0.0;
+		for (int32 ChannelIndex = 0; ChannelIndex < NumChannels; ++ChannelIndex)
+		{
+			MixedSample += Samples[FrameIndex * NumChannels + ChannelIndex];
+		}
+
+		const float CenteredSample = static_cast<float>(MixedSample / static_cast<double>(NumChannels) - Mean);
+		const float Amplitude = FMath::Abs(CenteredSample);
+		SumSquares += static_cast<double>(CenteredSample) * static_cast<double>(CenteredSample);
+		OutPeak = FMath::Max(OutPeak, Amplitude);
+		if (Amplitude >= ActiveThreshold)
+		{
+			++ActiveFrames;
+		}
+	}
+
+	OutRms = FMath::Sqrt(static_cast<float>(SumSquares / static_cast<double>(NumFrames)));
+	OutActiveRatio = static_cast<float>(ActiveFrames) / static_cast<float>(NumFrames);
+	return OutRms >= MinimumSpeechRms
+		&& OutPeak >= MinimumSpeechPeak
+		&& OutActiveRatio >= MinimumActiveSpeechRatio;
 }
 
 void UShowDownVoiceSubsystem::PlaySpeechWav(const TArray<uint8>& WavData)

@@ -109,6 +109,17 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice", meta = (ClampMin = "0.1"))
 	float MinimumRecordingSeconds = 0.25f;
 
+	// Reject recordings that contain only silence or low-level background noise before
+	// sending them to Whisper. Values are normalized PCM amplitudes (0.0 - 1.0).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float MinimumSpeechRms = 0.006f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float MinimumSpeechPeak = 0.02f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float MinimumActiveSpeechRatio = 0.01f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|Voice", meta = (ClampMin = "1.0"))
 	float MaximumRecordingSeconds = 10.0f;
 
@@ -191,6 +202,7 @@ private:
 	void RequestPendingSpeech();
 	bool ParseTranscriptionResponse(const FString& ResponseBody, FString& OutText) const;
 	bool BuildRecordedWav(TArray<uint8>& OutWavData, float& OutDurationSeconds) const;
+	bool HasSufficientSpeech(float& OutRms, float& OutPeak, float& OutActiveRatio) const;
 	void PlaySpeechWav(const TArray<uint8>& WavData);
 
 	UFUNCTION()
