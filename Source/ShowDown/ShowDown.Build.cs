@@ -35,12 +35,12 @@ public class ShowDown : ModuleRules
 		string AbsoluteDirectory = Path.GetFullPath(Path.Combine(ProjectRoot, RelativeDirectory));
 		if (!Directory.Exists(AbsoluteDirectory))
 		{
-			return;
+			throw new BuildException($"Required local voice runtime directory is missing: {AbsoluteDirectory}. Run 'git lfs pull' before building.");
 		}
 
-		foreach (string File in Directory.EnumerateFiles(AbsoluteDirectory, "*", SearchOption.AllDirectories))
+		foreach (string RuntimeFile in Directory.EnumerateFiles(AbsoluteDirectory, "*", SearchOption.AllDirectories))
 		{
-			RuntimeDependencies.Add(File, StagedFileType.NonUFS);
+			StageRuntimeFileAbsolute(RuntimeFile);
 		}
 	}
 
@@ -48,11 +48,35 @@ public class ShowDown : ModuleRules
 	{
 		string ProjectRoot = Path.GetFullPath(Path.Combine(ModuleDirectory, "..", ".."));
 		string AbsoluteFile = Path.GetFullPath(Path.Combine(ProjectRoot, RelativeFile));
+		StageRuntimeFileAbsolute(AbsoluteFile);
+	}
+
+	private void StageRuntimeFileAbsolute(string AbsoluteFile)
+	{
 		if (!File.Exists(AbsoluteFile))
 		{
-			return;
+			throw new BuildException($"Required local voice runtime file is missing: {AbsoluteFile}. Run 'git lfs pull' before building.");
+		}
+
+		if (IsGitLfsPointer(AbsoluteFile))
+		{
+			throw new BuildException($"Required local voice runtime file is still a Git LFS pointer: {AbsoluteFile}. Run 'git lfs pull' before building.");
 		}
 
 		RuntimeDependencies.Add(AbsoluteFile, StagedFileType.NonUFS);
+	}
+
+	private static bool IsGitLfsPointer(string AbsoluteFile)
+	{
+		FileInfo RuntimeFileInfo = new FileInfo(AbsoluteFile);
+		if (RuntimeFileInfo.Length > 1024)
+		{
+			return false;
+		}
+
+		using (StreamReader Reader = new StreamReader(AbsoluteFile))
+		{
+			return Reader.ReadLine() == "version https://git-lfs.github.com/spec/v1";
+		}
 	}
 }

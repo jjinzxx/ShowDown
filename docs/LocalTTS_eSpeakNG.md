@@ -30,4 +30,4 @@ LocalTTSVoice=ko
 
 ## Packaging
 
-Packaged builds need the local voice executables, DLLs, model, and data files staged next to the game. `Source/ShowDown/ShowDown.Build.cs` registers them as Non-UFS runtime dependencies so external processes can access the real files at runtime.
+Packaged builds need the local voice executables, DLLs, model, and data files staged next to the game. `Source/ShowDown/ShowDown.Build.cs` registers them as Non-UFS runtime dependencies so external processes can access the real files at runtime. The build fails with a clear message when a required file is missing or is still a Git LFS pointer; run `git lfs pull` before building in that case.
