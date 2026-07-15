@@ -40,6 +40,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Audio|Presentation")
 	void NotifyGunPresentationFinished();
 
+	/** Restarts the non-overlapping spotlight transition one-shot. */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Audio|Presentation")
+	void NotifySpotlightChanged();
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Audio|Presentation")
 	void NotifyPhaseChanged(EShowDownPhase NewPhase);
 
@@ -74,6 +78,8 @@ private:
 	void ScheduleMixRestore(float Delay);
 	void ClearPresentationTimers();
 	void ApplyButtonClickVolume();
+	void ApplySpotlightTransitionVolume();
+	void StopSpotlightTransitionSound();
 
 	UFUNCTION()
 	void HandleBackgroundMusicFinished();
@@ -96,6 +102,9 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UAudioComponent> CrowdBedComponent;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UAudioComponent> SpotlightTransitionComponent;
+
 	TWeakObjectPtr<UWorld> PlaybackWorld;
 	FDelegateHandle PostLoadMapDelegateHandle;
 	FDelegateHandle WorldInitializedActorsDelegateHandle;
@@ -106,5 +115,6 @@ private:
 	float UserEffectVolume = 1.0f;
 	float CurrentCrowdConfigVolume = 0.0f;
 	float CurrentMusicMixMultiplier = 1.0f;
+	uint64 LastSpotlightTransitionFrame = MAX_uint64;
 	bool bCrowdBedEnabled = false;
 };

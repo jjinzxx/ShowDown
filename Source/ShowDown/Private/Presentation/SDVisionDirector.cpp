@@ -13,9 +13,9 @@ namespace
 {
 	const TCHAR* DefaultDarknessMaterialPath = TEXT("/Game/ArtTone/M_PP_TableVisionWorldRange.M_PP_TableVisionWorldRange");
 	const TCHAR* DeprecatedDarknessMaterialPath = TEXT("/Game/ArtTone/M_PP_TableVisionDarkness.M_PP_TableVisionDarkness");
-	constexpr float GameplayVisionRadius = 100.0f;
-	constexpr float GameplayVisionFeather = 200.0f;
-	constexpr float GameplayDarknessStrength = 0.4f;
+	constexpr float GameplayVisionRadius = 150.0f;
+	constexpr float GameplayVisionFeather = 100.0f;
+	constexpr float GameplayDarknessStrength = 1.0f;
 	constexpr float MatchEntryVisionRadius = 5000.0f;
 	const FName DarknessStrengthParameterName(TEXT("DarknessStrength"));
 	const FName VisionCenterParameterName(TEXT("VisionCenter"));
@@ -116,9 +116,30 @@ void ASDVisionDirector::NormalizeAuthoredTableSpotLights()
 	const FVector TableCenter = GetVisionCenterWorldLocation();
 	const float SafeScale = FMath::Clamp(AuthoredTableSpotLightIntensityScale, 0.0f, 1.0f);
 	const float SafeMaximum = FMath::Max(0.0f, MaximumAuthoredTableSpotLightIntensity);
+	const FName RevealSpotlightName(TEXT("SpotLight6"));
+	const FName RevealSpotlightTag(TEXT("ShowDownTableSpotlight"));
+	const FName FullStageSpotlightName(TEXT("SpotLight7"));
+	const FName FullStageSpotlightTag(TEXT("ShowDownZeroDarknessSpotlight"));
 
 	for (TActorIterator<ASpotLight> It(World); It; ++It)
 	{
+		// SpotLight6 and SpotLight7 are deliberately authored cinematic lights.
+		// Their exact intensities belong to the level designer and must not be
+		// normalized as legacy always-on table lights.
+		bool bIsCinematicSpotlight = It->ActorHasTag(RevealSpotlightTag)
+			|| It->ActorHasTag(FullStageSpotlightTag)
+			|| It->GetFName() == RevealSpotlightName
+			|| It->GetFName() == FullStageSpotlightName;
+#if WITH_EDITOR
+		bIsCinematicSpotlight = bIsCinematicSpotlight
+			|| It->GetActorLabel() == RevealSpotlightName.ToString()
+			|| It->GetActorLabel() == FullStageSpotlightName.ToString();
+#endif
+		if (bIsCinematicSpotlight)
+		{
+			continue;
+		}
+
 		USpotLightComponent* Light = Cast<USpotLightComponent>(It->GetLightComponent());
 		if (!Light
 			|| !Light->IsRegistered()

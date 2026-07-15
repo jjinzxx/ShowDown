@@ -70,6 +70,7 @@ void UShowDownAudioSubsystem::Deinitialize()
 	}
 
 	ClearPresentationTimers();
+	StopSpotlightTransitionSound();
 	StopPersistentLoops();
 	PlaybackWorld.Reset();
 	AudioConfig = nullptr;
@@ -172,6 +173,62 @@ void UShowDownAudioSubsystem::NotifyGunPresentationFinished()
 	}
 }
 
+void UShowDownAudioSubsystem::NotifySpotlightChanged()
+{
+	EnsurePersistentLoops();
+	UWorld* World = ResolvePlaybackWorld();
+	if (!AudioConfig || !CanPlayInWorld(World))
+	{
+		return;
+	}
+
+	// Multiple characters can update their lights in one presentation step.
+	// Treat that batch as one audible transition, while still allowing a later
+	// frame to interrupt and restart the long one-shot from the beginning.
+	if (LastSpotlightTransitionFrame == GFrameCounter)
+	{
+		return;
+	}
+
+	USoundBase* SpotlightSound = AudioConfig->SpotlightTransitionSound.Get();
+	if (!SpotlightSound)
+	{
+		return;
+	}
+	LastSpotlightTransitionFrame = GFrameCounter;
+
+	if (IsValid(SpotlightTransitionComponent)
+		&& SpotlightTransitionComponent->GetWorld() != World)
+	{
+		StopSpotlightTransitionSound();
+		// Preserve the duplicate guard for the current transition after cleanup.
+		LastSpotlightTransitionFrame = GFrameCounter;
+	}
+
+	if (!IsValid(SpotlightTransitionComponent))
+	{
+		SpotlightTransitionComponent = UGameplayStatics::CreateSound2D(
+			World,
+			SpotlightSound,
+			1.0f,
+			1.0f,
+			0.0f,
+			nullptr,
+			false,
+			false);
+	}
+
+	if (!SpotlightTransitionComponent)
+	{
+		return;
+	}
+
+	SpotlightTransitionComponent->Stop();
+	SpotlightTransitionComponent->SetSound(SpotlightSound);
+	ApplySpotlightTransitionVolume();
+	SpotlightTransitionComponent->Play(0.0f);
+}
+
 void UShowDownAudioSubsystem::NotifyPhaseChanged(EShowDownPhase NewPhase)
 {
 	EnsurePersistentLoops();
@@ -204,6 +261,7 @@ void UShowDownAudioSubsystem::SetUserEffectVolume(float Volume)
 	EnsurePersistentLoops();
 	SetCrowdMixVolume(CurrentCrowdConfigVolume, 0.0f);
 	ApplyButtonClickVolume();
+	ApplySpotlightTransitionVolume();
 }
 
 void UShowDownAudioSubsystem::RefreshUserVolumes()
@@ -231,6 +289,7 @@ void UShowDownAudioSubsystem::RefreshUserVolumes()
 	SetMusicMixMultiplier(CurrentMusicMixMultiplier, 0.0f);
 	SetCrowdMixVolume(CurrentCrowdConfigVolume, 0.0f);
 	ApplyButtonClickVolume();
+	ApplySpotlightTransitionVolume();
 }
 
 void UShowDownAudioSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
@@ -470,6 +529,26 @@ void UShowDownAudioSubsystem::ApplyButtonClickVolume()
 		AudioConfig->ButtonClickSound->Volume =
 			FMath::Max(0.0f, AudioConfig->ButtonClickVolume) * UserEffectVolume;
 	}
+}
+
+void UShowDownAudioSubsystem::ApplySpotlightTransitionVolume()
+{
+	if (SpotlightTransitionComponent && AudioConfig)
+	{
+		SpotlightTransitionComponent->SetVolumeMultiplier(
+			FMath::Max(0.0f, AudioConfig->SpotlightTransitionVolume) * UserEffectVolume);
+	}
+}
+
+void UShowDownAudioSubsystem::StopSpotlightTransitionSound()
+{
+	if (IsValid(SpotlightTransitionComponent))
+	{
+		SpotlightTransitionComponent->Stop();
+		SpotlightTransitionComponent->DestroyComponent();
+	}
+	SpotlightTransitionComponent = nullptr;
+	LastSpotlightTransitionFrame = MAX_uint64;
 }
 
 void UShowDownAudioSubsystem::HandleBackgroundMusicFinished()

@@ -24,13 +24,13 @@ struct FSDVisionState
 	GENERATED_BODY()
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vision", meta = (ClampMin = "0.0"))
-	float VisionRadius = 100.0f;
+	float VisionRadius = 150.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vision", meta = (ClampMin = "0.0"))
-	float VisionFeather = 200.0f;
+	float VisionFeather = 100.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vision", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float DarknessStrength = 0.4f;
+	float DarknessStrength = 1.0f;
 };
 
 UCLASS(Blueprintable)
@@ -245,7 +245,7 @@ protected:
 	float IntroWideVisionRadius = 5000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision|Intro", meta = (ClampMin = "1.0"))
-	float IntroWideVisionFeather = 200.0f;
+	float IntroWideVisionFeather = 100.0f;
 
 	/** Reduces only the legacy standalone spotlights aimed into the table. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision|Lighting Safety")

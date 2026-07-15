@@ -157,10 +157,10 @@ private:
 
 	// Optional data asset for future character skins. Robot, hoodman, micu, and miku
 	// still resolve in code when this is left empty.
-	UPROPERTY(EditDefaultsOnly, Category = "ShowDown|Shop Preview")
+	UPROPERTY(EditAnywhere, Category = "ShowDown|Shop Preview")
 	TObjectPtr<UShowDownCharacterSkinCatalog> CharacterSkinCatalog;
 
-	UPROPERTY(EditDefaultsOnly, Category = "ShowDown|Shop Preview")
+	UPROPERTY(EditAnywhere, Category = "ShowDown|Shop Preview")
 	TSubclassOf<AShowDownShopPreviewActor> ShopPreviewActorClass;
 
 	UPROPERTY(

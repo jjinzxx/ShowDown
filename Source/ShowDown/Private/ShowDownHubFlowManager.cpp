@@ -38,6 +38,12 @@ AShowDownHubFlowManager::AShowDownHubFlowManager()
 	ShopWidgetClass = UShowDownShopWidget::StaticClass();
 	ShopPreviewActorClass = AShowDownShopPreviewActor::StaticClass();
 	TransitionWidgetClass = UShowDownTransitionWidget::StaticClass();
+	static ConstructorHelpers::FObjectFinder<UShowDownCharacterSkinCatalog> DefaultCharacterSkinCatalog(
+		TEXT("/Game/Data/Characters/DA_CharacterSkinCatalog"));
+	if (DefaultCharacterSkinCatalog.Succeeded())
+	{
+		CharacterSkinCatalog = DefaultCharacterSkinCatalog.Object;
+	}
 	static ConstructorHelpers::FClassFinder<UShowDownMultiplayerWidget> MultiplayerWidgetBlueprint(TEXT("/Game/UI/WBP_Multiplayer"));
 	MultiplayerWidgetClass = UShowDownMultiplayerWidget::StaticClass();
 	if (MultiplayerWidgetBlueprint.Succeeded()) MultiplayerWidgetClass = MultiplayerWidgetBlueprint.Class;

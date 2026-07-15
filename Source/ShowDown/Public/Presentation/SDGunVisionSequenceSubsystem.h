@@ -7,6 +7,7 @@
 #include "SDGunVisionSequenceSubsystem.generated.h"
 
 class AActor;
+class ASpotLight;
 class ASDSelfShotGunActor;
 class AShowDownGameStateBase;
 class USDGunVisionSequenceSubsystem;
@@ -65,7 +66,7 @@ public:
 	virtual void Tick(float DeltaTime) override;
 	virtual TStatId GetStatId() const override;
 
-	/** Starts the one-time gameplay iris one second after the local camera is ready. */
+	/** Starts at the authored table range and stays bright until the initial deal finishes. */
 	void QueueMatchEntryPresentation();
 
 	/** Restores a clear hub view so another match can enter cleanly in the same world. */
@@ -112,6 +113,13 @@ private:
 		float Duration,
 		ESDVisionBlendEase EaseMode,
 		float EaseExponent = 2.0f);
+	ASpotLight* ResolveTableSpotlight();
+	ASpotLight* ResolveZeroDarknessSpotlight();
+	bool SetTableSpotlightEnabled(bool bEnabled);
+	bool SetZeroDarknessSpotlightEnabled(bool bEnabled);
+	void PlaySpotlightTransitionSound() const;
+	void RefreshTurnSpotlightSoundState();
+	void ApplyPhasePresentationPolicy(EShowDownPhase Phase);
 	bool IsRoulettePhase() const;
 	void ResetToIdle(bool bImmediate);
 
@@ -127,6 +135,9 @@ private:
 	UFUNCTION()
 	void HandleTableCinematicCue(ESDTableCinematicCue Cue, uint8 PlayerSlotMask);
 
+	UFUNCTION()
+	void HandleNameTagRoundStatusChanged();
+
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<USDGunVisionGunBinding>> GunBindings;
 
@@ -134,6 +145,8 @@ private:
 	TArray<TWeakObjectPtr<ASDVisionDirector>> PendingVisionDirectorSync;
 	TWeakObjectPtr<AShowDownGameStateBase> BoundGameState;
 	TWeakObjectPtr<ASDSelfShotGunActor> ActiveGun;
+	TWeakObjectPtr<ASpotLight> TableSpotlight;
+	TWeakObjectPtr<ASpotLight> ZeroDarknessSpotlight;
 	FDelegateHandle ActorSpawnedDelegateHandle;
 
 	ESequenceState SequenceState = ESequenceState::Idle;
@@ -142,7 +155,17 @@ private:
 	float SequenceElapsedTime = 0.0f;
 	float SequenceStageDuration = 0.0f;
 	float ShotResolveDelay = 0.0f;
+	float PostShotBrightHoldElapsedTime = 0.0f;
 	float DesiredDarknessStrength = 0.0f;
+	uint8 ActiveTargetSpotlightMask = 0;
+	EShowDownSide LastTurnSpotlightSide = EShowDownSide::Player;
+	EShowDownPlayerSlot LastTurnSpotlightSlot = EShowDownPlayerSlot::None;
 	bool bMatchPresentationActivated = false;
 	bool bWorldHasBegunPlay = false;
+	bool bTableSpotlightEnabled = false;
+	bool bZeroDarknessSpotlightEnabled = false;
+	bool bTurnSpotlightStateInitialized = false;
+	bool bLastTurnSpotlightVisible = false;
+	bool bPostShotBrightHoldActive = false;
+	bool bInitialDealPresentationActive = false;
 };

@@ -437,6 +437,7 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 			}
 			else
 			{
+				OnTriggerPullStarted.Broadcast();
 				FireGun();
 			}
 		}
@@ -1124,6 +1125,7 @@ void ASDSelfShotGunActor::FinishSequence()
 
 void ASDSelfShotGunActor::StartMechanismAnimation()
 {
+	OnTriggerPullStarted.Broadcast();
 	ChamberStartRotation = ChamberCurrentRotation;
 	ChamberTargetRotation = ChamberCurrentRotation + ChamberStepRotationOffset;
 	AnimState = EGunAnimState::Cocking;

@@ -166,6 +166,10 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Self Shot Gun")
 	FSDSelfShotGunEvent OnGunRaised;
 
+	/** Fires when the trigger starts moving, before the live/empty result. */
+	UPROPERTY(BlueprintAssignable, Category = "Self Shot Gun")
+	FSDSelfShotGunEvent OnTriggerPullStarted;
+
 	UPROPERTY(BlueprintAssignable, Category = "Self Shot Gun")
 	FSDSelfShotGunEvent OnGunFired;
 

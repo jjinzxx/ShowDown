@@ -36,13 +36,8 @@ namespace
 	constexpr int32 NameTagLayerZOrder = 50;
 	constexpr float MaximumHitResetPulsePeakIntensity = 8000.0f;
 	constexpr float MaximumHitResetPulseRadius = 240.0f;
-	constexpr float MaximumTurnSpotLightIntensity = 2500.0f;
-	constexpr float MaximumLoserSpotLightIntensity = 6000.0f;
-	constexpr float MaximumRoundStatusSpotLightRadius = 230.0f;
 	const FVector HitResetPulseRelativeLocation(0.0f, 0.0f, 220.0f);
 	const FRotator HitResetPulseRelativeRotation(-90.0f, 0.0f, 0.0f);
-	const FVector RoundStatusSpotLightRelativeLocation(0.0f, 0.0f, 250.0f);
-	const FRotator RoundStatusSpotLightRelativeRotation(-90.0f, 0.0f, 0.0f);
 
 	void ConfigureHitResetPulseLight(
 		USpotLightComponent* Light,
@@ -65,25 +60,6 @@ namespace
 		Light->SetUseInverseSquaredFalloff(true);
 		Light->SetAttenuationRadius(FMath::Clamp(RequestedRadius, 50.0f, MaximumHitResetPulseRadius));
 		Light->SetLightColor(Color);
-		Light->SetCastShadows(false);
-		Light->SetIndirectLightingIntensity(0.0f);
-		Light->SetVolumetricScatteringIntensity(0.0f);
-	}
-
-	void ConfigureRoundStatusSpotLight(USpotLightComponent* Light, float RequestedRadius)
-	{
-		if (!Light)
-		{
-			return;
-		}
-
-		Light->SetRelativeLocation(RoundStatusSpotLightRelativeLocation);
-		Light->SetRelativeRotation(RoundStatusSpotLightRelativeRotation);
-		Light->SetInnerConeAngle(14.0f);
-		Light->SetOuterConeAngle(28.0f);
-		Light->SetIntensityUnits(ELightUnits::Lumens);
-		Light->SetUseInverseSquaredFalloff(true);
-		Light->SetAttenuationRadius(FMath::Clamp(RequestedRadius, 50.0f, MaximumRoundStatusSpotLightRadius));
 		Light->SetCastShadows(false);
 		Light->SetIndirectLightingIntensity(0.0f);
 		Light->SetVolumetricScatteringIntensity(0.0f);
@@ -272,8 +248,21 @@ AShowDownCharacter::AShowDownCharacter()
 
 	RoundStatusSpotLight = CreateDefaultSubobject<USpotLightComponent>(TEXT("RoundStatusSpotLight"));
 	RoundStatusSpotLight->SetupAttachment(GetCapsuleComponent());
-	ConfigureRoundStatusSpotLight(RoundStatusSpotLight, RoundStatusSpotLightRadius);
-	RoundStatusSpotLight->SetIntensity(0.0f);
+	// These are native defaults only. Designers can override every lighting and
+	// transform property on the component without runtime code resetting them.
+	RoundStatusSpotLight->SetRelativeLocation(FVector(0.0f, 0.0f, 250.0f));
+	RoundStatusSpotLight->SetRelativeRotation(FRotator(-90.0f, 0.0f, 0.0f));
+	RoundStatusSpotLight->SetInnerConeAngle(14.0f);
+	RoundStatusSpotLight->SetOuterConeAngle(28.0f);
+	RoundStatusSpotLight->SetIntensityUnits(ELightUnits::Lumens);
+	RoundStatusSpotLight->SetUseInverseSquaredFalloff(true);
+	RoundStatusSpotLight->SetAttenuationRadius(230.0f);
+	RoundStatusSpotLight->SetIntensity(2500.0f);
+	RoundStatusSpotLight->SetCastShadows(false);
+	RoundStatusSpotLight->SetIndirectLightingIntensity(0.0f);
+	RoundStatusSpotLight->SetVolumetricScatteringIntensity(0.0f);
+	// Affects World cannot be changed at runtime, so keep it enabled and use
+	// visibility as the default-off/runtime on-off switch.
 	RoundStatusSpotLight->SetVisibility(false);
 
 	UCharacterMovementComponent* MovementComponent = GetCharacterMovement();
@@ -313,10 +302,10 @@ void AShowDownCharacter::PostInitializeComponents()
 		HitResetPulseLight->SetVisibility(false, true);
 		HitResetPulseLight->SetHiddenInGame(true, true);
 	}
-	ConfigureRoundStatusSpotLight(RoundStatusSpotLight, RoundStatusSpotLightRadius);
 	if (RoundStatusSpotLight)
 	{
-		RoundStatusSpotLight->SetIntensity(0.0f);
+		RoundStatusSpotLightTurnColor = RoundStatusSpotLight->GetLightColor();
+		bRoundStatusSpotLightTurnColorCached = true;
 		RoundStatusSpotLight->SetVisibility(false, true);
 		RoundStatusSpotLight->SetHiddenInGame(true, true);
 	}
@@ -1031,10 +1020,6 @@ void AShowDownCharacter::HandleMultiplayerRouletteStarted(
 	const FString& TargetName,
 	int32 BulletCount)
 {
-	bLoserSpotlightActive = PlayerSlot != EShowDownPlayerSlot::None
-		&& PlayerSlot == TargetSlot;
-	RefreshRoundStatusSpotlight();
-
 	if (!HasAuthority() || !ShouldReactToMultiplayerRouletteTarget(TargetSlot))
 	{
 		return;
@@ -1050,12 +1035,6 @@ void AShowDownCharacter::HandleMultiplayerRouletteResult(
 	bool bHit,
 	int32 RemainingLives)
 {
-	if (PlayerSlot != EShowDownPlayerSlot::None && PlayerSlot == TargetSlot)
-	{
-		bLoserSpotlightActive = false;
-		RefreshRoundStatusSpotlight();
-	}
-
 	if (PlayerSlot != EShowDownPlayerSlot::None && PlayerSlot == TargetSlot)
 	{
 		SetCharacterLives(RemainingLives);
@@ -1086,14 +1065,37 @@ void AShowDownCharacter::HandleTableCinematicCue(
 {
 	if (Cue == ESDTableCinematicCue::LoserSpotlight)
 	{
-		bLoserSpotlightActive = ShowDownTableCinematics::IsPlayerSlotInMask(
+		const bool bMultiplayerTarget = ShowDownTableCinematics::IsPlayerSlotInMask(
 			PlayerSlotMask,
 			PlayerSlot);
+		const bool bSinglePlayerTarget =
+			(CharacterRole == EShowDownCharacterRole::Player
+				&& ShowDownTableCinematics::IsSingleSideInMask(PlayerSlotMask, EShowDownSide::Player))
+			|| (CharacterRole == EShowDownCharacterRole::Opponent
+				&& ShowDownTableCinematics::IsSingleSideInMask(PlayerSlotMask, EShowDownSide::Collector));
+		bLoserSpotlightActive = bMultiplayerTarget || bSinglePlayerTarget;
+	}
+	else if (Cue == ESDTableCinematicCue::TriggerPullStarted)
+	{
+		const bool bMultiplayerTarget = ShowDownTableCinematics::IsPlayerSlotInMask(
+			PlayerSlotMask,
+			PlayerSlot);
+		const bool bSinglePlayerTarget =
+			(CharacterRole == EShowDownCharacterRole::Player
+				&& ShowDownTableCinematics::IsSingleSideInMask(PlayerSlotMask, EShowDownSide::Player))
+			|| (CharacterRole == EShowDownCharacterRole::Opponent
+				&& ShowDownTableCinematics::IsSingleSideInMask(PlayerSlotMask, EShowDownSide::Collector));
+		if (bMultiplayerTarget || bSinglePlayerTarget)
+		{
+			bLoserSpotlightActive = false;
+		}
 	}
 	else if (Cue == ESDTableCinematicCue::Reset
 		|| Cue == ESDTableCinematicCue::MatchIntro
 		|| Cue == ESDTableCinematicCue::PreRevealBlackout
-		|| Cue == ESDTableCinematicCue::RevealStarted)
+		|| Cue == ESDTableCinematicCue::RevealStarted
+		|| Cue == ESDTableCinematicCue::InitialDealStarted
+		|| Cue == ESDTableCinematicCue::InitialDealFinished)
 	{
 		bLoserSpotlightActive = false;
 	}
@@ -2081,7 +2083,6 @@ void AShowDownCharacter::RefreshRoundStatusSpotlight()
 		return;
 	}
 
-	ConfigureRoundStatusSpotLight(RoundStatusSpotLight, RoundStatusSpotLightRadius);
 	const AShowDownGameStateBase* ShowDownGameState = GetWorld()
 		? GetWorld()->GetGameState<AShowDownGameStateBase>()
 		: nullptr;
@@ -2095,16 +2096,13 @@ void AShowDownCharacter::RefreshRoundStatusSpotlight()
 		&& !HitRecoveryPresentationState.bActive
 		&& (bShowLoser || bShowTurn);
 
+	if (!bRoundStatusSpotLightTurnColorCached)
+	{
+		RoundStatusSpotLightTurnColor = RoundStatusSpotLight->GetLightColor();
+		bRoundStatusSpotLightTurnColorCached = true;
+	}
 	RoundStatusSpotLight->SetLightColor(
-		bShowLoser ? LoserSpotLightColor : TurnSpotLightColor);
-	const float RequestedIntensity = bShowLoser
-		? LoserSpotLightIntensity
-		: TurnSpotLightIntensity;
-	const float MaximumIntensity = bShowLoser
-		? MaximumLoserSpotLightIntensity
-		: MaximumTurnSpotLightIntensity;
-	RoundStatusSpotLight->SetIntensity(
-		bVisible ? FMath::Clamp(RequestedIntensity, 0.0f, MaximumIntensity) : 0.0f);
+		bShowLoser ? RouletteTargetSpotLightColor : RoundStatusSpotLightTurnColor);
 	RoundStatusSpotLight->SetVisibility(bVisible, true);
 	RoundStatusSpotLight->SetHiddenInGame(!bVisible, true);
 }

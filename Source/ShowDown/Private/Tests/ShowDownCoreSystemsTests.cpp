@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Animation/AnimationAsset.h"
 #include "Audio/ShowDownAudioConfig.h"
 #include "BettingSystem.h"
 #include "CardSystem.h"
@@ -16,6 +17,7 @@
 #include "ShowDownGameModeBase.h"
 #include "ShowDownTypes.h"
 #include "Sound/SoundWave.h"
+#include "UObject/UnrealType.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FShowDownBettingSystemTest,
@@ -111,6 +113,14 @@ bool FShowDownMultiplayerRoundFlowTest::RunTest(const FString& Parameters)
 		IsPlayerSlotInMask(AlternatingPlayerMask, EShowDownPlayerSlot::Player2));
 	TestFalse(TEXT("Cinematic mask excludes an unselected player"),
 		IsPlayerSlotInMask(AlternatingPlayerMask, EShowDownPlayerSlot::Player3));
+	const uint8 SinglePlayerMask = SingleSideToMask(EShowDownSide::Player);
+	const uint8 SingleCollectorMask = SingleSideToMask(EShowDownSide::Collector);
+	TestTrue(TEXT("Single-player cinematic mask selects the player side"),
+		IsSingleSideInMask(SinglePlayerMask, EShowDownSide::Player));
+	TestFalse(TEXT("Single-player cinematic mask excludes the Collector side"),
+		IsSingleSideInMask(SinglePlayerMask, EShowDownSide::Collector));
+	TestTrue(TEXT("Single-player side bits do not overlap multiplayer seats"),
+		(SingleCollectorMask & AlternatingPlayerMask) == 0);
 
 	TestEqual(
 		TEXT("No active player ends the round"),
@@ -514,6 +524,7 @@ bool FShowDownCharacterSkinCatalogTest::RunTest(const FString& Parameters)
 			ResolvedSkinId));
 	TestEqual(TEXT("Unknown ids fall back to robot"), ResolvedSkinId, FString(TEXT("robot")));
 
+	TSet<FString> BuiltInPreviewAnimations;
 	for (const FString SkinId :
 		{ FString(TEXT("robot")), FString(TEXT("hoodman")), FString(TEXT("micu")), FString(TEXT("miku")) })
 	{
@@ -523,8 +534,109 @@ bool FShowDownCharacterSkinCatalogTest::RunTest(const FString& Parameters)
 		TestFalse(
 			*FString::Printf(TEXT("Built-in skin '%s' has a mesh reference"), *SkinId),
 			Definition.SkeletalMesh.IsNull());
+		TestTrue(
+			*FString::Printf(TEXT("Built-in skin '%s' has a shop preview animation"), *SkinId),
+			Definition.PreviewAnimationMode
+				== EShowDownShopPreviewAnimationMode::SingleAnimation
+			&& !Definition.PreviewAnimation.IsNull());
+		if (!Definition.PreviewAnimation.IsNull())
+		{
+			BuiltInPreviewAnimations.Add(Definition.PreviewAnimation.ToSoftObjectPath().ToString());
+		}
+	}
+	TestEqual(
+		TEXT("Each built-in skin uses a distinct single-node preview animation"),
+		BuiltInPreviewAnimations.Num(),
+		4);
+
+	UShowDownCharacterSkinCatalog* AnimationOverrideCatalog =
+		NewObject<UShowDownCharacterSkinCatalog>();
+	FShowDownCharacterSkinDefinition AnimationOverride;
+	AnimationOverride.SkinId = TEXT("miku");
+	AnimationOverride.PreviewAnimationMode = EShowDownShopPreviewAnimationMode::SingleAnimation;
+	AnimationOverride.PreviewAnimation = TSoftObjectPtr<UAnimationAsset>(
+		FSoftObjectPath(TEXT("/Game/Character/Animation/selectCard.selectCard")));
+	AnimationOverride.bLoopPreviewAnimation = false;
+	AnimationOverride.PreviewAnimationPlayRate = 0.75f;
+	AnimationOverrideCatalog->Skins.Add(AnimationOverride);
+
+	TestTrue(
+		TEXT("An editor catalog can override only a built-in skin's preview animation"),
+		UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
+			AnimationOverrideCatalog,
+			TEXT("miku"),
+			Definition,
+			ResolvedSkinId));
+	TestFalse(TEXT("Animation-only overrides retain the built-in mesh"), Definition.SkeletalMesh.IsNull());
+	TestEqual(
+		TEXT("Animation-only overrides replace the built-in preview animation"),
+		Definition.PreviewAnimation.ToSoftObjectPath().ToString(),
+		FString(TEXT("/Game/Character/Animation/selectCard.selectCard")));
+	TestFalse(TEXT("Animation-only overrides retain their loop setting"), Definition.bLoopPreviewAnimation);
+	TestEqual(
+		TEXT("Animation-only overrides retain their play rate"),
+		Definition.PreviewAnimationPlayRate,
+		0.75f);
+
+	FShowDownCharacterSkinDefinition& ReferencePoseOverride =
+		AnimationOverrideCatalog->Skins[0];
+	ReferencePoseOverride.PreviewAnimationMode =
+		EShowDownShopPreviewAnimationMode::ReferencePose;
+	ReferencePoseOverride.PreviewAnimation.Reset();
+	TestTrue(
+		TEXT("A catalog can explicitly disable a built-in preview animation"),
+		UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
+			AnimationOverrideCatalog,
+			TEXT("miku"),
+			Definition,
+			ResolvedSkinId));
+	TestEqual(
+		TEXT("Reference pose overrides are retained"),
+		Definition.PreviewAnimationMode,
+		EShowDownShopPreviewAnimationMode::ReferencePose);
+	TestTrue(
+		TEXT("Reference pose overrides clear the built-in animation asset"),
+		Definition.PreviewAnimation.IsNull());
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownRoundCinematicDefaultsTest,
+	"ShowDown.Core.RoundCinematicDefaults",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownRoundCinematicDefaultsTest::RunTest(const FString& Parameters)
+{
+	const AShowDownGameModeBase* GameMode = GetDefault<AShowDownGameModeBase>();
+	TestNotNull(TEXT("ShowDown game mode defaults are available"), GameMode);
+	if (!GameMode)
+	{
+		return false;
 	}
 
+	auto TestFloatDefault = [this, GameMode](const TCHAR* PropertyName, float ExpectedValue)
+	{
+		const FFloatProperty* Property = FindFProperty<FFloatProperty>(
+			AShowDownGameModeBase::StaticClass(),
+			FName(PropertyName));
+		TestNotNull(*FString::Printf(TEXT("%s is reflected"), PropertyName), Property);
+		if (Property)
+		{
+			TestEqual(
+				*FString::Printf(TEXT("%s keeps the authored cinematic default"), PropertyName),
+				Property->GetPropertyValue_InContainer(GameMode),
+				ExpectedValue);
+		}
+	};
+
+	TestFloatDefault(TEXT("RoundCinematicFinalBetToBlackoutSeconds"), 4.0f);
+	TestFloatDefault(TEXT("RoundCinematicBlackoutToTableSpotlightSeconds"), 2.0f);
+	TestFloatDefault(TEXT("RoundCinematicTableSpotlightToRevealSeconds"), 1.0f);
+	TestFloatDefault(TEXT("RoundCinematicRevealToLoserSpotlightSeconds"), 4.0f);
+	TestFloatDefault(TEXT("RoundCinematicLoserSpotlightHoldSeconds"), 3.0f);
+	TestFloatDefault(TEXT("CollectorCardSelectionDelaySeconds"), 3.0f);
+	TestFloatDefault(TEXT("RoundCinematicPostShotProgressHoldSeconds"), 5.0f);
 	return true;
 }
 
@@ -680,6 +792,19 @@ bool FShowDownHitRecoveryTimingTest::RunTest(const FString& Parameters)
 		TEXT("A longer gun camera still owns the presentation finish"),
 		AShowDownGameModeBase::CalculateRoulettePresentationFinishDelay(1.0f, 4.0f, 2.0f),
 		4.0f);
+	TestTrue(
+		TEXT("A queued multiplayer shot reserves five seconds after its real result"),
+		FMath::IsNearlyEqual(
+			AShowDownGameModeBase::CalculateRouletteProgressionFinishDelay(1.45f, 3.5f, 5.0f),
+			6.45f));
+	TestEqual(
+		TEXT("A longer presentation can still own multiplayer progression"),
+		AShowDownGameModeBase::CalculateRouletteProgressionFinishDelay(1.0f, 8.0f, 5.0f),
+		8.0f);
+	TestEqual(
+		TEXT("Negative multiplayer progression timing is clamped"),
+		AShowDownGameModeBase::CalculateRouletteProgressionFinishDelay(-1.0f, -2.0f, -3.0f),
+		0.0f);
 	return true;
 }
 
@@ -720,11 +845,11 @@ bool FShowDownVisionDirectorBlendTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	TestEqual(TEXT("Gameplay vision defaults to the requested table radius"), VisionDirector->GetTableVisionRadius(), 100.0f);
-	TestEqual(TEXT("Gameplay vision defaults to the requested feather"), VisionDirector->GetTableVisionFeather(), 200.0f);
-	TestEqual(TEXT("Match entry begins from the wide radius"), VisionDirector->GetIntroWideVisionRadius(), 5000.0f);
-	TestEqual(TEXT("Match entry keeps a consistent feather"), VisionDirector->GetIntroWideVisionFeather(), 200.0f);
-	TestEqual(TEXT("Gameplay darkness rests at the cinematic baseline"), VisionDirector->GetDarknessStrength(), 0.4f);
+	TestEqual(TEXT("Gameplay vision defaults to the requested table radius"), VisionDirector->GetTableVisionRadius(), 150.0f);
+	TestEqual(TEXT("Gameplay vision defaults to the requested feather"), VisionDirector->GetTableVisionFeather(), 100.0f);
+	TestEqual(TEXT("The optional wide-view radius keeps its authored default"), VisionDirector->GetIntroWideVisionRadius(), 5000.0f);
+	TestEqual(TEXT("Match entry keeps a consistent feather"), VisionDirector->GetIntroWideVisionFeather(), 100.0f);
+	TestEqual(TEXT("Gameplay darkness rests at the cinematic baseline"), VisionDirector->GetDarknessStrength(), 1.0f);
 
 	VisionDirector->SetVisionAlpha(-1.0f);
 	TestEqual(TEXT("Immediate vision alpha clamps below zero"), VisionDirector->GetVisionAlpha(), 0.0f);
@@ -900,6 +1025,10 @@ bool FShowDownAudioConfigTest::RunTest(const FString& Parameters)
 		TEXT("BGM uses the imported Boogie Down track"),
 		AudioConfig->BackgroundMusicSound,
 		TEXT("/Game/Audio/SW_BGM_BoogieDown.SW_BGM_BoogieDown"));
+	TestSoundPath(
+		TEXT("Spotlight transitions use the imported spotlight cue"),
+		AudioConfig->SpotlightTransitionSound,
+		TEXT("/Game/Audio/SW_Spotlight.SW_Spotlight"));
 
 	const USoundWave* CrowdBedWave = Cast<USoundWave>(AudioConfig->CrowdBedSound);
 	const USoundWave* BackgroundMusicWave = Cast<USoundWave>(AudioConfig->BackgroundMusicSound);
@@ -917,6 +1046,9 @@ bool FShowDownAudioConfigTest::RunTest(const FString& Parameters)
 	TestTrue(
 		TEXT("Live-round crowd shock is delayed after the gunshot"),
 		AudioConfig->CrowdShockDelay > 0.0f);
+	TestTrue(
+		TEXT("Spotlight transitions have an audible configured volume"),
+		AudioConfig->SpotlightTransitionVolume > 0.0f);
 	return true;
 }
 

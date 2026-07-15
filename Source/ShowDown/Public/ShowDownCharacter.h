@@ -455,24 +455,16 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery")
 	TObjectPtr<USpotLightComponent> HitResetPulseLight;
 
-	/** Shared turn/loser key light. Kept separate from the recovery pulse. */
+	/**
+	 * Shared turn/loser key light. Its transform and lighting properties are
+	 * authored on the component; gameplay code only toggles it on and off.
+	 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Cinematic Light")
 	TObjectPtr<USpotLightComponent> RoundStatusSpotLight;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Cinematic Light", meta = (ClampMin = "0.0"))
-	float TurnSpotLightIntensity = 2500.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Cinematic Light", meta = (ClampMin = "0.0"))
-	float LoserSpotLightIntensity = 6000.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Cinematic Light", meta = (ClampMin = "50.0"))
-	float RoundStatusSpotLightRadius = 230.0f;
-
+	/** Runtime override used only while this character is a roulette target. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Cinematic Light")
-	FLinearColor TurnSpotLightColor = FLinearColor(1.0f, 0.58f, 0.20f, 1.0f);
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Cinematic Light")
-	FLinearColor LoserSpotLightColor = FLinearColor(1.0f, 0.025f, 0.015f, 1.0f);
+	FLinearColor RouletteTargetSpotLightColor = FLinearColor(1.0f, 0.015f, 0.015f, 1.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery", meta = (ClampMin = "0.0", UIMin = "0.0", UIMax = "3.0"))
 	float HitDownedHoldDuration = 1.0f;
@@ -571,6 +563,8 @@ private:
 	bool bNameTagVisibilityInitialized = false;
 	bool bLastNameTagVisible = false;
 	bool bLoserSpotlightActive = false;
+	bool bRoundStatusSpotLightTurnColorCached = false;
+	FLinearColor RoundStatusSpotLightTurnColor = FLinearColor::White;
 
 	FTimerHandle AnimStateResetTimerHandle;
 	UPROPERTY(Transient)

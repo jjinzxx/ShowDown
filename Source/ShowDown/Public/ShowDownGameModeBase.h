@@ -213,6 +213,14 @@ public:
 		float GunPresentationDelay,
 		float HitRecoveryDuration);
 
+	// Multiplayer may queue several roulette targets before the first gun fires.
+	// Reserve the post-shot hold in that queue so later shots and EndRound cannot
+	// collapse onto the same unblock frame.
+	static float CalculateRouletteProgressionFinishDelay(
+		float ResultDelay,
+		float PresentationFinishDelay,
+		float PostShotHoldDuration);
+
 	void RequestMultiplayerRestartFromController(AController* RequestingController);
 
 	// 게임 종료 후 허브(메인메뉴)로 돌아갈 때 게임판을 정리합니다.
@@ -388,6 +396,32 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Multiplayer Flow", meta = (ClampMin = "0.0", DisplayName = "Pause After Each Shot"))
 	float MultiplayerPostShotPauseSeconds = 0.5f;
 
+	// These names are intentionally new so legacy Blueprint CDO overrides cannot
+	// silently restore the old, shorter presentation timings.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Bet Focus Hold"))
+	float RoundCinematicBetFocusHoldSeconds = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Final Bet To Blackout"))
+	float RoundCinematicFinalBetToBlackoutSeconds = 4.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Collector Turn Lead In"))
+	float RoundCinematicCollectorTurnLeadInSeconds = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Blackout To Table Spotlight"))
+	float RoundCinematicBlackoutToTableSpotlightSeconds = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Table Spotlight To Reveal"))
+	float RoundCinematicTableSpotlightToRevealSeconds = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Reveal To Loser Spotlight"))
+	float RoundCinematicRevealToLoserSpotlightSeconds = 4.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Loser Spotlight Hold"))
+	float RoundCinematicLoserSpotlightHoldSeconds = 3.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Post Shot Progress Hold"))
+	float RoundCinematicPostShotProgressHoldSeconds = 5.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (DisplayName = "Use Initial Card Deal Presentation"))
 	bool bUseInitialCardDealPresentation = true;
 
@@ -414,6 +448,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "3.0", DisplayName = "Beat Delay"))
 	float InitialDealBeatDelay = 0.80f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Selection", meta = (ClampMin = "0.0", DisplayName = "Collector Card Selection Delay"))
+	float CollectorCardSelectionDelaySeconds = 3.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "5.0", DisplayName = "Showcase Hold Duration"))
 	float InitialDealShowcaseHoldDuration = 1.50f;
@@ -471,6 +508,7 @@ private:
 	FTimerHandle MultiplayerRevealContinuationTimerHandle;
 	TArray<FTimerHandle> CardRevealPresentationTimerHandles;
 	TArray<FTimerHandle> MultiplayerRoundTimerHandles;
+	TArray<FTimerHandle> SingleRoundCinematicTimerHandles;
 	TArray<FTimerHandle> InitialCardDealPresentationTimerHandles;
 	int32 BettingRaisesLeft = 6;
 	bool bHasLastRaiser = false;
@@ -480,6 +518,9 @@ private:
 	bool bPlayerHasActedInBetting = false;
 	bool bCollectorHasActedInBetting = false;
 	bool bCollectorBetDecisionInProgress = false;
+	bool bSingleBetTransitionInProgress = false;
+	bool bCollectorTurnLeadInProgress = false;
+	bool bCollectorCardSelectionPending = false;
 	bool bHasPendingRoundReveal = false;
 	bool bHasPendingFoldReveal = false;
 	bool bCollectorActionPresentationInProgress = false;
@@ -549,9 +590,6 @@ private:
 	TSet<TObjectPtr<ASDPlayerState>> MultiplayerPlayersActed;
 
 	UPROPERTY()
-	TSet<TObjectPtr<ASDPlayerState>> MultiplayerRoundSpectators;
-
-	UPROPERTY()
 	TSet<TObjectPtr<ASDPlayerState>> MultiplayerRestartVotes;
 
 	FTimerHandle MultiplayerStartTimerHandle;
@@ -561,6 +599,10 @@ private:
 	bool bMultiplayerRoundResolving = false;
 	bool bMultiplayerBetTransitionInProgress = false;
 	uint32 MultiplayerRoundSequence = 0;
+	double MultiplayerRoundProgressBlockedUntilSeconds = 0.0;
+	TWeakObjectPtr<ASDPlayerState> MultiplayerFoldPresentationTarget;
+	EShowDownPlayerSlot MultiplayerFoldPresentationSlot = EShowDownPlayerSlot::None;
+	int32 MultiplayerFoldPresentationTableBet = 0;
 	
 	//콜렉터 추적
 	UPROPERTY()
@@ -576,6 +618,10 @@ private:
 	bool bPendingSelfShotRouletteResult = false;
 	bool bPendingSelfShotLiveRound = false;
 	EShowDownSide PendingSelfShotTargetSide = EShowDownSide::Player;
+	uint8 PendingSelfShotTriggerTargetMask = 0;
+	uint8 PendingMultiplayerTriggerTargetMask = 0;
+	double SingleRoundProgressBlockedUntilSeconds = 0.0;
+	double SingleBetFocusStartedAtSeconds = -1.0;
 	int32 BetActionPanelRevision = 0;
 	int32 BetActionPanelSelectedRaiseTarget = 1;
 	EShowDownPlayerSlot BetActionPanelPreviewTurnSlot = EShowDownPlayerSlot::None;
@@ -621,6 +667,7 @@ private:
 	bool bSinglePlayerMatchIntroQueued = false;
 	bool bInitialCardDealPresentationInProgress = false;
 	bool bInitialCardDealPresentationPlayed = false;
+	bool bInitialDealCinematicCueActive = false;
 	bool bInitialCardDealIsMultiplayer = false;
 	int32 InitialCardDealDeckCopies = 2;
 	// Number of rank copies in the current logical deck cycle. The deck starts
@@ -658,14 +705,27 @@ private:
 	void HandleSelfShotGunShotResolved();
 
 	UFUNCTION()
+	void HandleSelfShotGunTriggerPullStarted();
+
+	UFUNCTION()
 	void HandleSinglePlayerIntroSequenceFinished();
 
 	// 덱을 만들고 섞은 뒤에 플레이어와 콜렉터에게 5장 스폰
 	void DealInitialHand();
 	void FindCollector();
+	void QueueCollectorGiveCardToPlayer();
 	void CollectorGiveCardToPlayer();
 	float EstimateCollectorWinChance() const;
 	void ResolveCollectorBetResponse();
+	void QueueCollectorBetResponseAfterFocus();
+	void HoldSingleBetFocusThen(EShowDownSide ActingSide, TFunction<void()>&& Continuation);
+	void ScheduleSingleRoundCinematicAction(float DelaySeconds, TFunction<void()>&& Action);
+	void ClearSingleRoundCinematicTimers();
+	void StartSinglePreRevealSequence(TFunction<void()>&& RevealAction);
+	void BeginSingleRoundReveal();
+	void BeginSingleFoldReveal(EShowDownSide FoldedSide, int32 LoadCount);
+	void BroadcastTableCinematicCue(ESDTableCinematicCue Cue, uint8 TargetMask = 0) const;
+	void SetInitialDealCinematicCueActive(bool bActive);
 	FCollectorBetDecision SanitizeCollectorDecision(const FCollectorBetDecision& RawDecision) const;
 	void ExecuteCollectorBetDecision(const FCollectorBetDecision& CollectorDecision, int32 GivenCardRank);
 	FSDLLMBossContext BuildLLMBossContext(int32 CurrentBet, int32 GivenCardRank) const;
@@ -745,6 +805,9 @@ private:
 
 	UFUNCTION()
 	void HandleMultiplayerGunShotResolved();
+
+	UFUNCTION()
+	void HandleMultiplayerGunTriggerPullStarted();
 
 	UFUNCTION()
 	void HandleMultiplayerGunPresentationFinished();
@@ -839,7 +902,7 @@ private:
 	void HandleMultiplayerBetAction(ASDPlayerState* SubmittingPlayer, EShowDownBetAction Action, int32 TargetBet);
 	void ScheduleMultiplayerRoundAction(float DelaySeconds, TFunction<void()>&& Action);
 	void QueueNextMultiplayerBetTurn(EShowDownPlayerSlot ActingSlot, int32 CurrentBet, float DelaySeconds);
-	void QueueMultiplayerRevealAfterBetting();
+	void QueueMultiplayerRevealAfterBetting(float CompletedBetFocusHoldSeconds = 0.0f);
 	void BeginMultiplayerFoldReveal(
 		ASDPlayerState* FoldedPlayer,
 		EShowDownPlayerSlot FoldedSlot,
@@ -859,6 +922,9 @@ private:
 	void PrepareMultiplayerFoldCylinder(int32 LoadCount);
 	void InitializeMultiplayerSharedChambers();
 	bool ResolveNextMultiplayerSharedChamber();
+	void PlayMultiplayerRouletteTargetsSequentially(
+		TArray<TWeakObjectPtr<ASDPlayerState>> Targets,
+		int32 TargetIndex = 0);
 	void RefreshCentralGunStatus();
 	float ApplyMultiplayerRoulette(ASDPlayerState* TargetPlayer, int32 BulletCount, float StartDelay = 0.0f, bool bUseSharedChambers = false);
 	void EndMultiplayerRound();

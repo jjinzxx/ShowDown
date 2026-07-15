@@ -1,5 +1,6 @@
 #include "ShowDownCharacterSkinCatalog.h"
 
+#include "Animation/AnimationAsset.h"
 #include "Engine/SkeletalMesh.h"
 
 namespace
@@ -12,12 +13,17 @@ namespace
 	FShowDownCharacterSkinDefinition MakeBuiltInSkinDefinition(
 		const FString& SkinId,
 		const FText& DisplayName,
-		const TCHAR* SkeletalMeshPath)
+		const TCHAR* SkeletalMeshPath,
+		const TCHAR* PreviewAnimationPath,
+		const bool bLoopPreviewAnimation = true)
 	{
 		FShowDownCharacterSkinDefinition Definition;
 		Definition.SkinId = SkinId;
 		Definition.DisplayName = DisplayName;
 		Definition.SkeletalMesh = TSoftObjectPtr<USkeletalMesh>(FSoftObjectPath(SkeletalMeshPath));
+		Definition.PreviewAnimationMode = EShowDownShopPreviewAnimationMode::SingleAnimation;
+		Definition.PreviewAnimation = TSoftObjectPtr<UAnimationAsset>(FSoftObjectPath(PreviewAnimationPath));
+		Definition.bLoopPreviewAnimation = bLoopPreviewAnimation;
 		return Definition;
 	}
 
@@ -28,19 +34,25 @@ namespace
 			MakeBuiltInSkinDefinition(
 				RobotSkinId,
 				NSLOCTEXT("ShowDownCharacterSkins", "Robot", "Robot"),
-				TEXT("/Game/Character/Robot/robot.robot")),
+				TEXT("/Game/Character/Robot/robot.robot"),
+				TEXT("/Game/Character/Animation/Idle_default_.Idle_default_")),
 			MakeBuiltInSkinDefinition(
 				HoodmanSkinId,
 				NSLOCTEXT("ShowDownCharacterSkins", "Hoodman", "Hoodman"),
-				TEXT("/Game/Character/hoodman_default_/hoodman.hoodman")),
+				TEXT("/Game/Character/hoodman_default_/hoodman.hoodman"),
+				TEXT("/Game/Character/Animation/Dismissing_Gesture.Dismissing_Gesture"),
+				false),
 			MakeBuiltInSkinDefinition(
 				MicuSkinId,
 				NSLOCTEXT("ShowDownCharacterSkins", "Micu", "Micu"),
-				TEXT("/Game/Character/micu/Tut_Hip_Hop_Dance__1_.Tut_Hip_Hop_Dance__1_")),
+				TEXT("/Game/Character/micu/Tut_Hip_Hop_Dance__1_.Tut_Hip_Hop_Dance__1_"),
+				TEXT("/Game/Character/micu/Tut_Hip_Hop_Dance__1__Anim.Tut_Hip_Hop_Dance__1__Anim")),
 			MakeBuiltInSkinDefinition(
 				MikuSkinId,
 				NSLOCTEXT("ShowDownCharacterSkins", "Miku", "Miku"),
-				TEXT("/Game/Character/miku/miku.miku"))
+				TEXT("/Game/Character/miku/miku.miku"),
+				TEXT("/Game/Character/Animation/Reacting.Reacting"),
+				false)
 		};
 		return Definitions;
 	}
@@ -137,20 +149,82 @@ bool UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
 		CanonicalRequestedId = RobotSkinId;
 	}
 
-	if ((Catalog && Catalog->FindSkinDefinition(CanonicalRequestedId, OutDefinition))
-		|| FindBuiltInSkinDefinition(CanonicalRequestedId, OutDefinition))
+	FShowDownCharacterSkinDefinition BuiltInDefinition;
+	const bool bHasBuiltInDefinition = FindBuiltInSkinDefinition(
+		CanonicalRequestedId,
+		BuiltInDefinition);
+
+	FShowDownCharacterSkinDefinition CatalogDefinition;
+	if (Catalog && Catalog->FindSkinDefinition(CanonicalRequestedId, CatalogDefinition))
 	{
-		OutResolvedSkinId = CanonicalizeSkinId(OutDefinition.SkinId);
+		if (bHasBuiltInDefinition)
+		{
+			// Existing skins can override just their shop animation in an editor
+			// catalog without having to repeat the built-in mesh and display name.
+			OutDefinition = BuiltInDefinition;
+			if (!CatalogDefinition.DisplayName.IsEmpty())
+			{
+				OutDefinition.DisplayName = CatalogDefinition.DisplayName;
+			}
+			if (!CatalogDefinition.Description.IsEmpty())
+			{
+				OutDefinition.Description = CatalogDefinition.Description;
+			}
+			if (!CatalogDefinition.Thumbnail.IsNull())
+			{
+				OutDefinition.Thumbnail = CatalogDefinition.Thumbnail;
+			}
+			if (!CatalogDefinition.SkeletalMesh.IsNull())
+			{
+				OutDefinition.SkeletalMesh = CatalogDefinition.SkeletalMesh;
+			}
+
+			if (CatalogDefinition.PreviewAnimationMode
+				!= EShowDownShopPreviewAnimationMode::InheritBuiltIn)
+			{
+				OutDefinition.PreviewAnimationMode = CatalogDefinition.PreviewAnimationMode;
+				OutDefinition.PreviewAnimClass = CatalogDefinition.PreviewAnimClass;
+				OutDefinition.PreviewAnimation = CatalogDefinition.PreviewAnimation;
+				OutDefinition.bLoopPreviewAnimation = CatalogDefinition.bLoopPreviewAnimation;
+				OutDefinition.PreviewAnimationPlayRate =
+					CatalogDefinition.PreviewAnimationPlayRate;
+			}
+
+			OutDefinition.PreviewLocationOffset = CatalogDefinition.PreviewLocationOffset;
+			OutDefinition.PreviewRotationOffset = CatalogDefinition.PreviewRotationOffset;
+			OutDefinition.PreviewScale = CatalogDefinition.PreviewScale;
+		}
+		else
+		{
+			OutDefinition = CatalogDefinition;
+		}
+
+		OutDefinition.SkinId = CanonicalRequestedId;
+		OutResolvedSkinId = CanonicalRequestedId;
+		return true;
+	}
+
+	if (bHasBuiltInDefinition)
+	{
+		OutDefinition = BuiltInDefinition;
+		OutResolvedSkinId = CanonicalRequestedId;
 		return true;
 	}
 
 	// Unknown ids are deliberately non-fatal. A stale backend selection or a
 	// client with older content always resolves to the robot default.
-	if ((Catalog && Catalog->FindSkinDefinition(RobotSkinId, OutDefinition))
-		|| FindBuiltInSkinDefinition(RobotSkinId, OutDefinition))
+	if (CanonicalRequestedId != RobotSkinId)
 	{
-		OutResolvedSkinId = RobotSkinId;
-		return true;
+		FString DefaultResolvedSkinId;
+		if (ResolveSkinDefinition(
+			Catalog,
+			RobotSkinId,
+			OutDefinition,
+			DefaultResolvedSkinId))
+		{
+			OutResolvedSkinId = RobotSkinId;
+			return true;
+		}
 	}
 
 	OutDefinition = FShowDownCharacterSkinDefinition();
