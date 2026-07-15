@@ -9,6 +9,7 @@ class UAudioComponent;
 class UShowDownAudioConfig;
 class USoundBase;
 class USoundWave;
+struct FActorsInitializedParams;
 
 /**
  * Persistent local audio director for music, the crowd bed and presentation
@@ -39,6 +40,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Audio|Presentation")
 	void NotifyGunPresentationFinished();
 
+	/** Restarts the non-overlapping spotlight transition one-shot. */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Audio|Presentation")
+	void NotifySpotlightChanged();
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Audio|Presentation")
 	void NotifyPhaseChanged(EShowDownPhase NewPhase);
 
@@ -59,18 +64,27 @@ public:
 	const UShowDownAudioConfig* GetAudioConfig() const { return AudioConfig; }
 
 private:
+	friend class FShowDownAudioConfigTest;
+
 	void HandlePostLoadMap(UWorld* LoadedWorld);
+	void HandleWorldInitializedActors(const FActorsInitializedParams& Params);
+	void EnsurePersistentLoops();
 	void StartPersistentLoops(UWorld* World);
 	void StopPersistentLoops();
 	bool CanPlayInWorld(const UWorld* World) const;
 	UWorld* ResolvePlaybackWorld() const;
 
+	static float CalculateMusicTargetVolume(float ConfigVolume, float UserVolume, float MixMultiplier);
+	float GetMusicTargetVolume() const;
+	float GetCrowdTargetVolume() const;
 	void SetCrowdMixVolume(float ConfigVolume, float FadeDuration);
 	void SetMusicMixMultiplier(float Multiplier, float FadeDuration);
 	void RestoreIdleMix(float FadeDuration);
 	void ScheduleMixRestore(float Delay);
 	void ClearPresentationTimers();
 	void ApplyButtonClickVolume();
+	void ApplySpotlightTransitionVolume();
+	void StopSpotlightTransitionSound();
 
 	UFUNCTION()
 	void HandleBackgroundMusicFinished();
@@ -93,8 +107,12 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UAudioComponent> CrowdBedComponent;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UAudioComponent> SpotlightTransitionComponent;
+
 	TWeakObjectPtr<UWorld> PlaybackWorld;
 	FDelegateHandle PostLoadMapDelegateHandle;
+	FDelegateHandle WorldInitializedActorsDelegateHandle;
 	FTimerHandle CrowdShockTimerHandle;
 	FTimerHandle MixRestoreTimerHandle;
 
@@ -102,5 +120,6 @@ private:
 	float UserEffectVolume = 1.0f;
 	float CurrentCrowdConfigVolume = 0.0f;
 	float CurrentMusicMixMultiplier = 1.0f;
+	uint64 LastSpotlightTransitionFrame = MAX_uint64;
 	bool bCrowdBedEnabled = false;
 };

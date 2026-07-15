@@ -195,6 +195,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Flow")
 	void StartSinglePlayer();
 
+	/** Called by the hub after its local pawn-camera blend really completes. */
+	void NotifySinglePlayerGameplayCameraReady();
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Flow")
 	void StartMultiplayerGame();
 
@@ -209,6 +212,14 @@ public:
 		float ResultDelay,
 		float GunPresentationDelay,
 		float HitRecoveryDuration);
+
+	// Multiplayer may queue several roulette targets before the first gun fires.
+	// Reserve the post-shot hold in that queue so later shots and EndRound cannot
+	// collapse onto the same unblock frame.
+	static float CalculateRouletteProgressionFinishDelay(
+		float ResultDelay,
+		float PresentationFinishDelay,
+		float PostShotHoldDuration);
 
 	void RequestMultiplayerRestartFromController(AController* RequestingController);
 
@@ -354,17 +365,62 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (DisplayName = "Height"))
 	float CardRevealHeightOffset = 10.0f;
 
-	// Single-player uses this as the neighboring-card gap. Two-player multiplayer
-	// splits the same gap around table center; larger matches keep the authored
-	// radial seat layout.
+	// Single-player neighboring-card gap for the linear fallback layout.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0", DisplayName = "Reveal Card Spacing"))
 	float CardRevealSideSpacing = 10.0f;
+
+	// Desired nearest-neighbor gap for multiplayer cards. This is intentionally
+	// separate from the legacy spacing property because existing Blueprint CDOs
+	// may carry a much larger authored override.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0", DisplayName = "Multiplayer Reveal Card Gap"))
+	float MultiplayerCardRevealGap = 20.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.1"))
 	float CardRevealVisualScale = 1.12f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (DisplayName = "Rotation Offset"))
 	FRotator CardRevealRotationOffset = FRotator(-90.0f, 0.0f, 0.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Multiplayer Flow", meta = (ClampMin = "0.0", DisplayName = "Pause Between Bet Actions"))
+	float MultiplayerBetActionIntervalSeconds = 0.8f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Multiplayer Flow", meta = (ClampMin = "0.0", DisplayName = "All Bets Complete To Reveal"))
+	float MultiplayerPreRevealDelaySeconds = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Multiplayer Flow", meta = (ClampMin = "0.0", DisplayName = "Settled Reveal To Loser Spotlight"))
+	float MultiplayerRevealToLoserSpotlightSeconds = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Multiplayer Flow", meta = (ClampMin = "0.0", DisplayName = "Loser Spotlight To Gun Movement"))
+	float MultiplayerLoserSpotlightHoldSeconds = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Multiplayer Flow", meta = (ClampMin = "0.0", DisplayName = "Pause After Each Shot"))
+	float MultiplayerPostShotPauseSeconds = 0.5f;
+
+	// These names are intentionally new so legacy Blueprint CDO overrides cannot
+	// silently restore the old, shorter presentation timings.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Bet Focus Hold"))
+	float RoundCinematicBetFocusHoldSeconds = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Final Bet To Blackout"))
+	float RoundCinematicFinalBetToBlackoutSeconds = 4.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Collector Turn Lead In"))
+	float RoundCinematicCollectorTurnLeadInSeconds = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Blackout To Table Spotlight"))
+	float RoundCinematicBlackoutToTableSpotlightSeconds = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Table Spotlight To Reveal"))
+	float RoundCinematicTableSpotlightToRevealSeconds = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Reveal To Loser Spotlight"))
+	float RoundCinematicRevealToLoserSpotlightSeconds = 4.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Loser Spotlight Hold"))
+	float RoundCinematicLoserSpotlightHoldSeconds = 3.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Post Shot Progress Hold"))
+	float RoundCinematicPostShotProgressHoldSeconds = 5.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (DisplayName = "Use Initial Card Deal Presentation"))
 	bool bUseInitialCardDealPresentation = true;
@@ -392,6 +448,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "3.0", DisplayName = "Beat Delay"))
 	float InitialDealBeatDelay = 0.80f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Selection", meta = (ClampMin = "0.0", DisplayName = "Collector Card Selection Delay"))
+	float CollectorCardSelectionDelaySeconds = 3.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "5.0", DisplayName = "Showcase Hold Duration"))
 	float InitialDealShowcaseHoldDuration = 1.50f;
@@ -449,6 +508,7 @@ private:
 	FTimerHandle MultiplayerRevealContinuationTimerHandle;
 	TArray<FTimerHandle> CardRevealPresentationTimerHandles;
 	TArray<FTimerHandle> MultiplayerRoundTimerHandles;
+	TArray<FTimerHandle> SingleRoundCinematicTimerHandles;
 	TArray<FTimerHandle> InitialCardDealPresentationTimerHandles;
 	int32 BettingRaisesLeft = 6;
 	bool bHasLastRaiser = false;
@@ -458,6 +518,9 @@ private:
 	bool bPlayerHasActedInBetting = false;
 	bool bCollectorHasActedInBetting = false;
 	bool bCollectorBetDecisionInProgress = false;
+	bool bSingleBetTransitionInProgress = false;
+	bool bCollectorTurnLeadInProgress = false;
+	bool bCollectorCardSelectionPending = false;
 	bool bHasPendingRoundReveal = false;
 	bool bHasPendingFoldReveal = false;
 	bool bCollectorActionPresentationInProgress = false;
@@ -510,7 +573,7 @@ private:
 	// The player who lost the previous round leads the next multiplayer round.
 	// A draw keeps the current lead; an eliminated loser falls back to the next survivor.
 	UPROPERTY()
-	TObjectPtr<ASDPlayerState> MultiplayerNextFirstPlayer = nullptr;
+	EShowDownPlayerSlot MultiplayerNextFirstSlot = EShowDownPlayerSlot::None;
 
 	UPROPERTY()
 	TArray<TObjectPtr<ASDMultiplayerSeatAnchor>> MultiplayerSeatAnchors;
@@ -521,11 +584,10 @@ private:
 	UPROPERTY()
 	TSet<TObjectPtr<ASDPlayerState>> MultiplayerFoldedPlayers;
 
-	UPROPERTY()
-	TSet<TObjectPtr<ASDPlayerState>> MultiplayerPlayersActed;
+	TMap<EShowDownPlayerSlot, int32> MultiplayerFoldLoadCounts;
 
 	UPROPERTY()
-	TSet<TObjectPtr<ASDPlayerState>> MultiplayerRoundSpectators;
+	TSet<TObjectPtr<ASDPlayerState>> MultiplayerPlayersActed;
 
 	UPROPERTY()
 	TSet<TObjectPtr<ASDPlayerState>> MultiplayerRestartVotes;
@@ -535,6 +597,12 @@ private:
 	double MultiplayerStartDeadlineSeconds = 0.0;
 	bool bMultiplayerMatchStarted = false;
 	bool bMultiplayerRoundResolving = false;
+	bool bMultiplayerBetTransitionInProgress = false;
+	uint32 MultiplayerRoundSequence = 0;
+	double MultiplayerRoundProgressBlockedUntilSeconds = 0.0;
+	TWeakObjectPtr<ASDPlayerState> MultiplayerFoldPresentationTarget;
+	EShowDownPlayerSlot MultiplayerFoldPresentationSlot = EShowDownPlayerSlot::None;
+	int32 MultiplayerFoldPresentationTableBet = 0;
 	
 	//콜렉터 추적
 	UPROPERTY()
@@ -550,6 +618,10 @@ private:
 	bool bPendingSelfShotRouletteResult = false;
 	bool bPendingSelfShotLiveRound = false;
 	EShowDownSide PendingSelfShotTargetSide = EShowDownSide::Player;
+	uint8 PendingSelfShotTriggerTargetMask = 0;
+	uint8 PendingMultiplayerTriggerTargetMask = 0;
+	double SingleRoundProgressBlockedUntilSeconds = 0.0;
+	double SingleBetFocusStartedAtSeconds = -1.0;
 	int32 BetActionPanelRevision = 0;
 	int32 BetActionPanelSelectedRaiseTarget = 1;
 	EShowDownPlayerSlot BetActionPanelPreviewTurnSlot = EShowDownPlayerSlot::None;
@@ -590,8 +662,12 @@ private:
 	float SinglePlayerIntroFallbackStartTime = 0.0f;
 	bool bSinglePlayerIntroFallbackActive = false;
 	bool bSinglePlayerMatchStarted = false;
+	bool bSinglePlayerGameplayCameraReady = false;
+	bool bSinglePlayerStageReadyForMatchIntro = false;
+	bool bSinglePlayerMatchIntroQueued = false;
 	bool bInitialCardDealPresentationInProgress = false;
 	bool bInitialCardDealPresentationPlayed = false;
+	bool bInitialDealCinematicCueActive = false;
 	bool bInitialCardDealIsMultiplayer = false;
 	int32 InitialCardDealDeckCopies = 2;
 	// Number of rank copies in the current logical deck cycle. The deck starts
@@ -629,14 +705,27 @@ private:
 	void HandleSelfShotGunShotResolved();
 
 	UFUNCTION()
+	void HandleSelfShotGunTriggerPullStarted();
+
+	UFUNCTION()
 	void HandleSinglePlayerIntroSequenceFinished();
 
 	// 덱을 만들고 섞은 뒤에 플레이어와 콜렉터에게 5장 스폰
 	void DealInitialHand();
 	void FindCollector();
+	void QueueCollectorGiveCardToPlayer();
 	void CollectorGiveCardToPlayer();
 	float EstimateCollectorWinChance() const;
 	void ResolveCollectorBetResponse();
+	void QueueCollectorBetResponseAfterFocus();
+	void HoldSingleBetFocusThen(EShowDownSide ActingSide, TFunction<void()>&& Continuation);
+	void ScheduleSingleRoundCinematicAction(float DelaySeconds, TFunction<void()>&& Action);
+	void ClearSingleRoundCinematicTimers();
+	void StartSinglePreRevealSequence(TFunction<void()>&& RevealAction);
+	void BeginSingleRoundReveal();
+	void BeginSingleFoldReveal(EShowDownSide FoldedSide, int32 LoadCount);
+	void BroadcastTableCinematicCue(ESDTableCinematicCue Cue, uint8 TargetMask = 0) const;
+	void SetInitialDealCinematicCueActive(bool bActive);
 	FCollectorBetDecision SanitizeCollectorDecision(const FCollectorBetDecision& RawDecision) const;
 	void ExecuteCollectorBetDecision(const FCollectorBetDecision& CollectorDecision, int32 GivenCardRank);
 	FSDLLMBossContext BuildLLMBossContext(int32 CurrentBet, int32 GivenCardRank) const;
@@ -678,7 +767,12 @@ private:
 	float PlayCardRevealPresentation(const TArray<ACard*>& Cards);
 	void ClearCardRevealPresentationTimers();
 	void ClearMultiplayerRoundTimers();
-	FTransform BuildCardRevealPresentationTransform(ACard* Card, int32 CardIndex, int32 CardCount) const;
+	FTransform BuildCardRevealPresentationTransform(
+		ACard* Card,
+		int32 CardIndex,
+		int32 CardCount,
+		float MultiplayerCenterDistance) const;
+	bool TryResolveMultiplayerRevealSeatLocation(const ACard* Card, FVector& OutSeatLocation) const;
 	void ApplyRouletteResult(EShowDownSide TargetSide, int32 BulletCount, TFunction<void()>&& Continuation);
 	void EndRound();
 	void ClearForeheadCards();
@@ -713,6 +807,9 @@ private:
 	void HandleMultiplayerGunShotResolved();
 
 	UFUNCTION()
+	void HandleMultiplayerGunTriggerPullStarted();
+
+	UFUNCTION()
 	void HandleMultiplayerGunPresentationFinished();
 	ASDSelfShotGunActor* FindSelfShotGunActor() const;
 	AShowDownCharacter* FindSingleRouletteCharacter(EShowDownSide TargetSide) const;
@@ -721,6 +818,7 @@ private:
 	bool PlaySinglePlayerIntroFallback(AShowDownCharacter* PlayerCharacter, AShowDownCharacter* CollectorCharacter);
 	void UpdateSinglePlayerIntroFallback();
 	void FinishSinglePlayerIntro();
+	void TryQueueSinglePlayerMatchIntro();
 	void StartInitialCardDealPresentation(int32 DeckCopies, bool bMultiplayer, TFunction<void()>&& Continuation);
 	void StartHandRedealPresentation(bool bMultiplayer, TFunction<void()>&& Continuation);
 	void BeginInitialCardDeckShowcase();
@@ -782,14 +880,20 @@ private:
 	void TryStartMultiplayerMatch();
 	void StartMultiplayerMatch(const TArray<ASDPlayerState*>& Players);
 	TArray<ASDPlayerState*> GetConnectedShowDownPlayers() const;
+	bool EvaluateMultiplayerRestartVotes(const TArray<ASDPlayerState*>& EligiblePlayers);
 	ASDPlayerState* GetPlayerStateForController(AController* Controller) const;
 	void EnsureMultiplayerSeatAnchors();
 	void EnsureMultiplayerPawns();
 	FTransform GetMultiplayerPawnSpawnTransform(AController* Controller, int32 PlayerIndex);
 	ASDPlayerState* FindNextAliveMultiplayerPlayer(ASDPlayerState* AfterPlayer) const;
+	ASDPlayerState* FindNextActiveMultiplayerPlayerAfterSlot(EShowDownPlayerSlot AfterSlot) const;
+	ASDPlayerState* ResolveNextMultiplayerRoundLeader(
+		EShowDownPlayerSlot PreferredLeaderSlot,
+		EShowDownPlayerSlot CurrentLeaderSlot) const;
 	ASDPlayerState* GetMultiplayerOpponent(ASDPlayerState* Player) const;
 	void DealMultiplayerHands();
 	void ClearMultiplayerHands();
+	void RetireEliminatedMultiplayerHands();
 	void ClearMultiplayerForeheadCards();
 	void ClearLooseMultiplayerCards();
 	void StartMultiplayerDuel(ASDPlayerState* FirstPlayer, ASDPlayerState* SecondPlayer);
@@ -801,14 +905,30 @@ private:
 	void HandleMultiplayerSelectedCard(ASDPlayerState* SubmittingPlayer, ACard* SelectedCard);
 	void StartMultiplayerBetting();
 	void HandleMultiplayerBetAction(ASDPlayerState* SubmittingPlayer, EShowDownBetAction Action, int32 TargetBet);
+	void ScheduleMultiplayerRoundAction(float DelaySeconds, TFunction<void()>&& Action);
+	void QueueNextMultiplayerBetTurn(EShowDownPlayerSlot ActingSlot, int32 CurrentBet, float DelaySeconds);
+	void QueueMultiplayerRevealAfterBetting(float CompletedBetFocusHoldSeconds = 0.0f);
+	void BeginMultiplayerFoldReveal(
+		ASDPlayerState* FoldedPlayer,
+		EShowDownPlayerSlot FoldedSlot,
+		int32 TableBet,
+		int32 FoldLoadCount);
+	void CompleteMultiplayerFoldResolution(
+		ASDPlayerState* FoldedPlayer,
+		EShowDownPlayerSlot FoldedSlot,
+		int32 TableBet);
+	void RetireMultiplayerFoldedCard(ASDPlayerState* FoldedPlayer);
 	void FinishMultiplayerRoundByReveal();
-	void ContinueMultiplayerRoundAfterReveal(TArray<ASDPlayerState*> RevealedPlayers, TArray<ASDPlayerState*> Winners);
-	void FinishMultiplayerRoundByFold(ASDPlayerState* FoldedPlayer);
-	void ContinueMultiplayerRoundAfterFoldReveal(ASDPlayerState* FoldedPlayer, int32 LoadCount);
+	void ContinueMultiplayerRoundAfterReveal(
+		TArray<ASDPlayerState*> RevealedPlayers,
+		bool bLoserSpotlightShown = false);
 	int32 ResolveMultiplayerFoldLoadCount(const ASDPlayerState* FoldedPlayer) const;
 	void PrepareMultiplayerFoldCylinder(int32 LoadCount);
 	void InitializeMultiplayerSharedChambers();
 	bool ResolveNextMultiplayerSharedChamber();
+	void PlayMultiplayerRouletteTargetsSequentially(
+		TArray<TWeakObjectPtr<ASDPlayerState>> Targets,
+		int32 TargetIndex = 0);
 	void RefreshCentralGunStatus();
 	float ApplyMultiplayerRoulette(ASDPlayerState* TargetPlayer, int32 BulletCount, float StartDelay = 0.0f, bool bUseSharedChambers = false);
 	void EndMultiplayerRound();

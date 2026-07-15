@@ -29,6 +29,10 @@
 
 namespace
 {
+	constexpr float MaximumMuzzleFlashIntensity = 8000.0f;
+	constexpr float MaximumMuzzleFlashAttenuationRadius = 350.0f;
+	constexpr float MinimumCinematicCameraHoldTime = 1.8f;
+
 	APlayerController* FindLocalPlayerController(const UObject* WorldContextObject)
 	{
 		const UWorld* World = WorldContextObject ? WorldContextObject->GetWorld() : nullptr;
@@ -238,7 +242,9 @@ ASDSelfShotGunActor::ASDSelfShotGunActor()
 	MuzzleFlashLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("MuzzleFlashLight"));
 	MuzzleFlashLight->SetupAttachment(MuzzlePoint);
 	MuzzleFlashLight->SetIntensity(0.0f);
-	MuzzleFlashLight->SetAttenuationRadius(MuzzleFlashAttenuationRadius);
+	MuzzleFlashLight->SetIntensityUnits(ELightUnits::Lumens);
+	MuzzleFlashLight->SetAttenuationRadius(
+		FMath::Clamp(MuzzleFlashAttenuationRadius, 0.0f, MaximumMuzzleFlashAttenuationRadius));
 	MuzzleFlashLight->SetLightColor(MuzzleFlashColor);
 	MuzzleFlashLight->SetCastShadows(true);
 	MuzzleFlashLight->SetIndirectLightingIntensity(0.0f);
@@ -318,7 +324,9 @@ void ASDSelfShotGunActor::BeginPlay()
 	ChamberCurrentRotation = ChamberInitialRotation;
 	ChamberStartRotation = ChamberCurrentRotation;
 	ChamberTargetRotation = ChamberCurrentRotation;
-	MuzzleFlashLight->SetAttenuationRadius(FMath::Max(0.0f, MuzzleFlashAttenuationRadius));
+	MuzzleFlashLight->SetAttenuationRadius(
+		FMath::Clamp(MuzzleFlashAttenuationRadius, 0.0f, MaximumMuzzleFlashAttenuationRadius));
+	MuzzleFlashLight->SetIntensityUnits(ELightUnits::Lumens);
 	MuzzleFlashLight->SetLightColor(MuzzleFlashColor);
 	if (IsValid(SelfShotCinematicCamera))
 	{
@@ -358,6 +366,9 @@ void ASDSelfShotGunActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		ShowDownGameState->OnPhaseChanged.RemoveDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleGamePhaseChanged);
+		ShowDownGameState->OnTableCinematicCue.RemoveDynamic(
+			this,
+			&ASDSelfShotGunActor::HandleTableCinematicCue);
 		ShowDownGameState->OnMultiplayerRoulettePresentation.RemoveDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
@@ -376,7 +387,9 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 	{
 		MuzzleFlashElapsedTime = FMath::Max(0.0f, MuzzleFlashElapsedTime - DeltaSeconds);
 		MuzzleFlashLight->SetIntensity(
-			MuzzleFlashElapsedTime > 0.0f ? MuzzleFlashIntensity : 0.0f);
+			MuzzleFlashElapsedTime > 0.0f
+				? FMath::Clamp(MuzzleFlashIntensity, 0.0f, MaximumMuzzleFlashIntensity)
+				: 0.0f);
 	}
 
 	UpdateHitSequence(DeltaSeconds);
@@ -414,17 +427,6 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 		{
 			AnimState = EGunAnimState::Aiming;
 			StateElapsedTime = 0.0f;
-
-			// Multiplayer and game-mode presentations provide a forced result up
-			// front. Start only the eventual victim's local blend here so it is
-			// complete by the hammer drop, without ever previewing an empty shot.
-			const bool bKnownLiveRound = ShotResultMode == ESDSelfShotRoundMode::AlwaysLive
-				|| (ShotResultMode == ESDSelfShotRoundMode::ChamberPattern
-					&& IsChamberLive(CurrentChamberIndex));
-			if (ShouldUseGunShotCamera(bKnownLiveRound, bCurrentShotTargetsLocalPlayer))
-			{
-				StartSelfShotCinematicCamera();
-			}
 		}
 		break;
 	}
@@ -438,6 +440,7 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 			}
 			else
 			{
+				OnTriggerPullStarted.Broadcast();
 				FireGun();
 			}
 		}
@@ -657,7 +660,7 @@ float ASDSelfShotGunActor::GetPresentationFinishDelay(bool bLiveRound) const
 		FinishDelay = FMath::Max(
 			FinishDelay,
 			ResolveDelay
-				+ FMath::Max(0.0f, CinematicCameraHoldTime)
+				+ FMath::Max(MinimumCinematicCameraHoldTime, CinematicCameraHoldTime)
 				+ CameraExitDuration);
 	}
 
@@ -678,6 +681,11 @@ float ASDSelfShotGunActor::GetPresentationFinishDelay(bool bLiveRound) const
 	}
 
 	return FinishDelay;
+}
+
+bool ASDSelfShotGunActor::IsMultiplayerRoulettePresentation() const
+{
+	return bMultiplayerRoulettePresentationActive;
 }
 
 bool ASDSelfShotGunActor::ShouldUseGunShotCamera(bool bLiveRound, bool bTargetsLocalPlayer)
@@ -775,7 +783,27 @@ void ASDSelfShotGunActor::OnRep_TableStatus()
 void ASDSelfShotGunActor::HandleGamePhaseChanged(EShowDownPhase NewPhase)
 {
 	StatusPhase = NewPhase;
+	if (NewPhase != EShowDownPhase::Roulette)
+	{
+		// A delayed client can have a later shot queued behind its current local
+		// presentation. Never carry that transient RPC work into another phase.
+		bMultiplayerRoulettePresentationActive = false;
+		PendingMultiplayerRoulettePresentations.Reset();
+	}
 	ApplyAmmoStatusDisplaySettings();
+}
+
+void ASDSelfShotGunActor::HandleTableCinematicCue(
+	const ESDTableCinematicCue Cue,
+	uint8 PlayerSlotMask)
+{
+	if (Cue == ESDTableCinematicCue::Reset)
+	{
+		// Reset is a reliable presentation boundary and can arrive before the
+		// separately replicated phase. Clear delayed client work immediately.
+		bMultiplayerRoulettePresentationActive = false;
+		PendingMultiplayerRoulettePresentations.Reset();
+	}
 }
 
 void ASDSelfShotGunActor::ApplyAmmoStatusDisplaySettings()
@@ -996,6 +1024,11 @@ void ASDSelfShotGunActor::StartGunUse()
 		GunMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	}
 
+	// Forced multiplayer results are known before the first raising tick. Move
+	// the victim to the third-person shot on the same frame the gun starts,
+	// instead of waiting through the authored (BP-overridden) raise duration.
+	TryStartKnownLiveLocalShotCamera();
+
 	OnGunRaised.Broadcast();
 	if (UShowDownAudioSubsystem* AudioSubsystem = FindShowDownAudioSubsystem(this))
 	{
@@ -1057,13 +1090,16 @@ void ASDSelfShotGunActor::FireLiveRound()
 	bCurrentShotWasEmpty = false;
 	MechanismResetStartTriggerRotation = TriggerRestRotation + TriggerPulledRotationOffset;
 	MechanismResetStartHammerRotation = HammerRestRotation + HammerFiredRotationOffset;
-	MuzzleFlashElapsedTime = MuzzleFlashDuration;
-	MuzzleFlashLight->SetAttenuationRadius(FMath::Max(0.0f, MuzzleFlashAttenuationRadius));
+	MuzzleFlashElapsedTime = FMath::Clamp(MuzzleFlashDuration, 0.01f, 0.025f);
+	MuzzleFlashLight->SetAttenuationRadius(
+		FMath::Clamp(MuzzleFlashAttenuationRadius, 0.0f, MaximumMuzzleFlashAttenuationRadius));
+	MuzzleFlashLight->SetIntensityUnits(ELightUnits::Lumens);
 	MuzzleFlashLight->SetLightColor(MuzzleFlashColor);
 	MuzzleFlashLight->SetCastShadows(true);
 	MuzzleFlashLight->SetIndirectLightingIntensity(0.0f);
 	MuzzleFlashLight->SetVolumetricScatteringIntensity(0.0f);
-	MuzzleFlashLight->SetIntensity(MuzzleFlashIntensity);
+	MuzzleFlashLight->SetIntensity(
+		FMath::Clamp(MuzzleFlashIntensity, 0.0f, MaximumMuzzleFlashIntensity));
 
 	PlayConfiguredSound(GunshotSound, bPlayGunshotSound2D, GetActorLocation());
 	if (UShowDownAudioSubsystem* AudioSubsystem = FindShowDownAudioSubsystem(this))
@@ -1117,6 +1153,7 @@ void ASDSelfShotGunActor::FinishSequence()
 
 void ASDSelfShotGunActor::StartMechanismAnimation()
 {
+	OnTriggerPullStarted.Broadcast();
 	ChamberStartRotation = ChamberCurrentRotation;
 	ChamberTargetRotation = ChamberCurrentRotation + ChamberStepRotationOffset;
 	AnimState = EGunAnimState::Cocking;
@@ -1255,6 +1292,22 @@ void ASDSelfShotGunActor::StartSelfShotCinematicCamera()
 	ActivateSelfShotCinematicCamera();
 }
 
+void ASDSelfShotGunActor::TryStartKnownLiveLocalShotCamera()
+{
+	if (bSelfShotCinematicCameraActive || bSelfShotCinematicCameraStartPending)
+	{
+		return;
+	}
+
+	const bool bKnownLiveRound = ShotResultMode == ESDSelfShotRoundMode::AlwaysLive
+		|| (ShotResultMode == ESDSelfShotRoundMode::ChamberPattern
+			&& IsChamberLive(CurrentChamberIndex));
+	if (ShouldUseGunShotCamera(bKnownLiveRound, bCurrentShotTargetsLocalPlayer))
+	{
+		StartSelfShotCinematicCamera();
+	}
+}
+
 void ASDSelfShotGunActor::ActivateSelfShotCinematicCamera()
 {
 	if (!bSelfShotCinematicCameraStartPending)
@@ -1268,7 +1321,9 @@ void ASDSelfShotGunActor::ActivateSelfShotCinematicCamera()
 		&& ActiveSelfShotCinematicCamera
 		&& PlayerController->BeginGunShotCameraOverride(
 			ActiveSelfShotCinematicCamera,
-			CinematicCameraBlendInTime,
+			AnimState == EGunAnimState::Raising
+				? FMath::Min(FMath::Max(0.0f, CinematicCameraBlendInTime), 0.25f)
+				: CinematicCameraBlendInTime,
 			CinematicCameraBlendExponent))
 	{
 		ShowDownCameraAspect::ApplyForced16By9(ActiveSelfShotCinematicCamera);
@@ -1334,7 +1389,8 @@ void ASDSelfShotGunActor::UpdateSelfShotCinematicCamera(float DeltaSeconds)
 	}
 
 	CinematicCameraElapsedTime += DeltaSeconds;
-	if (CinematicCameraElapsedTime < CinematicCameraHoldTime)
+	if (CinematicCameraElapsedTime
+		< FMath::Max(MinimumCinematicCameraHoldTime, CinematicCameraHoldTime))
 	{
 		return;
 	}
@@ -1880,6 +1936,7 @@ void ASDSelfShotGunActor::BroadcastPresentationFinishedIfIdle()
 	if (bPresentationFinishPending)
 	{
 		bPresentationFinishPending = false;
+		bMultiplayerRoulettePresentationActive = false;
 		OnGunPresentationFinished.Broadcast();
 		if (UShowDownAudioSubsystem* AudioSubsystem = FindShowDownAudioSubsystem(this))
 		{
@@ -2270,6 +2327,9 @@ void ASDSelfShotGunActor::HandleGameStateSet(AGameStateBase* GameState)
 		PreviousGameState->OnPhaseChanged.RemoveDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleGamePhaseChanged);
+		PreviousGameState->OnTableCinematicCue.RemoveDynamic(
+			this,
+			&ASDSelfShotGunActor::HandleTableCinematicCue);
 		PreviousGameState->OnMultiplayerRoulettePresentation.RemoveDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
@@ -2281,6 +2341,9 @@ void ASDSelfShotGunActor::HandleGameStateSet(AGameStateBase* GameState)
 		ShowDownGameState->OnPhaseChanged.AddUniqueDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleGamePhaseChanged);
+		ShowDownGameState->OnTableCinematicCue.AddUniqueDynamic(
+			this,
+			&ASDSelfShotGunActor::HandleTableCinematicCue);
 		ShowDownGameState->OnMultiplayerRoulettePresentation.AddUniqueDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
@@ -2343,6 +2406,7 @@ void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(EShowDownPlayerSlo
 	bHasForcedShotRotationOffset = false;
 	bCurrentShotTargetsLocalPlayer = ShouldTreatSlotAsLocalPlayer(TargetSlot);
 	CurrentShotTargetSlot = TargetSlot;
+	bMultiplayerRoulettePresentationActive = true;
 	UE_LOG(
 		LogTemp,
 		Log,

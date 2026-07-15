@@ -7,6 +7,7 @@
 #include "SDGunVisionSequenceSubsystem.generated.h"
 
 class AActor;
+class ASpotLight;
 class ASDSelfShotGunActor;
 class AShowDownGameStateBase;
 class USDGunVisionSequenceSubsystem;
@@ -65,8 +66,15 @@ public:
 	virtual void Tick(float DeltaTime) override;
 	virtual TStatId GetStatId() const override;
 
+	/** Starts at the authored table range and stays bright until the initial deal finishes. */
+	void QueueMatchEntryPresentation();
+
+	/** Restores a clear hub view so another match can enter cleanly in the same world. */
+	void ResetMatchPresentationForHub();
+
 private:
 	friend class USDGunVisionGunBinding;
+	friend class FShowDownGunVisionSequenceTimingTest;
 
 	enum class ESequenceState : uint8
 	{
@@ -79,6 +87,13 @@ private:
 		AwaitingFinish
 	};
 
+	enum class EIntroSequenceState : uint8
+	{
+		Idle,
+		WaitingForBeat,
+		Collapsing
+	};
+
 	virtual bool DoesSupportWorldType(EWorldType::Type WorldType) const override;
 
 	void RefreshExistingBindings();
@@ -88,13 +103,26 @@ private:
 	void BindGameState(AShowDownGameStateBase* GameState);
 	bool HasLocalPresentationView() const;
 	void SynchronizePendingVisionDirectors();
+	void StartMatchIntro();
+	void AdvanceIntroSequence(float DeltaTime);
+	void SetVisionRangeImmediateToTable();
+	void SetVisionRangeImmediateToIntroWide();
+	void BlendVisionRangeToTable(float Duration, ESDVisionBlendEase EaseMode);
 	void SetDarknessImmediate(float Strength);
 	void BlendDarkness(
 		float TargetStrength,
 		float Duration,
 		ESDVisionBlendEase EaseMode,
 		float EaseExponent = 2.0f);
+	ASpotLight* ResolveTableSpotlight();
+	ASpotLight* ResolveZeroDarknessSpotlight();
+	bool SetTableSpotlightEnabled(bool bEnabled);
+	bool SetZeroDarknessSpotlightEnabled(bool bEnabled);
+	void PlaySpotlightTransitionSound() const;
+	void RefreshTurnSpotlightSoundState();
+	void ApplyPhasePresentationPolicy(EShowDownPhase Phase);
 	bool IsRoulettePhase() const;
+	bool IsRoulettePresentation(const ASDSelfShotGunActor* GunActor) const;
 	void ResetToIdle(bool bImmediate);
 
 	void HandleGunRaised(ASDSelfShotGunActor* GunActor);
@@ -106,6 +134,12 @@ private:
 	UFUNCTION()
 	void HandlePhaseChanged(EShowDownPhase NewPhase);
 
+	UFUNCTION()
+	void HandleTableCinematicCue(ESDTableCinematicCue Cue, uint8 PlayerSlotMask);
+
+	UFUNCTION()
+	void HandleNameTagRoundStatusChanged();
+
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<USDGunVisionGunBinding>> GunBindings;
 
@@ -113,12 +147,26 @@ private:
 	TArray<TWeakObjectPtr<ASDVisionDirector>> PendingVisionDirectorSync;
 	TWeakObjectPtr<AShowDownGameStateBase> BoundGameState;
 	TWeakObjectPtr<ASDSelfShotGunActor> ActiveGun;
+	TWeakObjectPtr<ASpotLight> TableSpotlight;
+	TWeakObjectPtr<ASpotLight> ZeroDarknessSpotlight;
 	FDelegateHandle ActorSpawnedDelegateHandle;
 
 	ESequenceState SequenceState = ESequenceState::Idle;
+	EIntroSequenceState IntroSequenceState = EIntroSequenceState::Idle;
+	float IntroSequenceElapsedTime = 0.0f;
 	float SequenceElapsedTime = 0.0f;
 	float SequenceStageDuration = 0.0f;
 	float ShotResolveDelay = 0.0f;
 	float DesiredDarknessStrength = 0.0f;
+	uint8 ActiveTargetSpotlightMask = 0;
+	EShowDownSide LastTurnSpotlightSide = EShowDownSide::Player;
+	EShowDownPlayerSlot LastTurnSpotlightSlot = EShowDownPlayerSlot::None;
+	bool bMatchPresentationActivated = false;
 	bool bWorldHasBegunPlay = false;
+	bool bTableSpotlightEnabled = false;
+	bool bZeroDarknessSpotlightEnabled = false;
+	bool bTurnSpotlightStateInitialized = false;
+	bool bLastTurnSpotlightVisible = false;
+	bool bPostShotBrightHoldActive = false;
+	bool bInitialDealPresentationActive = false;
 };

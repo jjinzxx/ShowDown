@@ -5,11 +5,14 @@
 namespace ShowDownCardRevealLayout
 {
 	/**
-	 * Converts the configured reveal-card spacing into the radial distance used
-	 * by multiplayer. Two opposite cards split the spacing around table center,
-	 * so their final center-to-center gap matches the single-player layout.
+	 * Converts the configured neighboring-card gap into a compact multiplayer
+	 * radius. SeatDirections are planar directions from table center to each
+	 * revealed player's seat. The nearest valid pair keeps the configured gap,
+	 * independent of whether the active seats are adjacent or opposite.
 	 */
-	SHOWDOWN_API float ResolveRadialCenterDistance(float CardSpacing, int32 CardCount);
+	SHOWDOWN_API float ResolveRadialCenterDistance(
+		float CardSpacing,
+		const TArray<FVector>& SeatDirections);
 
 	/**
 	 * Builds a flat reveal transform on the radial line from the table center to a seat.

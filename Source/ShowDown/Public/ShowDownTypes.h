@@ -56,6 +56,56 @@ enum class EShowDownPlayerSlot : uint8
 	Player4
 };
 
+/** Server-authored table presentation beats shared by every local view. */
+UENUM(BlueprintType)
+enum class ESDTableCinematicCue : uint8
+{
+	Reset,
+	MatchIntro,
+	PreRevealBlackout,
+	RevealStarted,
+	LoserSpotlight,
+	TableSpotlightOn,
+	TableSpotlightOff,
+	BetFocusStarted,
+	BetFocusEnded,
+	TriggerPullStarted,
+	InitialDealStarted,
+	InitialDealFinished
+};
+
+namespace ShowDownTableCinematics
+{
+	FORCEINLINE uint8 PlayerSlotToMask(EShowDownPlayerSlot Slot)
+	{
+		const int32 SlotIndex = static_cast<int32>(Slot) - 1;
+		return SlotIndex >= 0 && SlotIndex < 4
+			? static_cast<uint8>(1u << SlotIndex)
+			: 0;
+	}
+
+	FORCEINLINE bool IsPlayerSlotInMask(uint8 Mask, EShowDownPlayerSlot Slot)
+	{
+		const uint8 SlotMask = PlayerSlotToMask(Slot);
+		return SlotMask != 0 && (Mask & SlotMask) != 0;
+	}
+
+	// Bits 0-3 remain multiplayer seats. The two upper bits let the same
+	// cinematic cue target the standalone player/opponent characters without
+	// pretending that the Collector owns a multiplayer seat.
+	FORCEINLINE uint8 SingleSideToMask(EShowDownSide Side)
+	{
+		return Side == EShowDownSide::Player
+			? static_cast<uint8>(1u << 4)
+			: static_cast<uint8>(1u << 5);
+	}
+
+	FORCEINLINE bool IsSingleSideInMask(uint8 Mask, EShowDownSide Side)
+	{
+		return (Mask & SingleSideToMask(Side)) != 0;
+	}
+}
+
 USTRUCT(BlueprintType)
 struct FShowDownNetworkPlayerSlot
 {

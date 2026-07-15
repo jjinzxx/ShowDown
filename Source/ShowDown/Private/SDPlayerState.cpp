@@ -79,6 +79,11 @@ void ASDPlayerState::CopyProperties(APlayerState* PlayerState)
 
 	if (ASDPlayerState* NewPlayerState = Cast<ASDPlayerState>(PlayerState))
 	{
+		// Preserve lobby identity across seamless travel. The new GameMode uses
+		// these fields to keep the same seat/host instead of controller iteration order.
+		NewPlayerState->ShowDownSlot = ShowDownSlot;
+		NewPlayerState->bReady = bReady;
+		NewPlayerState->bHostPlayer = bHostPlayer;
 		NewPlayerState->EquippedCharacterSkinId = NormalizeEquippedCharacterSkinId(EquippedCharacterSkinId);
 	}
 }
@@ -89,6 +94,9 @@ void ASDPlayerState::OverrideWith(APlayerState* PlayerState)
 
 	if (const ASDPlayerState* PreviousPlayerState = Cast<ASDPlayerState>(PlayerState))
 	{
+		ShowDownSlot = PreviousPlayerState->ShowDownSlot;
+		bReady = PreviousPlayerState->bReady;
+		bHostPlayer = PreviousPlayerState->bHostPlayer;
 		EquippedCharacterSkinId = NormalizeEquippedCharacterSkinId(
 			PreviousPlayerState->EquippedCharacterSkinId);
 	}

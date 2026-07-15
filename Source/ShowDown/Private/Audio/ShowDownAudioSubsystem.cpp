@@ -34,11 +34,21 @@ void UShowDownAudioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("ShowDown audio config was not found at %s."), AudioConfigAssetPath);
 	}
+	else
+	{
+		// PIE can initialize this subsystem before its world permits audio playback.
+		// Keep a usable crowd target ready for the later world-ready callback or
+		// lazy-start path instead of leaving the loop permanently at zero.
+		CurrentCrowdConfigVolume = FMath::Max(0.0f, AudioConfig->CrowdIdleVolume);
+	}
 
 	RefreshUserVolumes();
 	PostLoadMapDelegateHandle = FCoreUObjectDelegates::PostLoadMapWithWorld.AddUObject(
 		this,
 		&UShowDownAudioSubsystem::HandlePostLoadMap);
+	WorldInitializedActorsDelegateHandle = FWorldDelegates::OnWorldInitializedActors.AddUObject(
+		this,
+		&UShowDownAudioSubsystem::HandleWorldInitializedActors);
 
 	if (UWorld* World = GetWorld())
 	{
@@ -53,8 +63,14 @@ void UShowDownAudioSubsystem::Deinitialize()
 		FCoreUObjectDelegates::PostLoadMapWithWorld.Remove(PostLoadMapDelegateHandle);
 		PostLoadMapDelegateHandle.Reset();
 	}
+	if (WorldInitializedActorsDelegateHandle.IsValid())
+	{
+		FWorldDelegates::OnWorldInitializedActors.Remove(WorldInitializedActorsDelegateHandle);
+		WorldInitializedActorsDelegateHandle.Reset();
+	}
 
 	ClearPresentationTimers();
+	StopSpotlightTransitionSound();
 	StopPersistentLoops();
 	PlaybackWorld.Reset();
 	AudioConfig = nullptr;
@@ -69,6 +85,7 @@ USoundWave* UShowDownAudioSubsystem::GetButtonClickSound() const
 
 void UShowDownAudioSubsystem::NotifyGunRaised()
 {
+	EnsurePersistentLoops();
 	if (!AudioConfig || !CanPlayInWorld(ResolvePlaybackWorld()))
 	{
 		return;
@@ -83,6 +100,7 @@ void UShowDownAudioSubsystem::NotifyGunRaised()
 
 void UShowDownAudioSubsystem::NotifyGunFired()
 {
+	EnsurePersistentLoops();
 	UWorld* World = ResolvePlaybackWorld();
 	if (!AudioConfig || !CanPlayInWorld(World))
 	{
@@ -123,6 +141,7 @@ void UShowDownAudioSubsystem::NotifyGunFired()
 
 void UShowDownAudioSubsystem::NotifyGunEmptyFired()
 {
+	EnsurePersistentLoops();
 	if (!AudioConfig || !CanPlayInWorld(ResolvePlaybackWorld()))
 	{
 		return;
@@ -138,6 +157,7 @@ void UShowDownAudioSubsystem::NotifyGunEmptyFired()
 
 void UShowDownAudioSubsystem::NotifyGunPresentationFinished()
 {
+	EnsurePersistentLoops();
 	if (!AudioConfig)
 	{
 		return;
@@ -153,8 +173,65 @@ void UShowDownAudioSubsystem::NotifyGunPresentationFinished()
 	}
 }
 
+void UShowDownAudioSubsystem::NotifySpotlightChanged()
+{
+	EnsurePersistentLoops();
+	UWorld* World = ResolvePlaybackWorld();
+	if (!AudioConfig || !CanPlayInWorld(World))
+	{
+		return;
+	}
+
+	// Multiple characters can update their lights in one presentation step.
+	// Treat that batch as one audible transition, while still allowing a later
+	// frame to interrupt and restart the long one-shot from the beginning.
+	if (LastSpotlightTransitionFrame == GFrameCounter)
+	{
+		return;
+	}
+
+	USoundBase* SpotlightSound = AudioConfig->SpotlightTransitionSound.Get();
+	if (!SpotlightSound)
+	{
+		return;
+	}
+	LastSpotlightTransitionFrame = GFrameCounter;
+
+	if (IsValid(SpotlightTransitionComponent)
+		&& SpotlightTransitionComponent->GetWorld() != World)
+	{
+		StopSpotlightTransitionSound();
+		// Preserve the duplicate guard for the current transition after cleanup.
+		LastSpotlightTransitionFrame = GFrameCounter;
+	}
+
+	if (!IsValid(SpotlightTransitionComponent))
+	{
+		SpotlightTransitionComponent = UGameplayStatics::CreateSound2D(
+			World,
+			SpotlightSound,
+			1.0f,
+			1.0f,
+			0.0f,
+			nullptr,
+			false,
+			false);
+	}
+
+	if (!SpotlightTransitionComponent)
+	{
+		return;
+	}
+
+	SpotlightTransitionComponent->Stop();
+	SpotlightTransitionComponent->SetSound(SpotlightSound);
+	ApplySpotlightTransitionVolume();
+	SpotlightTransitionComponent->Play(0.0f);
+}
+
 void UShowDownAudioSubsystem::NotifyPhaseChanged(EShowDownPhase NewPhase)
 {
+	EnsurePersistentLoops();
 	if (!AudioConfig || NewPhase == EShowDownPhase::Roulette)
 	{
 		return;
@@ -166,6 +243,7 @@ void UShowDownAudioSubsystem::NotifyPhaseChanged(EShowDownPhase NewPhase)
 
 void UShowDownAudioSubsystem::SetCrowdBedEnabled(bool bEnabled, float FadeDuration)
 {
+	EnsurePersistentLoops();
 	bCrowdBedEnabled = bEnabled;
 	SetCrowdMixVolume(CurrentCrowdConfigVolume, FMath::Max(0.0f, FadeDuration));
 }
@@ -173,14 +251,17 @@ void UShowDownAudioSubsystem::SetCrowdBedEnabled(bool bEnabled, float FadeDurati
 void UShowDownAudioSubsystem::SetUserMusicVolume(float Volume)
 {
 	UserMusicVolume = ClampUserVolume(Volume);
+	EnsurePersistentLoops();
 	SetMusicMixMultiplier(CurrentMusicMixMultiplier, 0.0f);
 }
 
 void UShowDownAudioSubsystem::SetUserEffectVolume(float Volume)
 {
 	UserEffectVolume = ClampUserVolume(Volume);
+	EnsurePersistentLoops();
 	SetCrowdMixVolume(CurrentCrowdConfigVolume, 0.0f);
 	ApplyButtonClickVolume();
+	ApplySpotlightTransitionVolume();
 }
 
 void UShowDownAudioSubsystem::RefreshUserVolumes()
@@ -208,6 +289,7 @@ void UShowDownAudioSubsystem::RefreshUserVolumes()
 	SetMusicMixMultiplier(CurrentMusicMixMultiplier, 0.0f);
 	SetCrowdMixVolume(CurrentCrowdConfigVolume, 0.0f);
 	ApplyButtonClickVolume();
+	ApplySpotlightTransitionVolume();
 }
 
 void UShowDownAudioSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
@@ -217,15 +299,47 @@ void UShowDownAudioSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
 		return;
 	}
 
+	const bool bSamePlaybackWorld = PlaybackWorld.Get() == LoadedWorld;
+	if (!bSamePlaybackWorld)
+	{
+		// Timer handles must be cleared from the previous world's manager before
+		// switching the weak world pointer. Invalidate alone leaves callbacks live.
+		ClearPresentationTimers();
+	}
 	PlaybackWorld = LoadedWorld;
-	CrowdShockTimerHandle.Invalidate();
-	MixRestoreTimerHandle.Invalidate();
 	RefreshUserVolumes();
 	StartPersistentLoops(LoadedWorld);
-	if (AudioConfig)
+	if (AudioConfig && !bSamePlaybackWorld)
 	{
 		RestoreIdleMix(AudioConfig->LoopFadeInDuration);
 	}
+}
+
+void UShowDownAudioSubsystem::HandleWorldInitializedActors(const FActorsInitializedParams& Params)
+{
+	// PIE duplicates an editor world instead of loading a map, so
+	// PostLoadMapWithWorld is not guaranteed to run after audio becomes valid.
+	HandlePostLoadMap(Params.World);
+}
+
+void UShowDownAudioSubsystem::EnsurePersistentLoops()
+{
+	UWorld* World = GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr;
+	if (!CanPlayInWorld(World))
+	{
+		World = ResolvePlaybackWorld();
+	}
+	if (!CanPlayInWorld(World))
+	{
+		return;
+	}
+
+	if (PlaybackWorld.Get() != World)
+	{
+		HandlePostLoadMap(World);
+		return;
+	}
+	StartPersistentLoops(World);
 }
 
 void UShowDownAudioSubsystem::StartPersistentLoops(UWorld* World)
@@ -254,10 +368,17 @@ void UShowDownAudioSubsystem::StartPersistentLoops(UWorld* World)
 			BackgroundMusicComponent->OnAudioFinished.AddUniqueDynamic(
 				this,
 				&UShowDownAudioSubsystem::HandleBackgroundMusicFinished);
-			BackgroundMusicComponent->FadeIn(
-				FMath::Max(0.0f, AudioConfig->LoopFadeInDuration),
-				FMath::Max(0.0f, AudioConfig->BackgroundMusicVolume) * UserMusicVolume);
 		}
+	}
+	if (BackgroundMusicComponent
+		&& !BackgroundMusicComponent->IsPlaying()
+		&& GetMusicTargetVolume() > KINDA_SMALL_NUMBER)
+	{
+		// A valid component can still be inactive after an early audio-device
+		// startup failure or an intentional mute. Retry whenever playback is usable.
+		BackgroundMusicComponent->FadeIn(
+			FMath::Max(0.0f, AudioConfig->LoopFadeInDuration),
+			GetMusicTargetVolume());
 	}
 
 	if (!IsValid(CrowdBedComponent) && AudioConfig->CrowdBedSound)
@@ -276,13 +397,16 @@ void UShowDownAudioSubsystem::StartPersistentLoops(UWorld* World)
 			CrowdBedComponent->OnAudioFinished.AddUniqueDynamic(
 				this,
 				&UShowDownAudioSubsystem::HandleCrowdBedFinished);
-			if (bCrowdBedEnabled)
-			{
-				CrowdBedComponent->FadeIn(
-					FMath::Max(0.0f, AudioConfig->LoopFadeInDuration),
-					FMath::Max(0.0f, AudioConfig->CrowdIdleVolume) * UserEffectVolume);
-			}
 		}
+	}
+	if (CrowdBedComponent
+		&& bCrowdBedEnabled
+		&& !CrowdBedComponent->IsPlaying()
+		&& GetCrowdTargetVolume() > KINDA_SMALL_NUMBER)
+	{
+		CrowdBedComponent->FadeIn(
+			FMath::Max(0.0f, AudioConfig->LoopFadeInDuration),
+			GetCrowdTargetVolume());
 	}
 }
 
@@ -314,6 +438,7 @@ bool UShowDownAudioSubsystem::CanPlayInWorld(const UWorld* World) const
 	return !IsRunningCommandlet()
 		&& World
 		&& World->IsGameWorld()
+		&& World->bAllowAudioPlayback
 		&& World->GetGameInstance() == GetGameInstance()
 		&& World->GetNetMode() != NM_DedicatedServer;
 }
@@ -327,6 +452,33 @@ UWorld* UShowDownAudioSubsystem::ResolvePlaybackWorld() const
 	return GetWorld();
 }
 
+float UShowDownAudioSubsystem::GetMusicTargetVolume() const
+{
+	return AudioConfig
+		? CalculateMusicTargetVolume(
+			AudioConfig->BackgroundMusicVolume,
+			UserMusicVolume,
+			CurrentMusicMixMultiplier)
+		: 0.0f;
+}
+
+float UShowDownAudioSubsystem::CalculateMusicTargetVolume(
+	const float ConfigVolume,
+	const float UserVolume,
+	const float MixMultiplier)
+{
+	return FMath::Max(0.0f, ConfigVolume)
+		* FMath::Max(0.0f, UserVolume)
+		* FMath::Max(0.0f, MixMultiplier);
+}
+
+float UShowDownAudioSubsystem::GetCrowdTargetVolume() const
+{
+	return bCrowdBedEnabled
+		? CurrentCrowdConfigVolume * UserEffectVolume
+		: 0.0f;
+}
+
 void UShowDownAudioSubsystem::SetCrowdMixVolume(float ConfigVolume, float FadeDuration)
 {
 	CurrentCrowdConfigVolume = FMath::Max(0.0f, ConfigVolume);
@@ -335,7 +487,8 @@ void UShowDownAudioSubsystem::SetCrowdMixVolume(float ConfigVolume, float FadeDu
 		return;
 	}
 
-	if (!bCrowdBedEnabled)
+	const float TargetVolume = GetCrowdTargetVolume();
+	if (TargetVolume <= KINDA_SMALL_NUMBER)
 	{
 		if (CrowdBedComponent->IsPlaying())
 		{
@@ -344,7 +497,6 @@ void UShowDownAudioSubsystem::SetCrowdMixVolume(float ConfigVolume, float FadeDu
 		return;
 	}
 
-	const float TargetVolume = CurrentCrowdConfigVolume * UserEffectVolume;
 	if (!CrowdBedComponent->IsPlaying())
 	{
 		CrowdBedComponent->FadeIn(FMath::Max(0.0f, FadeDuration), TargetVolume);
@@ -364,11 +516,24 @@ void UShowDownAudioSubsystem::SetMusicMixMultiplier(float Multiplier, float Fade
 		return;
 	}
 
-	BackgroundMusicComponent->AdjustVolume(
-		FMath::Max(0.0f, FadeDuration),
-		FMath::Max(0.0f, AudioConfig->BackgroundMusicVolume)
-			* UserMusicVolume
-			* CurrentMusicMixMultiplier);
+	const float SafeFadeDuration = FMath::Max(0.0f, FadeDuration);
+	const float TargetVolume = GetMusicTargetVolume();
+	if (TargetVolume <= KINDA_SMALL_NUMBER)
+	{
+		if (BackgroundMusicComponent->IsPlaying())
+		{
+			BackgroundMusicComponent->FadeOut(SafeFadeDuration, 0.0f);
+		}
+		return;
+	}
+
+	if (!BackgroundMusicComponent->IsPlaying())
+	{
+		BackgroundMusicComponent->FadeIn(SafeFadeDuration, TargetVolume);
+		return;
+	}
+
+	BackgroundMusicComponent->AdjustVolume(SafeFadeDuration, TargetVolume);
 }
 
 void UShowDownAudioSubsystem::RestoreIdleMix(float FadeDuration)
@@ -425,21 +590,51 @@ void UShowDownAudioSubsystem::ApplyButtonClickVolume()
 	}
 }
 
+void UShowDownAudioSubsystem::ApplySpotlightTransitionVolume()
+{
+	if (SpotlightTransitionComponent && AudioConfig)
+	{
+		SpotlightTransitionComponent->SetVolumeMultiplier(
+			FMath::Max(0.0f, AudioConfig->SpotlightTransitionVolume) * UserEffectVolume);
+	}
+}
+
+void UShowDownAudioSubsystem::StopSpotlightTransitionSound()
+{
+	if (IsValid(SpotlightTransitionComponent))
+	{
+		SpotlightTransitionComponent->Stop();
+		SpotlightTransitionComponent->DestroyComponent();
+	}
+	SpotlightTransitionComponent = nullptr;
+	LastSpotlightTransitionFrame = MAX_uint64;
+}
+
 void UShowDownAudioSubsystem::HandleBackgroundMusicFinished()
 {
-	if (BackgroundMusicComponent && AudioConfig && AudioConfig->BackgroundMusicSound)
+	const float TargetVolume = GetMusicTargetVolume();
+	if (BackgroundMusicComponent
+		&& AudioConfig
+		&& AudioConfig->BackgroundMusicSound
+		&& TargetVolume > KINDA_SMALL_NUMBER
+		&& CanPlayInWorld(ResolvePlaybackWorld()))
 	{
-		BackgroundMusicComponent->Play(0.0f);
+		BackgroundMusicComponent->FadeIn(0.0f, TargetVolume, 0.0f);
 	}
 }
 
 void UShowDownAudioSubsystem::HandleCrowdBedFinished()
 {
-	if (bCrowdBedEnabled && CrowdBedComponent && AudioConfig && AudioConfig->CrowdBedSound)
+	const float TargetVolume = GetCrowdTargetVolume();
+	if (CrowdBedComponent
+		&& AudioConfig
+		&& AudioConfig->CrowdBedSound
+		&& TargetVolume > KINDA_SMALL_NUMBER
+		&& CanPlayInWorld(ResolvePlaybackWorld()))
 	{
 		CrowdBedComponent->FadeIn(
 			0.0f,
-			CurrentCrowdConfigVolume * UserEffectVolume,
+			TargetVolume,
 			0.0f);
 	}
 }

@@ -312,6 +312,12 @@ protected:
 	void HandleMultiplayerRouletteResult(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount, bool bHit, int32 RemainingLives);
 
 	UFUNCTION()
+	void HandleTablePhaseChanged(EShowDownPhase NewPhase);
+
+	UFUNCTION()
+	void HandleTableCinematicCue(ESDTableCinematicCue Cue, uint8 PlayerSlotMask);
+
+	UFUNCTION()
 	void HandleCardSelected(EShowDownSide Side);
 
 	UFUNCTION()
@@ -449,6 +455,17 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery")
 	TObjectPtr<USpotLightComponent> HitResetPulseLight;
 
+	/**
+	 * Shared turn/loser key light. Its transform and lighting properties are
+	 * authored on the component; gameplay code only toggles it on and off.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Cinematic Light")
+	TObjectPtr<USpotLightComponent> RoundStatusSpotLight;
+
+	/** Runtime override used only while this character is a roulette target. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Cinematic Light")
+	FLinearColor RouletteTargetSpotLightColor = FLinearColor(1.0f, 0.015f, 0.015f, 1.0f);
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery", meta = (ClampMin = "0.0", UIMin = "0.0", UIMax = "3.0"))
 	float HitDownedHoldDuration = 1.0f;
 
@@ -461,11 +478,11 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery")
 	FLinearColor HitResetPulseColor = FLinearColor(0.32f, 0.85f, 1.0f, 1.0f);
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery", meta = (ClampMin = "0.0", UIMin = "0.0", UIMax = "3000000.0"))
-	float HitResetPulsePeakIntensity = 1500000.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery", meta = (ClampMin = "0.0", UIMin = "0.0", UIMax = "8000.0"))
+	float HitResetPulsePeakIntensity = 8000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery", meta = (ClampMin = "50.0", UIMin = "50.0", UIMax = "1200.0"))
-	float HitResetPulseRadius = 500.0f;
+	float HitResetPulseRadius = 240.0f;
 
 	UPROPERTY(ReplicatedUsing = OnRep_Identity, EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Identity")
 	EShowDownCharacterRole CharacterRole = EShowDownCharacterRole::Unassigned;
@@ -529,6 +546,7 @@ private:
 	void ApplyPlayerViewRotation(FRotator ViewRotation);
 	void ApplyCharacterSceneActive();
 	void ApplyPresentationCollisionSettings();
+	void RefreshRoundStatusSpotlight();
 	void RefreshNameTag();
 	void SyncNameTagVisibility();
 	void BindNameTagToLocalPlayer();
@@ -544,6 +562,9 @@ private:
 	EShowDownPlayerSlot LastPresentationLocalPlayerSlot = EShowDownPlayerSlot::None;
 	bool bNameTagVisibilityInitialized = false;
 	bool bLastNameTagVisible = false;
+	bool bLoserSpotlightActive = false;
+	bool bRoundStatusSpotLightTurnColorCached = false;
+	FLinearColor RoundStatusSpotLightTurnColor = FLinearColor::White;
 
 	FTimerHandle AnimStateResetTimerHandle;
 	UPROPERTY(Transient)

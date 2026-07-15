@@ -2,7 +2,10 @@
 
 #include "Components/PostProcessComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/SpotLightComponent.h"
+#include "Engine/SpotLight.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 
@@ -10,6 +13,10 @@ namespace
 {
 	const TCHAR* DefaultDarknessMaterialPath = TEXT("/Game/ArtTone/M_PP_TableVisionWorldRange.M_PP_TableVisionWorldRange");
 	const TCHAR* DeprecatedDarknessMaterialPath = TEXT("/Game/ArtTone/M_PP_TableVisionDarkness.M_PP_TableVisionDarkness");
+	constexpr float GameplayVisionRadius = 150.0f;
+	constexpr float GameplayVisionFeather = 100.0f;
+	constexpr float GameplayDarknessStrength = 1.0f;
+	constexpr float MatchEntryVisionRadius = 5000.0f;
 	const FName DarknessStrengthParameterName(TEXT("DarknessStrength"));
 	const FName VisionCenterParameterName(TEXT("VisionCenter"));
 	const FName VisionRadiusParameterName(TEXT("VisionRadius"));
@@ -30,9 +37,9 @@ ASDVisionDirector::ASDVisionDirector()
 	PostProcessComponent->Priority = PostProcessPriority;
 	PostProcessComponent->BlendWeight = 1.0f;
 
-	FocusedVision.VisionRadius = 450.0f;
-	FocusedVision.VisionFeather = 120.0f;
-	FocusedVision.DarknessStrength = 1.0f;
+	FocusedVision.VisionRadius = GameplayVisionRadius;
+	FocusedVision.VisionFeather = GameplayVisionFeather;
+	FocusedVision.DarknessStrength = GameplayDarknessStrength;
 
 	WideVision.VisionRadius = 1800.0f;
 	WideVision.VisionFeather = 360.0f;
@@ -42,6 +49,10 @@ ASDVisionDirector::ASDVisionDirector()
 	VisionBlendStartState = CurrentState;
 	TargetVisionState = CurrentState;
 	TargetDarknessStrength = CurrentState.DarknessStrength;
+	VisionRangeBlendStartRadius = CurrentState.VisionRadius;
+	VisionRangeBlendStartFeather = CurrentState.VisionFeather;
+	TargetVisionRangeRadius = CurrentState.VisionRadius;
+	TargetVisionRangeFeather = CurrentState.VisionFeather;
 }
 
 void ASDVisionDirector::BeginPlay()
@@ -51,10 +62,22 @@ void ASDVisionDirector::BeginPlay()
 	PostProcessComponent->bUnbound = bUnboundPostProcess;
 	PostProcessComponent->Priority = PostProcessPriority;
 
+	// The placed main-map actor predates the gameplay iris preset and may still
+	// carry serialized editor overrides. Normalize the runtime preset while
+	// leaving the user's map asset untouched.
+	FocusedVision.VisionRadius = GameplayVisionRadius;
+	FocusedVision.VisionFeather = GameplayVisionFeather;
+	FocusedVision.DarknessStrength = GameplayDarknessStrength;
+	InitialDarknessStrength = 0.0f;
+	IntroWideVisionRadius = MatchEntryVisionRadius;
+	IntroWideVisionFeather = GameplayVisionFeather;
+	NormalizeAuthoredTableSpotLights();
+
 	// Establish one safe state before the first rendered game frame. Applying the
 	// focused preset first could briefly expose its (often fully black) darkness.
 	bVisionBlendActive = false;
 	bDarknessStrengthBlendActive = false;
+	bVisionRangeBlendActive = false;
 	bVisionCenterBlendActive = false;
 	CurrentVisionAlpha = bApplyInitialStateOnBeginPlay
 		? 0.0f
@@ -67,8 +90,98 @@ void ASDVisionDirector::BeginPlay()
 	TargetVisionAlpha = CurrentVisionAlpha;
 	DarknessStrengthBlendStart = CurrentState.DarknessStrength;
 	TargetDarknessStrength = CurrentState.DarknessStrength;
+	VisionRangeBlendStartRadius = CurrentState.VisionRadius;
+	VisionRangeBlendStartFeather = CurrentState.VisionFeather;
+	TargetVisionRangeRadius = CurrentState.VisionRadius;
+	TargetVisionRangeFeather = CurrentState.VisionFeather;
 	ApplyCurrentState();
 	UpdateTickState();
+}
+
+void ASDVisionDirector::NormalizeAuthoredTableSpotLights()
+{
+	UWorld* World = GetWorld();
+	if (!bNormalizeAuthoredTableSpotLights
+		|| !World
+		|| World->GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	constexpr float MinimumLegacyIntensity = 50000.0f;
+	// Includes the table, both seats, and the tight gameplay staging around it.
+	// The authored spotlights aim at different points in this area, so testing
+	// only the exact vision-center point misses every real map light.
+	constexpr float TableGameplayAreaRadius = 800.0f;
+	const FVector TableCenter = GetVisionCenterWorldLocation();
+	const float SafeScale = FMath::Clamp(AuthoredTableSpotLightIntensityScale, 0.0f, 1.0f);
+	const float SafeMaximum = FMath::Max(0.0f, MaximumAuthoredTableSpotLightIntensity);
+	const FName RevealSpotlightName(TEXT("SpotLight6"));
+	const FName RevealSpotlightTag(TEXT("ShowDownTableSpotlight"));
+	const FName FullStageSpotlightName(TEXT("SpotLight7"));
+	const FName FullStageSpotlightTag(TEXT("ShowDownZeroDarknessSpotlight"));
+
+	for (TActorIterator<ASpotLight> It(World); It; ++It)
+	{
+		// SpotLight6 and SpotLight7 are deliberately authored cinematic lights.
+		// Their exact intensities belong to the level designer and must not be
+		// normalized as legacy always-on table lights.
+		bool bIsCinematicSpotlight = It->ActorHasTag(RevealSpotlightTag)
+			|| It->ActorHasTag(FullStageSpotlightTag)
+			|| It->GetFName() == RevealSpotlightName
+			|| It->GetFName() == FullStageSpotlightName;
+#if WITH_EDITOR
+		bIsCinematicSpotlight = bIsCinematicSpotlight
+			|| It->GetActorLabel() == RevealSpotlightName.ToString()
+			|| It->GetActorLabel() == FullStageSpotlightName.ToString();
+#endif
+		if (bIsCinematicSpotlight)
+		{
+			continue;
+		}
+
+		USpotLightComponent* Light = Cast<USpotLightComponent>(It->GetLightComponent());
+		if (!Light
+			|| !Light->IsRegistered()
+			|| !Light->IsVisible()
+			|| !Light->bAffectsWorld
+			|| Light->GetLightUnits() != ELightUnits::Unitless
+			|| Light->Intensity < MinimumLegacyIntensity)
+		{
+			continue;
+		}
+
+		const FVector ToTable = TableCenter - Light->GetComponentLocation();
+		const float Distance = ToTable.Size();
+		if (Distance <= KINDA_SMALL_NUMBER
+			|| Distance > Light->AttenuationRadius + TableGameplayAreaRadius)
+		{
+			continue;
+		}
+
+		const float AreaAngularRadius = FMath::RadiansToDegrees(FMath::Asin(
+			FMath::Clamp(TableGameplayAreaRadius / Distance, 0.0f, 1.0f)));
+		const float MaximumAreaAngle = FMath::Clamp(
+			Light->OuterConeAngle + AreaAngularRadius,
+			0.0f,
+			180.0f);
+		const float DirectionDot = FVector::DotProduct(
+			Light->GetForwardVector(),
+			ToTable / Distance);
+		if (DirectionDot < FMath::Cos(FMath::DegreesToRadians(MaximumAreaAngle)))
+		{
+			continue;
+		}
+
+		// Static lighting is disabled for this project, but several legacy actors
+		// are still authored Static. Promote only those; Stationary lights already
+		// accept dynamic intensity changes and should keep their cheaper mobility.
+		if (Light->Mobility == EComponentMobility::Static)
+		{
+			Light->SetMobility(EComponentMobility::Movable);
+		}
+		Light->SetIntensity(FMath::Min(Light->Intensity * SafeScale, SafeMaximum));
+	}
 }
 
 void ASDVisionDirector::OnConstruction(const FTransform& Transform)
@@ -82,11 +195,16 @@ void ASDVisionDirector::OnConstruction(const FTransform& Transform)
 	CurrentState = LerpVisionState(FocusedVision, WideVision, CurrentVisionAlpha);
 	bVisionBlendActive = false;
 	bDarknessStrengthBlendActive = false;
+	bVisionRangeBlendActive = false;
 	bVisionCenterBlendActive = false;
 	VisionBlendStartState = CurrentState;
 	TargetVisionState = CurrentState;
 	TargetVisionAlpha = CurrentVisionAlpha;
 	TargetDarknessStrength = CurrentState.DarknessStrength;
+	VisionRangeBlendStartRadius = CurrentState.VisionRadius;
+	VisionRangeBlendStartFeather = CurrentState.VisionFeather;
+	TargetVisionRangeRadius = CurrentState.VisionRadius;
+	TargetVisionRangeFeather = CurrentState.VisionFeather;
 	ApplyCurrentState();
 }
 
@@ -96,13 +214,15 @@ void ASDVisionDirector::Tick(float DeltaSeconds)
 
 	const bool bWasVisionBlending = bVisionBlendActive;
 	const bool bWasDarknessBlending = bDarknessStrengthBlendActive;
+	const bool bWasRangeBlending = bVisionRangeBlendActive;
 	const bool bWasCenterBlending = bVisionCenterBlendActive;
 
 	AdvanceVisionBlend(DeltaSeconds);
 	AdvanceDarknessStrengthBlend(DeltaSeconds);
+	AdvanceVisionRangeBlend(DeltaSeconds);
 	AdvanceVisionCenterBlend(DeltaSeconds);
 
-	if (bWasVisionBlending || bWasDarknessBlending)
+	if (bWasVisionBlending || bWasDarknessBlending || bWasRangeBlending)
 	{
 		ApplyCurrentState();
 	}
@@ -130,11 +250,16 @@ void ASDVisionDirector::PostEditChangeProperty(FPropertyChangedEvent& PropertyCh
 	CurrentState = LerpVisionState(FocusedVision, WideVision, CurrentVisionAlpha);
 	bVisionBlendActive = false;
 	bDarknessStrengthBlendActive = false;
+	bVisionRangeBlendActive = false;
 	bVisionCenterBlendActive = false;
 	VisionBlendStartState = CurrentState;
 	TargetVisionState = CurrentState;
 	TargetVisionAlpha = CurrentVisionAlpha;
 	TargetDarknessStrength = CurrentState.DarknessStrength;
+	VisionRangeBlendStartRadius = CurrentState.VisionRadius;
+	VisionRangeBlendStartFeather = CurrentState.VisionFeather;
+	TargetVisionRangeRadius = CurrentState.VisionRadius;
+	TargetVisionRangeFeather = CurrentState.VisionFeather;
 	ApplyCurrentState();
 }
 #endif
@@ -153,6 +278,7 @@ void ASDVisionDirector::SetVisionAlpha(float Alpha)
 {
 	bVisionBlendActive = false;
 	bDarknessStrengthBlendActive = false;
+	bVisionRangeBlendActive = false;
 	CurrentVisionAlpha = FMath::Clamp(Alpha, 0.0f, 1.0f);
 	CurrentState = LerpVisionState(FocusedVision, WideVision, CurrentVisionAlpha);
 	VisionBlendStartAlpha = CurrentVisionAlpha;
@@ -184,6 +310,7 @@ void ASDVisionDirector::BlendToVisionAlpha(
 	// deliberately mutually exclusive. CurrentState is already the exact value
 	// displayed, making this handoff and any retarget continuous.
 	bDarknessStrengthBlendActive = false;
+	bVisionRangeBlendActive = false;
 	VisionBlendStartAlpha = CurrentVisionAlpha;
 	TargetVisionAlpha = ClampedTargetAlpha;
 	VisionBlendStartState = CurrentState;
@@ -317,6 +444,75 @@ void ASDVisionDirector::CompleteDarknessStrengthBlend()
 	}
 
 	SetDarknessStrength(TargetDarknessStrength);
+}
+
+void ASDVisionDirector::SetVisionRange(float Radius, float Feather)
+{
+	bVisionBlendActive = false;
+	bVisionRangeBlendActive = false;
+	CurrentState.VisionRadius = FMath::Max(0.0f, Radius);
+	CurrentState.VisionFeather = FMath::Max(1.0f, Feather);
+	VisionRangeBlendStartRadius = CurrentState.VisionRadius;
+	VisionRangeBlendStartFeather = CurrentState.VisionFeather;
+	TargetVisionRangeRadius = CurrentState.VisionRadius;
+	TargetVisionRangeFeather = CurrentState.VisionFeather;
+	ApplyCurrentState();
+	UpdateTickState();
+}
+
+void ASDVisionDirector::BlendToVisionRange(
+	float TargetRadius,
+	float TargetFeather,
+	float Duration,
+	ESDVisionBlendEase EaseMode,
+	float EaseExponent)
+{
+	const float SafeTargetRadius = FMath::Max(0.0f, TargetRadius);
+	const float SafeTargetFeather = FMath::Max(1.0f, TargetFeather);
+	if (Duration <= KINDA_SMALL_NUMBER)
+	{
+		SetVisionRange(SafeTargetRadius, SafeTargetFeather);
+		return;
+	}
+
+	// Alpha blends also own radius and feather. Direct range animation takes
+	// over those two fields while leaving the independent darkness track intact.
+	bVisionBlendActive = false;
+	VisionRangeBlendStartRadius = CurrentState.VisionRadius;
+	VisionRangeBlendStartFeather = CurrentState.VisionFeather;
+	TargetVisionRangeRadius = SafeTargetRadius;
+	TargetVisionRangeFeather = SafeTargetFeather;
+	VisionRangeBlendDuration = Duration;
+	VisionRangeBlendElapsed = 0.0f;
+	VisionRangeBlendEaseMode = EaseMode;
+	VisionRangeBlendEaseExponent = FMath::Max(1.0f, EaseExponent);
+	bVisionRangeBlendActive = true;
+	UpdateTickState();
+}
+
+void ASDVisionDirector::CancelVisionRangeBlend()
+{
+	if (!bVisionRangeBlendActive)
+	{
+		return;
+	}
+
+	bVisionRangeBlendActive = false;
+	VisionRangeBlendStartRadius = CurrentState.VisionRadius;
+	VisionRangeBlendStartFeather = CurrentState.VisionFeather;
+	TargetVisionRangeRadius = CurrentState.VisionRadius;
+	TargetVisionRangeFeather = CurrentState.VisionFeather;
+	UpdateTickState();
+}
+
+void ASDVisionDirector::CompleteVisionRangeBlend()
+{
+	if (!bVisionRangeBlendActive)
+	{
+		return;
+	}
+
+	SetVisionRange(TargetVisionRangeRadius, TargetVisionRangeFeather);
 }
 
 void ASDVisionDirector::SetVisionCenterActor(AActor* NewVisionCenterActor)
@@ -515,6 +711,7 @@ void ASDVisionDirector::UpdateTickState()
 		bTrackVisionCenterEveryTick
 		|| bVisionBlendActive
 		|| bDarknessStrengthBlendActive
+		|| bVisionRangeBlendActive
 		|| bVisionCenterBlendActive);
 }
 
@@ -590,6 +787,41 @@ void ASDVisionDirector::AdvanceDarknessStrengthBlend(float DeltaSeconds)
 		CurrentState.DarknessStrength = TargetDarknessStrength;
 		bDarknessStrengthBlendActive = false;
 		DarknessStrengthBlendStart = CurrentState.DarknessStrength;
+	}
+}
+
+void ASDVisionDirector::AdvanceVisionRangeBlend(float DeltaSeconds)
+{
+	if (!bVisionRangeBlendActive)
+	{
+		return;
+	}
+
+	VisionRangeBlendElapsed += FMath::Max(0.0f, DeltaSeconds);
+	const float NormalizedAlpha = VisionRangeBlendDuration <= KINDA_SMALL_NUMBER
+		? 1.0f
+		: FMath::Clamp(VisionRangeBlendElapsed / VisionRangeBlendDuration, 0.0f, 1.0f);
+	const float EasedAlpha = EvaluateVisionBlendEase(
+		NormalizedAlpha,
+		VisionRangeBlendEaseMode,
+		VisionRangeBlendEaseExponent);
+
+	CurrentState.VisionRadius = FMath::Lerp(
+		VisionRangeBlendStartRadius,
+		TargetVisionRangeRadius,
+		EasedAlpha);
+	CurrentState.VisionFeather = FMath::Lerp(
+		VisionRangeBlendStartFeather,
+		TargetVisionRangeFeather,
+		EasedAlpha);
+
+	if (NormalizedAlpha >= 1.0f)
+	{
+		CurrentState.VisionRadius = TargetVisionRangeRadius;
+		CurrentState.VisionFeather = TargetVisionRangeFeather;
+		bVisionRangeBlendActive = false;
+		VisionRangeBlendStartRadius = CurrentState.VisionRadius;
+		VisionRangeBlendStartFeather = CurrentState.VisionFeather;
 	}
 }
 

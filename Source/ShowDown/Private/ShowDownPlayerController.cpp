@@ -27,6 +27,7 @@
 #include "Materials/MaterialInterface.h"
 #include "PlayerPawn.h"
 #include "Presentation/SDBetActionPanelActor.h"
+#include "Presentation/SDGunVisionSequenceSubsystem.h"
 #include "SDPlayerState.h"
 #include "ShowDownCameraAspect.h"
 #include "ShowDownCharacter.h"
@@ -300,14 +301,19 @@ void AShowDownPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason
 			this,
 			&AShowDownPlayerController::HandleSpeechPlaybackStateChanged);
 	}
-	if (UShowDownEosSubsystem* EosSubsystem = GetGameInstance()
-		? GetGameInstance()->GetSubsystem<UShowDownEosSubsystem>()
-		: nullptr)
+	// Remote controllers on a listen server share the host GameInstance. Their
+	// EndPlay must not stop the host's local voice transmission.
+	if (IsLocalController())
 	{
-		EosSubsystem->EndVoiceTransmission();
-		EosSubsystem->OnLocalVoiceTalkingChanged.RemoveDynamic(
-			this,
-			&AShowDownPlayerController::HandleLocalVoiceTalkingChanged);
+		if (UShowDownEosSubsystem* EosSubsystem = GetGameInstance()
+			? GetGameInstance()->GetSubsystem<UShowDownEosSubsystem>()
+			: nullptr)
+		{
+			EosSubsystem->EndVoiceTransmission();
+			EosSubsystem->OnLocalVoiceTalkingChanged.RemoveDynamic(
+				this,
+				&AShowDownPlayerController::HandleLocalVoiceTalkingChanged);
+		}
 	}
 	VoiceBoundGameState.Reset();
 	bVoiceChatEventsBound = false;
@@ -671,6 +677,12 @@ bool AShowDownPlayerController::TryApplyPendingMultiplayerCharacterCamera()
 	{
 		MultiplayerLoadingWidget->Dismiss(0.22f);
 		MultiplayerLoadingWidget = nullptr;
+	}
+	if (USDGunVisionSequenceSubsystem* VisionSequence = GetWorld()->GetSubsystem<USDGunVisionSequenceSubsystem>())
+	{
+		// This is the first frame where the local seat camera is genuinely ready;
+		// the subsystem owns the requested one-second dramatic beat from here.
+		VisionSequence->QueueMatchEntryPresentation();
 	}
 	ClientShowStatusMessage(TEXT("Multiplayer character head camera ready."));
 	UE_LOG(

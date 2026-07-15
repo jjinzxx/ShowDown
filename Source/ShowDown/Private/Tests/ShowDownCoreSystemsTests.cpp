@@ -1,19 +1,27 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Animation/AnimationAsset.h"
 #include "Audio/ShowDownAudioConfig.h"
+#include "Audio/ShowDownAudioSubsystem.h"
 #include "BettingSystem.h"
 #include "CardSystem.h"
 #include "CollectorAISystem.h"
 #include "Misc/AutomationTest.h"
 #include "Presentation/SDCardRevealLayout.h"
+#include "Presentation/SDGunVisionSequenceSubsystem.h"
 #include "Presentation/SDSelfShotGunActor.h"
 #include "Presentation/SDVisionDirector.h"
 #include "RoundResolver.h"
 #include "RouletteSystem.h"
+#include "SDMultiplayerRoundFlow.h"
+#include "SDPlayerState.h"
 #include "ShowDownCharacter.h"
 #include "ShowDownCharacterSkinCatalog.h"
 #include "ShowDownGameModeBase.h"
+#include "ShowDownGameStateBase.h"
+#include "ShowDownTypes.h"
 #include "Sound/SoundWave.h"
+#include "UObject/UnrealType.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FShowDownBettingSystemTest,
@@ -84,6 +92,144 @@ bool FShowDownRoundResolverTest::RunTest(const FString& Parameters)
 		TEXT("Normal fold load is clamped"),
 		RoundResolver->GetFoldLoadCount(3, 9, true),
 		6);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownMultiplayerRoundFlowTest,
+	"ShowDown.Core.MultiplayerRoundFlow",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownMultiplayerRoundFlowTest::RunTest(const FString& Parameters)
+{
+	using namespace ShowDownMultiplayerRoundFlow;
+	using namespace ShowDownTableCinematics;
+
+	TestEqual(TEXT("No player slot has no cinematic mask bit"),
+		PlayerSlotToMask(EShowDownPlayerSlot::None), static_cast<uint8>(0));
+	TestEqual(TEXT("Player one uses the first cinematic mask bit"),
+		PlayerSlotToMask(EShowDownPlayerSlot::Player1), static_cast<uint8>(1));
+	TestEqual(TEXT("Player four uses the fourth cinematic mask bit"),
+		PlayerSlotToMask(EShowDownPlayerSlot::Player4), static_cast<uint8>(8));
+	const uint8 AlternatingPlayerMask = PlayerSlotToMask(EShowDownPlayerSlot::Player2)
+		| PlayerSlotToMask(EShowDownPlayerSlot::Player4);
+	TestTrue(TEXT("Cinematic mask includes its selected player"),
+		IsPlayerSlotInMask(AlternatingPlayerMask, EShowDownPlayerSlot::Player2));
+	TestFalse(TEXT("Cinematic mask excludes an unselected player"),
+		IsPlayerSlotInMask(AlternatingPlayerMask, EShowDownPlayerSlot::Player3));
+	const uint8 SinglePlayerMask = SingleSideToMask(EShowDownSide::Player);
+	const uint8 SingleCollectorMask = SingleSideToMask(EShowDownSide::Collector);
+	TestTrue(TEXT("Single-player cinematic mask selects the player side"),
+		IsSingleSideInMask(SinglePlayerMask, EShowDownSide::Player));
+	TestFalse(TEXT("Single-player cinematic mask excludes the Collector side"),
+		IsSingleSideInMask(SinglePlayerMask, EShowDownSide::Collector));
+	TestTrue(TEXT("Single-player side bits do not overlap multiplayer seats"),
+		(SingleCollectorMask & AlternatingPlayerMask) == 0);
+
+	TestEqual(
+		TEXT("No active player ends the round"),
+		ResolvePostBetDecision(0, false),
+		ESDMultiplayerPostBetDecision::EndRound);
+	TestEqual(
+		TEXT("A lone survivor ends without exposing their card"),
+		ResolvePostBetDecision(1, true),
+		ESDMultiplayerPostBetDecision::EndRound);
+	TestEqual(
+		TEXT("Multiple unfinished players continue betting"),
+		ResolvePostBetDecision(3, false),
+		ESDMultiplayerPostBetDecision::ContinueBetting);
+	TestEqual(
+		TEXT("Multiple completed players enter showdown"),
+		ResolvePostBetDecision(2, true),
+		ESDMultiplayerPostBetDecision::RevealCards);
+
+	TestEqual(
+		TEXT("A longer reveal presentation extends the cinematic beat"),
+		CalculateRevealCompletionDelay(2.25f, 1.5f),
+		2.25f);
+	TestEqual(
+		TEXT("The configured cinematic beat remains the minimum"),
+		CalculateRevealCompletionDelay(0.5f, 1.5f),
+		1.5f);
+	TestEqual(
+		TEXT("Negative timing input is clamped"),
+		CalculateRevealCompletionDelay(-1.0f, -2.0f),
+		0.0f);
+	TestEqual(
+		TEXT("The default four-second beat outlasts a short reveal"),
+		CalculateRevealCompletionDelay(2.25f, 4.0f),
+		4.0f);
+	TestEqual(
+		TEXT("A long reveal cannot be cut off by the default beat"),
+		CalculateRevealCompletionDelay(5.5f, 4.0f),
+		5.5f);
+
+	const TArray<EShowDownPlayerSlot> AllAliveSlots = {
+		EShowDownPlayerSlot::Player1,
+		EShowDownPlayerSlot::Player2,
+		EShowDownPlayerSlot::Player3,
+		EShowDownPlayerSlot::Player4
+	};
+	const TArray<EShowDownPlayerSlot> AliveAfterPlayer4 = {
+		EShowDownPlayerSlot::Player1,
+		EShowDownPlayerSlot::Player2,
+		EShowDownPlayerSlot::Player3
+	};
+	const TArray<EShowDownPlayerSlot> AliveWithoutPlayer2 = {
+		EShowDownPlayerSlot::Player1,
+		EShowDownPlayerSlot::Player3,
+		EShowDownPlayerSlot::Player4
+	};
+	TestEqual(
+		TEXT("A draw keeps the current round leader"),
+		ResolveNextRoundLeaderSlot(
+			EShowDownPlayerSlot::None,
+			EShowDownPlayerSlot::Player3,
+			AllAliveSlots),
+		EShowDownPlayerSlot::Player3);
+	TestEqual(
+		TEXT("A surviving preferred loser leads the next round"),
+		ResolveNextRoundLeaderSlot(
+			EShowDownPlayerSlot::Player2,
+			EShowDownPlayerSlot::Player3,
+			AllAliveSlots),
+		EShowDownPlayerSlot::Player2);
+	TestEqual(
+		TEXT("An eliminated preferred leader advances after its table seat"),
+		ResolveNextRoundLeaderSlot(
+			EShowDownPlayerSlot::Player4,
+			EShowDownPlayerSlot::Player3,
+			AliveAfterPlayer4),
+		EShowDownPlayerSlot::Player1);
+	TestEqual(
+		TEXT("A disconnected leader advances in physical table order"),
+		ResolveNextRoundLeaderSlot(
+			EShowDownPlayerSlot::Player2,
+			EShowDownPlayerSlot::None,
+			AliveWithoutPlayer2),
+		EShowDownPlayerSlot::Player4);
+
+	TestEqual(
+		TEXT("A solo player cannot restart a multiplayer match"),
+		ResolveRestartDecision(1, 1),
+		ESDMultiplayerRestartDecision::NotEnoughPlayers);
+	TestEqual(
+		TEXT("A partial restart vote waits for the remaining players"),
+		ResolveRestartDecision(3, 2),
+		ESDMultiplayerRestartDecision::WaitingForVotes);
+	TestEqual(
+		TEXT("Every eligible player voting restarts the match"),
+		ResolveRestartDecision(2, 2),
+		ESDMultiplayerRestartDecision::RestartMatch);
+	TestFalse(
+		TEXT("An open lobby accepts a new controller"),
+		ShouldRejectNewPlayerJoin(false, false));
+	TestTrue(
+		TEXT("The hosted-game transition rejects a late join"),
+		ShouldRejectNewPlayerJoin(false, true));
+	TestTrue(
+		TEXT("A running match rejects a late join"),
+		ShouldRejectNewPlayerJoin(true, false));
 	return true;
 }
 
@@ -216,24 +362,138 @@ bool FShowDownCardRevealLayoutTest::RunTest(const FString& Parameters)
 			Transform.GetRotation().Equals(ExpectedRotation, KINDA_SMALL_NUMBER));
 	}
 
-	const float TwoPlayerRadius = ShowDownCardRevealLayout::ResolveRadialCenterDistance(
+	const TArray<FVector> OppositeTwoPlayerDirections = {
+		-FVector::ForwardVector,
+		FVector::ForwardVector,
+	};
+	const float OppositeTwoPlayerRadius = ShowDownCardRevealLayout::ResolveRadialCenterDistance(
 		CenterDistance,
-		2);
+		OppositeTwoPlayerDirections);
+	TestTrue(
+		TEXT("Two opposite reveal cards split the configured neighboring-card gap"),
+		FMath::IsNearlyEqual(OppositeTwoPlayerRadius, CenterDistance * 0.5f));
+	TestTrue(
+		TEXT("Two opposite reveal cards keep the configured center-to-center gap"),
+		FMath::IsNearlyEqual(
+			FVector::Distance(
+				OppositeTwoPlayerDirections[0] * OppositeTwoPlayerRadius,
+				OppositeTwoPlayerDirections[1] * OppositeTwoPlayerRadius),
+			CenterDistance));
+
+	const TArray<FVector> AdjacentTwoPlayerDirections = {
+		-FVector::ForwardVector,
+		FVector::RightVector,
+	};
+	const float AdjacentTwoPlayerRadius = ShowDownCardRevealLayout::ResolveRadialCenterDistance(
+		CenterDistance,
+		AdjacentTwoPlayerDirections);
+	TestTrue(
+		TEXT("Two adjacent reveal cards use the ninety-degree chord radius"),
+		FMath::IsNearlyEqual(
+			AdjacentTwoPlayerRadius,
+			CenterDistance / FMath::Sqrt(2.0f)));
+	TestTrue(
+		TEXT("Two adjacent reveal cards keep the configured center-to-center gap"),
+		FMath::IsNearlyEqual(
+			FVector::Distance(
+				AdjacentTwoPlayerDirections[0] * AdjacentTwoPlayerRadius,
+				AdjacentTwoPlayerDirections[1] * AdjacentTwoPlayerRadius),
+			CenterDistance,
+			0.01f));
+
+	const TArray<FVector> CardinalThreePlayerDirections = {
+		-FVector::ForwardVector,
+		FVector::ForwardVector,
+		FVector::RightVector,
+	};
+	const float CardinalThreePlayerRadius = ShowDownCardRevealLayout::ResolveRadialCenterDistance(
+		CenterDistance,
+		CardinalThreePlayerDirections);
+	TestTrue(
+		TEXT("Three cardinal reveal cards use the nearest ninety-degree seat pair"),
+		FMath::IsNearlyEqual(
+			CardinalThreePlayerRadius,
+			CenterDistance / FMath::Sqrt(2.0f)));
+	TestTrue(
+		TEXT("Three cardinal reveal cards keep the configured nearest-neighbor gap"),
+		FMath::IsNearlyEqual(
+			FVector::Distance(
+				CardinalThreePlayerDirections[0] * CardinalThreePlayerRadius,
+				CardinalThreePlayerDirections[2] * CardinalThreePlayerRadius),
+			CenterDistance,
+			0.01f));
+
+	const TArray<FVector> CardinalFourPlayerDirections = {
+		-FVector::ForwardVector,
+		FVector::ForwardVector,
+		FVector::RightVector,
+		-FVector::RightVector,
+	};
+	const float CardinalFourPlayerRadius = ShowDownCardRevealLayout::ResolveRadialCenterDistance(
+		CenterDistance,
+		CardinalFourPlayerDirections);
+	TestTrue(
+		TEXT("Four cardinal reveal cards use the compact square radius"),
+		FMath::IsNearlyEqual(
+			CardinalFourPlayerRadius,
+			CenterDistance / FMath::Sqrt(2.0f)));
+	TestTrue(
+		TEXT("Four cardinal reveal cards keep the configured nearest-neighbor gap"),
+		FMath::IsNearlyEqual(
+			FVector::Distance(
+				CardinalFourPlayerDirections[0] * CardinalFourPlayerRadius,
+				CardinalFourPlayerDirections[2] * CardinalFourPlayerRadius),
+			CenterDistance,
+			0.01f));
+
 	TestEqual(
-		TEXT("Two reveal cards split the configured single-player spacing"),
-		TwoPlayerRadius,
-		CenterDistance * 0.5f);
+		TEXT("A single reveal card stays at table center"),
+		ShowDownCardRevealLayout::ResolveRadialCenterDistance(
+			CenterDistance,
+			{FVector::ForwardVector}),
+		0.0f);
+
+	const TArray<FVector> DuplicateAndInvalidDirections = {
+		-FVector::ForwardVector,
+		-FVector::ForwardVector * 3.0f,
+		FVector::ZeroVector,
+		FVector::UpVector,
+		FVector::ForwardVector,
+	};
+	TestTrue(
+		TEXT("Duplicate and invalid directions do not change a valid opposite-seat radius"),
+		FMath::IsNearlyEqual(
+			ShowDownCardRevealLayout::ResolveRadialCenterDistance(
+				CenterDistance,
+				DuplicateAndInvalidDirections),
+			OppositeTwoPlayerRadius));
 	TestEqual(
-		TEXT("Three-player reveal keeps the authored radial distance"),
-		ShowDownCardRevealLayout::ResolveRadialCenterDistance(CenterDistance, 3),
-		CenterDistance);
+		TEXT("Duplicate and invalid directions without a second seat stay centered"),
+		ShowDownCardRevealLayout::ResolveRadialCenterDistance(
+			CenterDistance,
+			{-FVector::ForwardVector, -FVector::ForwardVector * 2.0f, FVector::ZeroVector}),
+		0.0f);
+
+	const TArray<FVector> ReorderedCardinalDirections = {
+		-FVector::RightVector,
+		FVector::RightVector,
+		FVector::ForwardVector,
+		-FVector::ForwardVector,
+	};
+	TestTrue(
+		TEXT("Reveal radius is invariant to seat direction order"),
+		FMath::IsNearlyEqual(
+			ShowDownCardRevealLayout::ResolveRadialCenterDistance(
+				CenterDistance,
+				ReorderedCardinalDirections),
+			CardinalFourPlayerRadius));
 
 	FTransform OppositeLeftTransform;
 	FTransform OppositeRightTransform;
 	const bool bBuiltOppositeLeft = ShowDownCardRevealLayout::TryBuildRadialTransform(
 		TableCenter,
 		TableCenter + FVector(-100.0f, 0.0f, 0.0f),
-		TwoPlayerRadius,
+		OppositeTwoPlayerRadius,
 		0.0f,
 		HeightOffset,
 		RotationOffset,
@@ -242,7 +502,7 @@ bool FShowDownCardRevealLayoutTest::RunTest(const FString& Parameters)
 	const bool bBuiltOppositeRight = ShowDownCardRevealLayout::TryBuildRadialTransform(
 		TableCenter,
 		TableCenter + FVector(100.0f, 0.0f, 0.0f),
-		TwoPlayerRadius,
+		OppositeTwoPlayerRadius,
 		0.0f,
 		HeightOffset,
 		RotationOffset,
@@ -317,6 +577,10 @@ bool FShowDownCharacterSkinCatalogTest::RunTest(const FString& Parameters)
 		TEXT("Product-style robot aliases resolve to the runtime id"),
 		UShowDownCharacterSkinCatalog::CanonicalizeSkinId(TEXT("  CHARACTER_ROBOT  ")),
 		FString(TEXT("robot")));
+	TestEqual(
+		TEXT("Miku's product-style alias resolves independently from Micu"),
+		UShowDownCharacterSkinCatalog::CanonicalizeSkinId(TEXT("character_miku")),
+		FString(TEXT("miku")));
 
 	FShowDownCharacterSkinDefinition Definition;
 	FString ResolvedSkinId;
@@ -339,7 +603,9 @@ bool FShowDownCharacterSkinCatalogTest::RunTest(const FString& Parameters)
 			ResolvedSkinId));
 	TestEqual(TEXT("Unknown ids fall back to robot"), ResolvedSkinId, FString(TEXT("robot")));
 
-	for (const FString SkinId : { FString(TEXT("robot")), FString(TEXT("hoodman")), FString(TEXT("micu")) })
+	TSet<FString> BuiltInPreviewAnimations;
+	for (const FString SkinId :
+		{ FString(TEXT("robot")), FString(TEXT("hoodman")), FString(TEXT("micu")), FString(TEXT("miku")) })
 	{
 		TestTrue(
 			*FString::Printf(TEXT("Built-in skin '%s' is registered"), *SkinId),
@@ -347,8 +613,109 @@ bool FShowDownCharacterSkinCatalogTest::RunTest(const FString& Parameters)
 		TestFalse(
 			*FString::Printf(TEXT("Built-in skin '%s' has a mesh reference"), *SkinId),
 			Definition.SkeletalMesh.IsNull());
+		TestTrue(
+			*FString::Printf(TEXT("Built-in skin '%s' has a shop preview animation"), *SkinId),
+			Definition.PreviewAnimationMode
+				== EShowDownShopPreviewAnimationMode::SingleAnimation
+			&& !Definition.PreviewAnimation.IsNull());
+		if (!Definition.PreviewAnimation.IsNull())
+		{
+			BuiltInPreviewAnimations.Add(Definition.PreviewAnimation.ToSoftObjectPath().ToString());
+		}
+	}
+	TestEqual(
+		TEXT("Each built-in skin uses a distinct single-node preview animation"),
+		BuiltInPreviewAnimations.Num(),
+		4);
+
+	UShowDownCharacterSkinCatalog* AnimationOverrideCatalog =
+		NewObject<UShowDownCharacterSkinCatalog>();
+	FShowDownCharacterSkinDefinition AnimationOverride;
+	AnimationOverride.SkinId = TEXT("miku");
+	AnimationOverride.PreviewAnimationMode = EShowDownShopPreviewAnimationMode::SingleAnimation;
+	AnimationOverride.PreviewAnimation = TSoftObjectPtr<UAnimationAsset>(
+		FSoftObjectPath(TEXT("/Game/Character/Animation/selectCard.selectCard")));
+	AnimationOverride.bLoopPreviewAnimation = false;
+	AnimationOverride.PreviewAnimationPlayRate = 0.75f;
+	AnimationOverrideCatalog->Skins.Add(AnimationOverride);
+
+	TestTrue(
+		TEXT("An editor catalog can override only a built-in skin's preview animation"),
+		UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
+			AnimationOverrideCatalog,
+			TEXT("miku"),
+			Definition,
+			ResolvedSkinId));
+	TestFalse(TEXT("Animation-only overrides retain the built-in mesh"), Definition.SkeletalMesh.IsNull());
+	TestEqual(
+		TEXT("Animation-only overrides replace the built-in preview animation"),
+		Definition.PreviewAnimation.ToSoftObjectPath().ToString(),
+		FString(TEXT("/Game/Character/Animation/selectCard.selectCard")));
+	TestFalse(TEXT("Animation-only overrides retain their loop setting"), Definition.bLoopPreviewAnimation);
+	TestEqual(
+		TEXT("Animation-only overrides retain their play rate"),
+		Definition.PreviewAnimationPlayRate,
+		0.75f);
+
+	FShowDownCharacterSkinDefinition& ReferencePoseOverride =
+		AnimationOverrideCatalog->Skins[0];
+	ReferencePoseOverride.PreviewAnimationMode =
+		EShowDownShopPreviewAnimationMode::ReferencePose;
+	ReferencePoseOverride.PreviewAnimation.Reset();
+	TestTrue(
+		TEXT("A catalog can explicitly disable a built-in preview animation"),
+		UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
+			AnimationOverrideCatalog,
+			TEXT("miku"),
+			Definition,
+			ResolvedSkinId));
+	TestEqual(
+		TEXT("Reference pose overrides are retained"),
+		Definition.PreviewAnimationMode,
+		EShowDownShopPreviewAnimationMode::ReferencePose);
+	TestTrue(
+		TEXT("Reference pose overrides clear the built-in animation asset"),
+		Definition.PreviewAnimation.IsNull());
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownRoundCinematicDefaultsTest,
+	"ShowDown.Core.RoundCinematicDefaults",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownRoundCinematicDefaultsTest::RunTest(const FString& Parameters)
+{
+	const AShowDownGameModeBase* GameMode = GetDefault<AShowDownGameModeBase>();
+	TestNotNull(TEXT("ShowDown game mode defaults are available"), GameMode);
+	if (!GameMode)
+	{
+		return false;
 	}
 
+	auto TestFloatDefault = [this, GameMode](const TCHAR* PropertyName, float ExpectedValue)
+	{
+		const FFloatProperty* Property = FindFProperty<FFloatProperty>(
+			AShowDownGameModeBase::StaticClass(),
+			FName(PropertyName));
+		TestNotNull(*FString::Printf(TEXT("%s is reflected"), PropertyName), Property);
+		if (Property)
+		{
+			TestEqual(
+				*FString::Printf(TEXT("%s keeps the authored cinematic default"), PropertyName),
+				Property->GetPropertyValue_InContainer(GameMode),
+				ExpectedValue);
+		}
+	};
+
+	TestFloatDefault(TEXT("RoundCinematicFinalBetToBlackoutSeconds"), 4.0f);
+	TestFloatDefault(TEXT("RoundCinematicBlackoutToTableSpotlightSeconds"), 2.0f);
+	TestFloatDefault(TEXT("RoundCinematicTableSpotlightToRevealSeconds"), 1.0f);
+	TestFloatDefault(TEXT("RoundCinematicRevealToLoserSpotlightSeconds"), 4.0f);
+	TestFloatDefault(TEXT("RoundCinematicLoserSpotlightHoldSeconds"), 3.0f);
+	TestFloatDefault(TEXT("CollectorCardSelectionDelaySeconds"), 3.0f);
+	TestFloatDefault(TEXT("RoundCinematicPostShotProgressHoldSeconds"), 5.0f);
 	return true;
 }
 
@@ -504,6 +871,19 @@ bool FShowDownHitRecoveryTimingTest::RunTest(const FString& Parameters)
 		TEXT("A longer gun camera still owns the presentation finish"),
 		AShowDownGameModeBase::CalculateRoulettePresentationFinishDelay(1.0f, 4.0f, 2.0f),
 		4.0f);
+	TestTrue(
+		TEXT("A queued multiplayer shot reserves five seconds after its real result"),
+		FMath::IsNearlyEqual(
+			AShowDownGameModeBase::CalculateRouletteProgressionFinishDelay(1.45f, 3.5f, 5.0f),
+			6.45f));
+	TestEqual(
+		TEXT("A longer presentation can still own multiplayer progression"),
+		AShowDownGameModeBase::CalculateRouletteProgressionFinishDelay(1.0f, 8.0f, 5.0f),
+		8.0f);
+	TestEqual(
+		TEXT("Negative multiplayer progression timing is clamped"),
+		AShowDownGameModeBase::CalculateRouletteProgressionFinishDelay(-1.0f, -2.0f, -3.0f),
+		0.0f);
 	return true;
 }
 
@@ -544,6 +924,11 @@ bool FShowDownVisionDirectorBlendTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+	TestEqual(TEXT("Gameplay vision defaults to the requested table radius"), VisionDirector->GetTableVisionRadius(), 150.0f);
+	TestEqual(TEXT("Gameplay vision defaults to the requested feather"), VisionDirector->GetTableVisionFeather(), 100.0f);
+	TestEqual(TEXT("The optional wide-view radius keeps its authored default"), VisionDirector->GetIntroWideVisionRadius(), 5000.0f);
+	TestEqual(TEXT("Match entry keeps a consistent feather"), VisionDirector->GetIntroWideVisionFeather(), 100.0f);
+	TestEqual(TEXT("Gameplay darkness rests at the cinematic baseline"), VisionDirector->GetDarknessStrength(), 1.0f);
 
 	VisionDirector->SetVisionAlpha(-1.0f);
 	TestEqual(TEXT("Immediate vision alpha clamps below zero"), VisionDirector->GetVisionAlpha(), 0.0f);
@@ -633,6 +1018,177 @@ bool FShowDownVisionDirectorBlendTest::RunTest(const FString& Parameters)
 	VisionDirector->CompleteDarknessStrengthBlend();
 	TestFalse(TEXT("Completing darkness clears the active transition"), VisionDirector->IsDarknessStrengthBlending());
 	TestEqual(TEXT("Completing darkness applies its destination"), VisionDirector->GetDarknessStrength(), 0.2f);
+
+	VisionDirector->SetVisionRange(-100.0f, -10.0f);
+	TestEqual(TEXT("Immediate range clamps radius to zero"), VisionDirector->GetVisionRadius(), 0.0f);
+	TestEqual(TEXT("Immediate range keeps a nonzero feather"), VisionDirector->GetVisionFeather(), 1.0f);
+	VisionDirector->SetDarknessStrength(0.5f);
+	VisionDirector->BlendToVisionRange(
+		1000.0f,
+		201.0f,
+		2.0f,
+		ESDVisionBlendEase::Linear,
+		2.0f);
+	VisionDirector->BlendToDarknessStrength(
+		1.0f,
+		1.0f,
+		ESDVisionBlendEase::Linear,
+		2.0f);
+	TestTrue(TEXT("Range and darkness can blend at the same time"),
+		VisionDirector->IsVisionRangeBlending() && VisionDirector->IsDarknessStrengthBlending());
+	VisionDirector->Tick(0.5f);
+	TestTrue(TEXT("Independent range advances on its own duration"),
+		FMath::IsNearlyEqual(VisionDirector->GetVisionRadius(), 250.0f));
+	TestTrue(TEXT("Independent feather advances with range"),
+		FMath::IsNearlyEqual(VisionDirector->GetVisionFeather(), 51.0f));
+	TestTrue(TEXT("Darkness keeps advancing while range moves"),
+		FMath::IsNearlyEqual(VisionDirector->GetDarknessStrength(), 0.75f));
+	VisionDirector->CompleteVisionRangeBlend();
+	TestFalse(TEXT("Completing range clears only its transition"), VisionDirector->IsVisionRangeBlending());
+	TestTrue(TEXT("Completing range leaves darkness active"), VisionDirector->IsDarknessStrengthBlending());
+	TestEqual(TEXT("Completing range applies its radius destination"), VisionDirector->GetVisionRadius(), 1000.0f);
+	TestEqual(TEXT("Completing range applies its feather destination"), VisionDirector->GetVisionFeather(), 201.0f);
+
+	VisionDirector->BlendToVisionAlpha(1.0f, 1.0f, ESDVisionBlendEase::Linear, 2.0f);
+	VisionDirector->BlendToVisionRange(400.0f, 80.0f, 1.0f, ESDVisionBlendEase::Linear, 2.0f);
+	TestFalse(TEXT("Starting direct range cancels the alpha-owned geometry transition"),
+		VisionDirector->IsVisionBlending());
+	VisionDirector->BlendToDarknessStrength(0.4f, 1.0f, ESDVisionBlendEase::Linear, 2.0f);
+	TestTrue(TEXT("Starting direct darkness preserves the independent range transition"),
+		VisionDirector->IsVisionRangeBlending());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownPlayerLifecycleTest,
+	"ShowDown.Core.PlayerLifecycle",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownPlayerLifecycleTest::RunTest(const FString& Parameters)
+{
+	ASDPlayerState* PreviousState = NewObject<ASDPlayerState>();
+	ASDPlayerState* CopiedState = NewObject<ASDPlayerState>();
+	ASDPlayerState* RestoredState = NewObject<ASDPlayerState>();
+	TestNotNull(TEXT("Previous player state can be created"), PreviousState);
+	TestNotNull(TEXT("Copied player state can be created"), CopiedState);
+	TestNotNull(TEXT("Restored player state can be created"), RestoredState);
+	if (!PreviousState || !CopiedState || !RestoredState)
+	{
+		return false;
+	}
+
+	PreviousState->ShowDownSlot = EShowDownPlayerSlot::Player3;
+	PreviousState->bReady = true;
+	PreviousState->bHostPlayer = true;
+	PreviousState->CopyProperties(CopiedState);
+	TestEqual(
+		TEXT("Seamless travel copies the authoritative seat"),
+		CopiedState->ShowDownSlot,
+		EShowDownPlayerSlot::Player3);
+	TestTrue(TEXT("Seamless travel copies ready state"), CopiedState->bReady);
+	TestTrue(TEXT("Seamless travel copies host state"), CopiedState->bHostPlayer);
+
+	RestoredState->OverrideWith(CopiedState);
+	TestEqual(
+		TEXT("Reconnect restore keeps the authoritative seat"),
+		RestoredState->ShowDownSlot,
+		EShowDownPlayerSlot::Player3);
+	TestTrue(TEXT("Reconnect restore keeps ready state"), RestoredState->bReady);
+	TestTrue(TEXT("Reconnect restore keeps host state"), RestoredState->bHostPlayer);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownGunVisionSequenceTimingTest,
+	"ShowDown.Core.GunVisionSequenceTiming",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownGunVisionSequenceTimingTest::RunTest(const FString& Parameters)
+{
+	USDGunVisionSequenceSubsystem* SequenceSubsystem = NewObject<USDGunVisionSequenceSubsystem>();
+	AShowDownGameStateBase* GameState = NewObject<AShowDownGameStateBase>();
+	ASDSelfShotGunActor* GunActor = NewObject<ASDSelfShotGunActor>();
+	TestNotNull(TEXT("Gun vision sequence subsystem can be created"), SequenceSubsystem);
+	TestNotNull(TEXT("Gun vision sequence test game state can be created"), GameState);
+	TestNotNull(TEXT("Gun vision sequence test gun can be created"), GunActor);
+	if (!SequenceSubsystem || !GameState || !GunActor)
+	{
+		return false;
+	}
+
+	GameState->CurrentPhase = EShowDownPhase::Roulette;
+	SequenceSubsystem->BoundGameState = GameState;
+	SequenceSubsystem->DesiredDarknessStrength = 1.0f;
+	SequenceSubsystem->bZeroDarknessSpotlightEnabled = false;
+
+	SequenceSubsystem->HandleTableCinematicCue(
+		ESDTableCinematicCue::TriggerPullStarted,
+		ShowDownTableCinematics::PlayerSlotToMask(EShowDownPlayerSlot::Player1));
+	TestEqual(
+		TEXT("Starting trigger travel does not change darkness"),
+		SequenceSubsystem->DesiredDarknessStrength,
+		1.0f);
+	TestFalse(
+		TEXT("Starting trigger travel does not enable the bright spotlight"),
+		SequenceSubsystem->bZeroDarknessSpotlightEnabled);
+
+	SequenceSubsystem->HandleGunFired(GunActor);
+	TestEqual(
+		TEXT("The real live-fire event changes darkness to zero"),
+		SequenceSubsystem->DesiredDarknessStrength,
+		0.0f);
+	TestTrue(
+		TEXT("The real live-fire event starts the post-shot hold"),
+		SequenceSubsystem->bPostShotBrightHoldActive);
+	TestTrue(
+		TEXT("The real live-fire event enables the bright spotlight"),
+		SequenceSubsystem->bZeroDarknessSpotlightEnabled);
+
+	SequenceSubsystem->HandleGunPresentationFinished(GunActor);
+	TestEqual(
+		TEXT("Darkness stays at zero after the local presentation finishes"),
+		SequenceSubsystem->DesiredDarknessStrength,
+		0.0f);
+	TestTrue(
+		TEXT("The post-shot hold waits for an authoritative progression event"),
+		SequenceSubsystem->bPostShotBrightHoldActive);
+
+	SequenceSubsystem->HandleTableCinematicCue(ESDTableCinematicCue::Reset, 0);
+	TestFalse(
+		TEXT("The replicated reset releases the post-shot hold"),
+		SequenceSubsystem->bPostShotBrightHoldActive);
+	TestEqual(
+		TEXT("The replicated reset restores the next-game darkness target"),
+		SequenceSubsystem->DesiredDarknessStrength,
+		1.0f);
+
+	GameState->CurrentPhase = EShowDownPhase::Betting;
+	GunActor->bMultiplayerRoulettePresentationActive = true;
+	SequenceSubsystem->DesiredDarknessStrength = 1.0f;
+	SequenceSubsystem->HandleGunRaised(GunActor);
+	SequenceSubsystem->HandleGunFired(GunActor);
+	TestEqual(
+		TEXT("A multiplayer presentation does not wait for phase replication to brighten"),
+		SequenceSubsystem->DesiredDarknessStrength,
+		0.0f);
+
+	GunActor->PendingMultiplayerRoulettePresentations.Add(
+		{ EShowDownPlayerSlot::Player3, false });
+	GunActor->HandleTableCinematicCue(ESDTableCinematicCue::Reset, 0);
+	TestFalse(
+		TEXT("A reliable reset invalidates the active multiplayer gun presentation"),
+		GunActor->bMultiplayerRoulettePresentationActive);
+	TestTrue(
+		TEXT("A reliable reset clears delayed client gun presentations immediately"),
+		GunActor->PendingMultiplayerRoulettePresentations.IsEmpty());
+
+	GunActor->bMultiplayerRoulettePresentationActive = true;
+	GunActor->PendingMultiplayerRoulettePresentations.Add(
+		{ EShowDownPlayerSlot::Player3, false });
+	GunActor->HandleGamePhaseChanged(EShowDownPhase::RoundEnd);
+	TestTrue(
+		TEXT("Leaving roulette clears delayed client gun presentations"),
+		GunActor->PendingMultiplayerRoulettePresentations.IsEmpty());
 	return true;
 }
 
@@ -681,17 +1237,45 @@ bool FShowDownAudioConfigTest::RunTest(const FString& Parameters)
 		TEXT("BGM uses the imported Boogie Down track"),
 		AudioConfig->BackgroundMusicSound,
 		TEXT("/Game/Audio/SW_BGM_BoogieDown.SW_BGM_BoogieDown"));
+	TestSoundPath(
+		TEXT("Spotlight transitions use the imported spotlight cue"),
+		AudioConfig->SpotlightTransitionSound,
+		TEXT("/Game/Audio/SW_Spotlight.SW_Spotlight"));
 
 	const USoundWave* CrowdBedWave = Cast<USoundWave>(AudioConfig->CrowdBedSound);
 	const USoundWave* BackgroundMusicWave = Cast<USoundWave>(AudioConfig->BackgroundMusicSound);
 	TestTrue(TEXT("Crowd bed is configured to loop"), CrowdBedWave && CrowdBedWave->IsLooping());
 	TestTrue(TEXT("Background music is configured to loop"), BackgroundMusicWave && BackgroundMusicWave->IsLooping());
 	TestTrue(
+		TEXT("Background music has an audible configured volume"),
+		AudioConfig->BackgroundMusicVolume > 0.0f);
+
+	TestEqual(
+		TEXT("Full user music volume resolves to the authored BGM target"),
+		UShowDownAudioSubsystem::CalculateMusicTargetVolume(
+			AudioConfig->BackgroundMusicVolume,
+			1.0f,
+			1.0f),
+		AudioConfig->BackgroundMusicVolume);
+	TestEqual(
+		TEXT("Muted user music resolves to a zero restart target"),
+		UShowDownAudioSubsystem::CalculateMusicTargetVolume(
+			AudioConfig->BackgroundMusicVolume,
+			0.0f,
+			1.0f),
+		0.0f);
+	TestTrue(
+		TEXT("The idle crowd bed has an audible configured volume"),
+		AudioConfig->CrowdIdleVolume > 0.0f);
+	TestTrue(
 		TEXT("Crowd idle stays quieter than the empty-chamber boost"),
 		AudioConfig->CrowdIdleVolume < AudioConfig->CrowdEmptyBoostVolume);
 	TestTrue(
 		TEXT("Live-round crowd shock is delayed after the gunshot"),
 		AudioConfig->CrowdShockDelay > 0.0f);
+	TestTrue(
+		TEXT("Spotlight transitions have an audible configured volume"),
+		AudioConfig->SpotlightTransitionVolume > 0.0f);
 	return true;
 }
 

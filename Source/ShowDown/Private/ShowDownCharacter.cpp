@@ -34,8 +34,8 @@ namespace
 	constexpr float ActionAnimationFallbackReturnDelay = 1.0f;
 	const FName NameTagSharedLayerName(TEXT("ShowDownCharacterNameTags"));
 	constexpr int32 NameTagLayerZOrder = 50;
-	constexpr float GuaranteedHitResetPulsePeakIntensity = 1500000.0f;
-	constexpr float GuaranteedHitResetPulseRadius = 500.0f;
+	constexpr float MaximumHitResetPulsePeakIntensity = 8000.0f;
+	constexpr float MaximumHitResetPulseRadius = 240.0f;
 	const FVector HitResetPulseRelativeLocation(0.0f, 0.0f, 220.0f);
 	const FRotator HitResetPulseRelativeRotation(-90.0f, 0.0f, 0.0f);
 
@@ -54,13 +54,15 @@ namespace
 		// above the head and cannot be swallowed by the character's own shadow.
 		Light->SetRelativeLocation(HitResetPulseRelativeLocation);
 		Light->SetRelativeRotation(HitResetPulseRelativeRotation);
-		Light->SetInnerConeAngle(22.0f);
-		Light->SetOuterConeAngle(42.0f);
+		Light->SetInnerConeAngle(18.0f);
+		Light->SetOuterConeAngle(34.0f);
 		Light->SetIntensityUnits(ELightUnits::Lumens);
 		Light->SetUseInverseSquaredFalloff(true);
-		Light->SetAttenuationRadius(FMath::Max(GuaranteedHitResetPulseRadius, RequestedRadius));
+		Light->SetAttenuationRadius(FMath::Clamp(RequestedRadius, 50.0f, MaximumHitResetPulseRadius));
 		Light->SetLightColor(Color);
 		Light->SetCastShadows(false);
+		Light->SetIndirectLightingIntensity(0.0f);
+		Light->SetVolumetricScatteringIntensity(0.0f);
 	}
 
 	FString GetAnimStateDebugName(EShowDownCharacterAnimState State)
@@ -244,6 +246,25 @@ AShowDownCharacter::AShowDownCharacter()
 	HitResetPulseLight->SetIntensity(0.0f);
 	HitResetPulseLight->SetVisibility(false);
 
+	RoundStatusSpotLight = CreateDefaultSubobject<USpotLightComponent>(TEXT("RoundStatusSpotLight"));
+	RoundStatusSpotLight->SetupAttachment(GetCapsuleComponent());
+	// These are native defaults only. Designers can override every lighting and
+	// transform property on the component without runtime code resetting them.
+	RoundStatusSpotLight->SetRelativeLocation(FVector(0.0f, 0.0f, 250.0f));
+	RoundStatusSpotLight->SetRelativeRotation(FRotator(-90.0f, 0.0f, 0.0f));
+	RoundStatusSpotLight->SetInnerConeAngle(14.0f);
+	RoundStatusSpotLight->SetOuterConeAngle(28.0f);
+	RoundStatusSpotLight->SetIntensityUnits(ELightUnits::Lumens);
+	RoundStatusSpotLight->SetUseInverseSquaredFalloff(true);
+	RoundStatusSpotLight->SetAttenuationRadius(230.0f);
+	RoundStatusSpotLight->SetIntensity(2500.0f);
+	RoundStatusSpotLight->SetCastShadows(false);
+	RoundStatusSpotLight->SetIndirectLightingIntensity(0.0f);
+	RoundStatusSpotLight->SetVolumetricScatteringIntensity(0.0f);
+	// Affects World cannot be changed at runtime, so keep it enabled and use
+	// visibility as the default-off/runtime on-off switch.
+	RoundStatusSpotLight->SetVisibility(false);
+
 	UCharacterMovementComponent* MovementComponent = GetCharacterMovement();
 	MovementComponent->bOrientRotationToMovement = true;
 	MovementComponent->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
@@ -281,6 +302,13 @@ void AShowDownCharacter::PostInitializeComponents()
 		HitResetPulseLight->SetVisibility(false, true);
 		HitResetPulseLight->SetHiddenInGame(true, true);
 	}
+	if (RoundStatusSpotLight)
+	{
+		RoundStatusSpotLightTurnColor = RoundStatusSpotLight->GetLightColor();
+		bRoundStatusSpotLightTurnColorCached = true;
+		RoundStatusSpotLight->SetVisibility(false, true);
+		RoundStatusSpotLight->SetHiddenInGame(true, true);
+	}
 	if (WorldLivesText)
 	{
 		WorldLivesBaseRelativeScale = WorldLivesText->GetRelativeScale3D();
@@ -291,6 +319,7 @@ void AShowDownCharacter::PostInitializeComponents()
 	PushAnimStateToAnimInstance();
 	RefreshNameTag();
 	RefreshWorldBetStatus();
+	RefreshRoundStatusSpotlight();
 }
 
 void AShowDownCharacter::BeginPlay()
@@ -307,6 +336,7 @@ void AShowDownCharacter::BeginPlay()
 	RefreshNameTag();
 	RefreshWorldBetStatus();
 	BindToRouletteEvents();
+	RefreshRoundStatusSpotlight();
 }
 
 void AShowDownCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -314,6 +344,8 @@ void AShowDownCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	UnbindFromRouletteEvents();
 	GetWorldTimerManager().ClearTimer(AnimStateResetTimerHandle);
 	SetHitResetPulseStrength(0.0f);
+	bLoserSpotlightActive = false;
+	RefreshRoundStatusSpotlight();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -888,6 +920,7 @@ void AShowDownCharacter::OnRep_CharacterSkinId()
 void AShowDownCharacter::OnRep_Identity()
 {
 	RefreshNameTag();
+	RefreshRoundStatusSpotlight();
 	OnCharacterIdentityChanged();
 }
 
@@ -1013,6 +1046,61 @@ void AShowDownCharacter::HandleMultiplayerRouletteResult(
 	}
 
 	StartHitRecoveryPresentation(RemainingLives <= 0);
+}
+
+void AShowDownCharacter::HandleTablePhaseChanged(EShowDownPhase NewPhase)
+{
+	if (NewPhase == EShowDownPhase::None
+		|| NewPhase == EShowDownPhase::RoundEnd
+		|| NewPhase == EShowDownPhase::GameOver)
+	{
+		bLoserSpotlightActive = false;
+	}
+	RefreshRoundStatusSpotlight();
+}
+
+void AShowDownCharacter::HandleTableCinematicCue(
+	ESDTableCinematicCue Cue,
+	uint8 PlayerSlotMask)
+{
+	if (Cue == ESDTableCinematicCue::LoserSpotlight)
+	{
+		const bool bMultiplayerTarget = ShowDownTableCinematics::IsPlayerSlotInMask(
+			PlayerSlotMask,
+			PlayerSlot);
+		const bool bSinglePlayerTarget =
+			(CharacterRole == EShowDownCharacterRole::Player
+				&& ShowDownTableCinematics::IsSingleSideInMask(PlayerSlotMask, EShowDownSide::Player))
+			|| (CharacterRole == EShowDownCharacterRole::Opponent
+				&& ShowDownTableCinematics::IsSingleSideInMask(PlayerSlotMask, EShowDownSide::Collector));
+		bLoserSpotlightActive = bMultiplayerTarget || bSinglePlayerTarget;
+	}
+	else if (Cue == ESDTableCinematicCue::TriggerPullStarted)
+	{
+		const bool bMultiplayerTarget = ShowDownTableCinematics::IsPlayerSlotInMask(
+			PlayerSlotMask,
+			PlayerSlot);
+		const bool bSinglePlayerTarget =
+			(CharacterRole == EShowDownCharacterRole::Player
+				&& ShowDownTableCinematics::IsSingleSideInMask(PlayerSlotMask, EShowDownSide::Player))
+			|| (CharacterRole == EShowDownCharacterRole::Opponent
+				&& ShowDownTableCinematics::IsSingleSideInMask(PlayerSlotMask, EShowDownSide::Collector));
+		if (bMultiplayerTarget || bSinglePlayerTarget)
+		{
+			bLoserSpotlightActive = false;
+		}
+	}
+	else if (Cue == ESDTableCinematicCue::Reset
+		|| Cue == ESDTableCinematicCue::MatchIntro
+		|| Cue == ESDTableCinematicCue::PreRevealBlackout
+		|| Cue == ESDTableCinematicCue::RevealStarted
+		|| Cue == ESDTableCinematicCue::InitialDealStarted
+		|| Cue == ESDTableCinematicCue::InitialDealFinished)
+	{
+		bLoserSpotlightActive = false;
+	}
+
+	RefreshRoundStatusSpotlight();
 }
 
 void AShowDownCharacter::HandleCardSelected(EShowDownSide Side)
@@ -1187,6 +1275,8 @@ void AShowDownCharacter::BindToRouletteEvents()
 	ShowDownGameState->OnMultiplayerRouletteStarted.AddUniqueDynamic(this, &AShowDownCharacter::HandleMultiplayerRouletteStarted);
 	ShowDownGameState->OnMultiplayerRouletteResult.AddUniqueDynamic(this, &AShowDownCharacter::HandleMultiplayerRouletteResult);
 	ShowDownGameState->OnNameTagRoundStatusChanged.AddUniqueDynamic(this, &AShowDownCharacter::HandleNameTagRoundStatusChanged);
+	ShowDownGameState->OnPhaseChanged.AddUniqueDynamic(this, &AShowDownCharacter::HandleTablePhaseChanged);
+	ShowDownGameState->OnTableCinematicCue.AddUniqueDynamic(this, &AShowDownCharacter::HandleTableCinematicCue);
 	ShowDownGameState->OnChatMessageReceived.AddUniqueDynamic(this, &AShowDownCharacter::HandleChatMessageReceived);
 }
 
@@ -1209,12 +1299,15 @@ void AShowDownCharacter::UnbindFromRouletteEvents()
 	ShowDownGameState->OnMultiplayerRouletteStarted.RemoveDynamic(this, &AShowDownCharacter::HandleMultiplayerRouletteStarted);
 	ShowDownGameState->OnMultiplayerRouletteResult.RemoveDynamic(this, &AShowDownCharacter::HandleMultiplayerRouletteResult);
 	ShowDownGameState->OnNameTagRoundStatusChanged.RemoveDynamic(this, &AShowDownCharacter::HandleNameTagRoundStatusChanged);
+	ShowDownGameState->OnPhaseChanged.RemoveDynamic(this, &AShowDownCharacter::HandleTablePhaseChanged);
+	ShowDownGameState->OnTableCinematicCue.RemoveDynamic(this, &AShowDownCharacter::HandleTableCinematicCue);
 	ShowDownGameState->OnChatMessageReceived.RemoveDynamic(this, &AShowDownCharacter::HandleChatMessageReceived);
 }
 
 void AShowDownCharacter::HandleNameTagRoundStatusChanged()
 {
 	RefreshNameTag();
+	RefreshRoundStatusSpotlight();
 }
 
 void AShowDownCharacter::HandleChatMessageReceived(const FString& SenderName, const FString& Message)
@@ -1632,12 +1725,14 @@ void AShowDownCharacter::SetHitResetPulseStrength(float Strength)
 		&& HitRecoveryPresentationState.bActive
 		&& ClampedStrength > KINDA_SMALL_NUMBER;
 	ConfigureHitResetPulseLight(HitResetPulseLight, HitResetPulseColor, HitResetPulseRadius);
-	const float PeakIntensity = FMath::Max(
-		GuaranteedHitResetPulsePeakIntensity,
-		HitResetPulsePeakIntensity);
+	const float PeakIntensity = FMath::Clamp(
+		HitResetPulsePeakIntensity,
+		0.0f,
+		MaximumHitResetPulsePeakIntensity);
 	HitResetPulseLight->SetIntensity(PeakIntensity * ClampedStrength);
 	HitResetPulseLight->SetVisibility(bVisible, true);
 	HitResetPulseLight->SetHiddenInGame(!bVisible, true);
+	RefreshRoundStatusSpotlight();
 }
 
 float AShowDownCharacter::GetSynchronizedServerTimeSeconds() const
@@ -1965,6 +2060,7 @@ void AShowDownCharacter::ApplyCharacterSceneActive()
 
 	RefreshNameTag();
 	RefreshWorldBetStatus();
+	RefreshRoundStatusSpotlight();
 }
 
 void AShowDownCharacter::ApplyPresentationCollisionSettings()
@@ -1978,6 +2074,37 @@ void AShowDownCharacter::ApplyPresentationCollisionSettings()
 	Capsule->SetCollisionObjectType(ECC_Pawn);
 	Capsule->SetCollisionResponseToAllChannels(ECR_Ignore);
 	Capsule->SetGenerateOverlapEvents(false);
+}
+
+void AShowDownCharacter::RefreshRoundStatusSpotlight()
+{
+	if (!RoundStatusSpotLight || IsRunningDedicatedServer())
+	{
+		return;
+	}
+
+	const AShowDownGameStateBase* ShowDownGameState = GetWorld()
+		? GetWorld()->GetGameState<AShowDownGameStateBase>()
+		: nullptr;
+	const bool bTurnPhase = ShowDownGameState
+		&& (ShowDownGameState->CurrentPhase == EShowDownPhase::Betting
+			|| ShowDownGameState->CurrentPhase == EShowDownPhase::SelectCard);
+	const bool bShowLoser = bLoserSpotlightActive;
+	const bool bShowTurn = !bShowLoser && bTurnPhase && IsNameTagTurnActive();
+	const bool bVisible = bCharacterSceneActive
+		&& !bHitRecoveryVisualConcealed
+		&& !HitRecoveryPresentationState.bActive
+		&& (bShowLoser || bShowTurn);
+
+	if (!bRoundStatusSpotLightTurnColorCached)
+	{
+		RoundStatusSpotLightTurnColor = RoundStatusSpotLight->GetLightColor();
+		bRoundStatusSpotLightTurnColorCached = true;
+	}
+	RoundStatusSpotLight->SetLightColor(
+		bShowLoser ? RouletteTargetSpotLightColor : RoundStatusSpotLightTurnColor);
+	RoundStatusSpotLight->SetVisibility(bVisible, true);
+	RoundStatusSpotLight->SetHiddenInGame(!bVisible, true);
 }
 
 void AShowDownCharacter::RefreshNameTag()

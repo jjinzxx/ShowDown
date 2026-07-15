@@ -98,6 +98,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Timing")
 	float GetPresentationFinishDelay(bool bLiveRound) const;
 
+	/** True while this local gun instance is playing a server-scripted multiplayer shot. */
+	bool IsMultiplayerRoulettePresentation() const;
+
 	// Pure helpers kept public so the multiplayer gate and seat-relative camera
 	// math can be covered without creating a PIE world.
 	static bool ShouldUseGunShotCamera(bool bLiveRound, bool bTargetsLocalPlayer);
@@ -166,6 +169,10 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Self Shot Gun")
 	FSDSelfShotGunEvent OnGunRaised;
 
+	/** Fires when the trigger starts moving, before the live/empty result. */
+	UPROPERTY(BlueprintAssignable, Category = "Self Shot Gun")
+	FSDSelfShotGunEvent OnTriggerPullStarted;
+
 	UPROPERTY(BlueprintAssignable, Category = "Self Shot Gun")
 	FSDSelfShotGunEvent OnGunFired;
 
@@ -192,6 +199,9 @@ protected:
 
 	UFUNCTION()
 	void HandleGamePhaseChanged(EShowDownPhase NewPhase);
+
+	UFUNCTION()
+	void HandleTableCinematicCue(ESDTableCinematicCue Cue, uint8 PlayerSlotMask);
 
 	void ApplyAmmoStatusDisplaySettings();
 	void UpdateAmmoStatusAnchorLocation();
@@ -362,7 +372,7 @@ protected:
 	TObjectPtr<ACameraActor> SelfShotCinematicCamera;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera", meta = (ClampMin = "0.0"))
-	float CinematicCameraBlendInTime = 0.55f;
+	float CinematicCameraBlendInTime = 0.25f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera", meta = (ClampMin = "0.0"))
 	float CinematicCameraHoldTime = 2.4f;
@@ -467,13 +477,13 @@ protected:
 	float TinnitusVolumeMultiplier = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Muzzle Flash", meta = (ClampMin = "0.0"))
-	float MuzzleFlashIntensity = 120000.0f;
+	float MuzzleFlashIntensity = 8000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Muzzle Flash", meta = (ClampMin = "0.01"))
-	float MuzzleFlashDuration = 0.035f;
+	float MuzzleFlashDuration = 0.025f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Muzzle Flash", meta = (ClampMin = "0.0"))
-	float MuzzleFlashAttenuationRadius = 600.0f;
+	float MuzzleFlashAttenuationRadius = 350.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Muzzle Flash")
 	FLinearColor MuzzleFlashColor = FLinearColor(1.0f, 0.52f, 0.16f, 1.0f);
@@ -544,6 +554,8 @@ protected:
 	bool bDisableCollisionWhileUsing = true;
 
 private:
+	friend class FShowDownGunVisionSequenceTimingTest;
+
 	enum class EGunAnimState : uint8
 	{
 		Idle,
@@ -578,6 +590,7 @@ private:
 	void UpdateMechanismReset();
 	void ResetTriggerAndHammer();
 	void StartSelfShotCinematicCamera();
+	void TryStartKnownLiveLocalShotCamera();
 	void ActivateSelfShotCinematicCamera();
 	void UpdateSelfShotCinematicCamera(float DeltaSeconds);
 	bool TryStartEliminationTableOverview();
@@ -703,6 +716,7 @@ private:
 	bool bCinematicCameraShakeActive = false;
 	bool bTinnitusFadeOutStarted = false;
 	bool bHitSequenceBlackoutActive = false;
+	bool bMultiplayerRoulettePresentationActive = false;
 	UPROPERTY(Transient)
 	TObjectPtr<UAudioComponent> TinnitusAudioComponent;
 	TWeakObjectPtr<AShowDownGameStateBase> BoundShowDownGameState;

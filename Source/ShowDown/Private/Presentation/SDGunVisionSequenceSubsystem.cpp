@@ -1,5 +1,9 @@
 #include "Presentation/SDGunVisionSequenceSubsystem.h"
 
+#include "Audio/ShowDownAudioSubsystem.h"
+#include "Components/SpotLightComponent.h"
+#include "Engine/GameInstance.h"
+#include "Engine/SpotLight.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
@@ -9,14 +13,64 @@
 
 namespace
 {
-	constexpr float RaiseToTensionDuration = 0.45f;
-	constexpr float TensionDarknessStrength = 0.60f;
+	constexpr float BaseDarknessStrength = 1.0f;
+	constexpr float BetFocusDarknessStrength = 0.72f;
+	constexpr float BetFocusDarknessBlendDuration = 0.18f;
+	constexpr float MatchEntryBeatDelay = 1.0f;
+	constexpr float IntroCollapseDuration = 0.50f;
+	constexpr float PreRevealDarkenDuration = 0.18f;
+	constexpr float RaiseToTensionDuration = 0.35f;
+	constexpr float TensionDarknessStrength = 1.0f;
 	constexpr float PeakDarknessStrength = 1.0f;
 	constexpr float LivePeakHoldDuration = 0.10f;
-	constexpr float LiveSettleDuration = 0.18f;
-	constexpr float EmptyPeakHoldDuration = 0.06f;
-	constexpr float EmptyReliefDuration = 0.12f;
-	constexpr float PresentationFinishDuration = 0.45f;
+	constexpr float LiveSettleDuration = 0.20f;
+	constexpr float EmptyPeakHoldDuration = 0.05f;
+	constexpr float EmptyReliefDuration = 0.22f;
+	constexpr float PresentationFinishDuration = 0.35f;
+	const FName TableSpotlightActorTag(TEXT("ShowDownTableSpotlight"));
+	const FName LegacyTableSpotlightActorName(TEXT("SpotLight6"));
+	const FName ZeroDarknessSpotlightActorTag(TEXT("ShowDownZeroDarknessSpotlight"));
+	const FName LegacyZeroDarknessSpotlightActorName(TEXT("SpotLight7"));
+
+	bool IsTableSpotlightActor(const ASpotLight* Spotlight)
+	{
+		if (!IsValid(Spotlight))
+		{
+			return false;
+		}
+
+		if (Spotlight->ActorHasTag(TableSpotlightActorTag)
+			|| Spotlight->GetFName() == LegacyTableSpotlightActorName)
+		{
+			return true;
+		}
+
+#if WITH_EDITOR
+		return Spotlight->GetActorLabel() == LegacyTableSpotlightActorName.ToString();
+#else
+		return false;
+#endif
+	}
+
+	bool IsZeroDarknessSpotlightActor(const ASpotLight* Spotlight)
+	{
+		if (!IsValid(Spotlight))
+		{
+			return false;
+		}
+
+		if (Spotlight->ActorHasTag(ZeroDarknessSpotlightActorTag)
+			|| Spotlight->GetFName() == LegacyZeroDarknessSpotlightActorName)
+		{
+			return true;
+		}
+
+#if WITH_EDITOR
+		return Spotlight->GetActorLabel() == LegacyZeroDarknessSpotlightActorName.ToString();
+#else
+		return false;
+#endif
+	}
 }
 
 void USDGunVisionGunBinding::Initialize(
@@ -142,6 +196,12 @@ void USDGunVisionSequenceSubsystem::Deinitialize()
 		GameState->OnPhaseChanged.RemoveDynamic(
 			this,
 			&USDGunVisionSequenceSubsystem::HandlePhaseChanged);
+		GameState->OnTableCinematicCue.RemoveDynamic(
+			this,
+			&USDGunVisionSequenceSubsystem::HandleTableCinematicCue);
+		GameState->OnNameTagRoundStatusChanged.RemoveDynamic(
+			this,
+			&USDGunVisionSequenceSubsystem::HandleNameTagRoundStatusChanged);
 	}
 	BoundGameState.Reset();
 
@@ -156,6 +216,8 @@ void USDGunVisionSequenceSubsystem::Deinitialize()
 	VisionDirectors.Reset();
 	PendingVisionDirectorSync.Reset();
 	ActiveGun.Reset();
+	TableSpotlight.Reset();
+	ZeroDarknessSpotlight.Reset();
 
 	Super::Deinitialize();
 }
@@ -164,6 +226,11 @@ void USDGunVisionSequenceSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
 	Super::OnWorldBeginPlay(InWorld);
 	bWorldHasBegunPlay = true;
+	SetTableSpotlightEnabled(false);
+	SetZeroDarknessSpotlightEnabled(false);
+	// Bind the replicated phase only after establishing the authored-off base.
+	// Otherwise a SelectCard phase can correctly enable SpotLight7 and then be
+	// overwritten by the two initialization calls above.
 	RefreshExistingBindings();
 	SynchronizePendingVisionDirectors();
 }
@@ -172,6 +239,7 @@ void USDGunVisionSequenceSubsystem::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 	SynchronizePendingVisionDirectors();
+	AdvanceIntroSequence(DeltaTime);
 
 	SequenceElapsedTime += FMath::Max(0.0f, DeltaTime);
 	switch (SequenceState)
@@ -218,7 +286,7 @@ void USDGunVisionSequenceSubsystem::Tick(float DeltaTime)
 			SequenceElapsedTime = 0.0f;
 			SequenceStageDuration = EmptyReliefDuration;
 			BlendDarkness(
-				0.0f,
+				BaseDarknessStrength,
 				EmptyReliefDuration,
 				ESDVisionBlendEase::EaseOut,
 				2.0f);
@@ -261,6 +329,8 @@ void USDGunVisionSequenceSubsystem::RefreshExistingBindings()
 	}
 
 	BindGameState(World->GetGameState<AShowDownGameStateBase>());
+	ResolveTableSpotlight();
+	ResolveZeroDarknessSpotlight();
 }
 
 void USDGunVisionSequenceSubsystem::HandleActorSpawned(AActor* SpawnedActor)
@@ -276,6 +346,19 @@ void USDGunVisionSequenceSubsystem::HandleActorSpawned(AActor* SpawnedActor)
 	else if (AShowDownGameStateBase* GameState = Cast<AShowDownGameStateBase>(SpawnedActor))
 	{
 		BindGameState(GameState);
+	}
+	else if (ASpotLight* Spotlight = Cast<ASpotLight>(SpawnedActor); IsTableSpotlightActor(Spotlight))
+	{
+		const bool bRestoreEnabled = bTableSpotlightEnabled;
+		TableSpotlight = Spotlight;
+		SetTableSpotlightEnabled(bRestoreEnabled);
+	}
+	else if (ASpotLight* ZeroDarknessLight = Cast<ASpotLight>(SpawnedActor);
+		IsZeroDarknessSpotlightActor(ZeroDarknessLight))
+	{
+		const bool bRestoreEnabled = bZeroDarknessSpotlightEnabled;
+		ZeroDarknessSpotlight = ZeroDarknessLight;
+		SetZeroDarknessSpotlightEnabled(bRestoreEnabled);
 	}
 }
 
@@ -322,15 +405,29 @@ void USDGunVisionSequenceSubsystem::BindGameState(AShowDownGameStateBase* GameSt
 		PreviousGameState->OnPhaseChanged.RemoveDynamic(
 			this,
 			&USDGunVisionSequenceSubsystem::HandlePhaseChanged);
+		PreviousGameState->OnTableCinematicCue.RemoveDynamic(
+			this,
+			&USDGunVisionSequenceSubsystem::HandleTableCinematicCue);
+		PreviousGameState->OnNameTagRoundStatusChanged.RemoveDynamic(
+			this,
+			&USDGunVisionSequenceSubsystem::HandleNameTagRoundStatusChanged);
 	}
 
 	BoundGameState = GameState;
+	bTurnSpotlightStateInitialized = false;
 	if (GameState)
 	{
 		GameState->OnPhaseChanged.AddUniqueDynamic(
 			this,
 			&USDGunVisionSequenceSubsystem::HandlePhaseChanged);
+		GameState->OnTableCinematicCue.AddUniqueDynamic(
+			this,
+			&USDGunVisionSequenceSubsystem::HandleTableCinematicCue);
+		GameState->OnNameTagRoundStatusChanged.AddUniqueDynamic(
+			this,
+			&USDGunVisionSequenceSubsystem::HandleNameTagRoundStatusChanged);
 		HandlePhaseChanged(GameState->CurrentPhase);
+		RefreshTurnSpotlightSoundState();
 	}
 }
 
@@ -370,9 +467,161 @@ void USDGunVisionSequenceSubsystem::SynchronizePendingVisionDirectors()
 		if (ASDVisionDirector* VisionDirector = PendingDirector.Get())
 		{
 			VisionDirector->SetDarknessStrength(DesiredDarknessStrength);
+			switch (IntroSequenceState)
+		{
+		case EIntroSequenceState::WaitingForBeat:
+		case EIntroSequenceState::Collapsing:
+		case EIntroSequenceState::Idle:
+		default:
+			VisionDirector->SetVisionRange(
+					VisionDirector->GetTableVisionRadius(),
+					VisionDirector->GetTableVisionFeather());
+				break;
+			}
 		}
 	}
 	PendingVisionDirectorSync.Reset();
+}
+
+void USDGunVisionSequenceSubsystem::QueueMatchEntryPresentation()
+{
+	if (bMatchPresentationActivated || IntroSequenceState != EIntroSequenceState::Idle)
+	{
+		return;
+	}
+
+	ResetToIdle(true);
+	bMatchPresentationActivated = true;
+	bInitialDealPresentationActive = false;
+	bPostShotBrightHoldActive = false;
+	IntroSequenceState = EIntroSequenceState::Idle;
+	IntroSequenceElapsedTime = 0.0f;
+	SetDarknessImmediate(0.0f);
+	SetVisionRangeImmediateToTable();
+}
+
+void USDGunVisionSequenceSubsystem::ResetMatchPresentationForHub()
+{
+	IntroSequenceState = EIntroSequenceState::Idle;
+	IntroSequenceElapsedTime = 0.0f;
+	bMatchPresentationActivated = false;
+	bInitialDealPresentationActive = false;
+	bPostShotBrightHoldActive = false;
+	ResetToIdle(true);
+	SetVisionRangeImmediateToTable();
+	SetTableSpotlightEnabled(false);
+	SetZeroDarknessSpotlightEnabled(false);
+}
+
+void USDGunVisionSequenceSubsystem::StartMatchIntro()
+{
+	bMatchPresentationActivated = true;
+	bPostShotBrightHoldActive = false;
+	SequenceState = ESequenceState::Idle;
+	IntroSequenceState = EIntroSequenceState::Idle;
+	IntroSequenceElapsedTime = 0.0f;
+	SetDarknessImmediate(0.0f);
+	SetVisionRangeImmediateToTable();
+}
+
+void USDGunVisionSequenceSubsystem::AdvanceIntroSequence(float DeltaTime)
+{
+	if (IntroSequenceState == EIntroSequenceState::Idle)
+	{
+		return;
+	}
+
+	IntroSequenceElapsedTime += FMath::Max(0.0f, DeltaTime);
+	switch (IntroSequenceState)
+	{
+	case EIntroSequenceState::WaitingForBeat:
+		if (IntroSequenceElapsedTime >= MatchEntryBeatDelay)
+		{
+			StartMatchIntro();
+		}
+		break;
+	case EIntroSequenceState::Collapsing:
+		if (IntroSequenceElapsedTime >= IntroCollapseDuration)
+		{
+			IntroSequenceState = EIntroSequenceState::Idle;
+			IntroSequenceElapsedTime = 0.0f;
+		}
+		break;
+	case EIntroSequenceState::Idle:
+	default:
+		break;
+	}
+}
+
+void USDGunVisionSequenceSubsystem::SetVisionRangeImmediateToTable()
+{
+	if (!HasLocalPresentationView())
+	{
+		return;
+	}
+
+	for (int32 Index = VisionDirectors.Num() - 1; Index >= 0; --Index)
+	{
+		if (ASDVisionDirector* VisionDirector = VisionDirectors[Index].Get())
+		{
+			VisionDirector->SetVisionRange(
+				VisionDirector->GetTableVisionRadius(),
+				VisionDirector->GetTableVisionFeather());
+		}
+		else
+		{
+			VisionDirectors.RemoveAtSwap(Index);
+		}
+	}
+}
+
+void USDGunVisionSequenceSubsystem::SetVisionRangeImmediateToIntroWide()
+{
+	if (!HasLocalPresentationView())
+	{
+		return;
+	}
+
+	for (int32 Index = VisionDirectors.Num() - 1; Index >= 0; --Index)
+	{
+		if (ASDVisionDirector* VisionDirector = VisionDirectors[Index].Get())
+		{
+			VisionDirector->SetVisionRange(
+				VisionDirector->GetIntroWideVisionRadius(),
+				VisionDirector->GetIntroWideVisionFeather());
+		}
+		else
+		{
+			VisionDirectors.RemoveAtSwap(Index);
+		}
+	}
+}
+
+void USDGunVisionSequenceSubsystem::BlendVisionRangeToTable(
+	float Duration,
+	ESDVisionBlendEase EaseMode)
+{
+	if (!HasLocalPresentationView())
+	{
+		return;
+	}
+
+	for (int32 Index = VisionDirectors.Num() - 1; Index >= 0; --Index)
+	{
+		if (ASDVisionDirector* VisionDirector = VisionDirectors[Index].Get())
+		{
+			VisionDirector->BlendToVisionRange(
+				VisionDirector->GetTableVisionRadius(),
+				VisionDirector->GetTableVisionFeather(),
+				Duration,
+				EaseMode,
+				2.0f);
+		}
+		else
+		{
+			VisionDirectors.RemoveAtSwap(Index);
+		}
+	}
 }
 
 void USDGunVisionSequenceSubsystem::SetDarknessImmediate(float Strength)
@@ -425,10 +674,245 @@ void USDGunVisionSequenceSubsystem::BlendDarkness(
 	}
 }
 
+ASpotLight* USDGunVisionSequenceSubsystem::ResolveTableSpotlight()
+{
+	if (ASpotLight* CachedSpotlight = TableSpotlight.Get())
+	{
+		return CachedSpotlight;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	for (TActorIterator<ASpotLight> It(World); It; ++It)
+	{
+		if (!IsTableSpotlightActor(*It))
+		{
+			continue;
+		}
+
+		TableSpotlight = *It;
+		if (const USpotLightComponent* Light = Cast<USpotLightComponent>(It->GetLightComponent());
+			Light && !Light->bAffectsWorld)
+		{
+			UE_LOG(LogTemp, Error,
+				TEXT("SpotLight6 has Affects World disabled. Keep it enabled and use runtime visibility for the reveal light."));
+		}
+		return *It;
+	}
+
+	return nullptr;
+}
+
+ASpotLight* USDGunVisionSequenceSubsystem::ResolveZeroDarknessSpotlight()
+{
+	if (ASpotLight* CachedSpotlight = ZeroDarknessSpotlight.Get())
+	{
+		return CachedSpotlight;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	for (TActorIterator<ASpotLight> It(World); It; ++It)
+	{
+		if (!IsZeroDarknessSpotlightActor(*It))
+		{
+			continue;
+		}
+
+		ZeroDarknessSpotlight = *It;
+		if (const USpotLightComponent* Light = Cast<USpotLightComponent>(It->GetLightComponent());
+			Light && !Light->bAffectsWorld)
+		{
+			UE_LOG(LogTemp, Error,
+				TEXT("SpotLight7 has Affects World disabled. Keep it enabled and use runtime visibility for the zero-darkness light."));
+		}
+		return *It;
+	}
+
+	return nullptr;
+}
+
+bool USDGunVisionSequenceSubsystem::SetTableSpotlightEnabled(bool bEnabled)
+{
+	ASpotLight* Spotlight = ResolveTableSpotlight();
+	USpotLightComponent* Light = Spotlight
+		? Cast<USpotLightComponent>(Spotlight->GetLightComponent())
+		: nullptr;
+	if (!Spotlight || !Light)
+	{
+		// Keep the requested state. A streamed map light can appear after its cue,
+		// and HandleActorSpawned must be able to restore that state immediately.
+		bTableSpotlightEnabled = bEnabled;
+		return false;
+	}
+
+	if (Light->Mobility == EComponentMobility::Static)
+	{
+		Light->SetMobility(EComponentMobility::Movable);
+	}
+
+	const bool bWasEnabled = Light->IsVisible()
+		&& !Light->bHiddenInGame
+		&& !Spotlight->IsHidden();
+	Light->SetVisibility(bEnabled, true);
+	Light->SetHiddenInGame(!bEnabled, true);
+	Spotlight->SetActorHiddenInGame(!bEnabled);
+	bTableSpotlightEnabled = bEnabled;
+	return bWasEnabled != bEnabled;
+}
+
+bool USDGunVisionSequenceSubsystem::SetZeroDarknessSpotlightEnabled(bool bEnabled)
+{
+	const bool bTableSpotlightChanged = bEnabled
+		? SetTableSpotlightEnabled(false)
+		: false;
+	ASpotLight* Spotlight = ResolveZeroDarknessSpotlight();
+	USpotLightComponent* Light = Spotlight
+		? Cast<USpotLightComponent>(Spotlight->GetLightComponent())
+		: nullptr;
+	if (!Spotlight || !Light)
+	{
+		bZeroDarknessSpotlightEnabled = bEnabled;
+		return bTableSpotlightChanged;
+	}
+
+	if (Light->Mobility == EComponentMobility::Static)
+	{
+		Light->SetMobility(EComponentMobility::Movable);
+	}
+
+	const bool bWasEnabled = Light->IsVisible()
+		&& !Light->bHiddenInGame
+		&& !Spotlight->IsHidden();
+	Light->SetVisibility(bEnabled, true);
+	Light->SetHiddenInGame(!bEnabled, true);
+	Spotlight->SetActorHiddenInGame(!bEnabled);
+	bZeroDarknessSpotlightEnabled = bEnabled;
+	return bTableSpotlightChanged || bWasEnabled != bEnabled;
+}
+
+void USDGunVisionSequenceSubsystem::PlaySpotlightTransitionSound() const
+{
+	if (const UWorld* World = GetWorld())
+	{
+		if (UGameInstance* GameInstance = World->GetGameInstance())
+		{
+			if (UShowDownAudioSubsystem* AudioSubsystem =
+				GameInstance->GetSubsystem<UShowDownAudioSubsystem>())
+			{
+				AudioSubsystem->NotifySpotlightChanged();
+			}
+		}
+	}
+}
+
+void USDGunVisionSequenceSubsystem::RefreshTurnSpotlightSoundState()
+{
+	const AShowDownGameStateBase* GameState = BoundGameState.Get();
+	if (!GameState)
+	{
+		bTurnSpotlightStateInitialized = false;
+		return;
+	}
+
+	const bool bTurnPhase = GameState->CurrentPhase == EShowDownPhase::Betting
+		|| GameState->CurrentPhase == EShowDownPhase::SelectCard;
+	const bool bVisible = bTurnPhase
+		&& GameState->NameTagTurnSlot != EShowDownPlayerSlot::None;
+	const bool bChanged = bTurnSpotlightStateInitialized
+		&& (bVisible != bLastTurnSpotlightVisible
+			|| (bVisible
+				&& (GameState->NameTagTurnSide != LastTurnSpotlightSide
+					|| GameState->NameTagTurnSlot != LastTurnSpotlightSlot)));
+
+	bTurnSpotlightStateInitialized = true;
+	bLastTurnSpotlightVisible = bVisible;
+	LastTurnSpotlightSide = GameState->NameTagTurnSide;
+	LastTurnSpotlightSlot = GameState->NameTagTurnSlot;
+	if (bChanged)
+	{
+		PlaySpotlightTransitionSound();
+	}
+}
+
+void USDGunVisionSequenceSubsystem::HandleNameTagRoundStatusChanged()
+{
+	RefreshTurnSpotlightSoundState();
+}
+
+void USDGunVisionSequenceSubsystem::ApplyPhasePresentationPolicy(EShowDownPhase Phase)
+{
+	if (bInitialDealPresentationActive || bPostShotBrightHoldActive)
+	{
+		return;
+	}
+
+	bool bSpotlightChanged = false;
+	switch (Phase)
+	{
+	case EShowDownPhase::SelectCard:
+		bMatchPresentationActivated = true;
+		SetVisionRangeImmediateToTable();
+		SetDarknessImmediate(0.0f);
+		bSpotlightChanged |= SetTableSpotlightEnabled(false);
+		bSpotlightChanged |= SetZeroDarknessSpotlightEnabled(true);
+		break;
+
+	case EShowDownPhase::Betting:
+		bMatchPresentationActivated = true;
+		SetVisionRangeImmediateToTable();
+		SetDarknessImmediate(BaseDarknessStrength);
+		bSpotlightChanged |= SetTableSpotlightEnabled(false);
+		bSpotlightChanged |= SetZeroDarknessSpotlightEnabled(false);
+		break;
+
+	case EShowDownPhase::Reveal:
+	case EShowDownPhase::Roulette:
+		return;
+
+	case EShowDownPhase::None:
+	default:
+		bSpotlightChanged |= SetTableSpotlightEnabled(false);
+		bSpotlightChanged |= SetZeroDarknessSpotlightEnabled(false);
+		ResetToIdle(false);
+		break;
+	}
+
+	if (bSpotlightChanged)
+	{
+		PlaySpotlightTransitionSound();
+	}
+}
+
 bool USDGunVisionSequenceSubsystem::IsRoulettePhase() const
 {
 	const AShowDownGameStateBase* GameState = BoundGameState.Get();
 	return GameState && GameState->CurrentPhase == EShowDownPhase::Roulette;
+}
+
+bool USDGunVisionSequenceSubsystem::IsRoulettePresentation(
+	const ASDSelfShotGunActor* GunActor) const
+{
+	// The reliable multiplayer presentation RPC can be processed before the
+	// separately replicated phase property on a delayed client. The gun's local
+	// scripted-shot context is authoritative for these presentation callbacks.
+	if (IsValid(GunActor) && GunActor->IsMultiplayerRoulettePresentation())
+	{
+		return true;
+	}
+
+	// Networked shots must retain the explicit presentation context. A reliable
+	// Reset can arrive before phase replication and invalidate a delayed local shot.
+	const UWorld* World = GetWorld();
+	return (!World || World->GetNetMode() == NM_Standalone) && IsRoulettePhase();
 }
 
 void USDGunVisionSequenceSubsystem::ResetToIdle(bool bImmediate)
@@ -438,15 +922,18 @@ void USDGunVisionSequenceSubsystem::ResetToIdle(bool bImmediate)
 	SequenceStageDuration = 0.0f;
 	ShotResolveDelay = 0.0f;
 	ActiveGun.Reset();
+	const float RestingDarknessStrength = bMatchPresentationActivated
+		? BaseDarknessStrength
+		: 0.0f;
 
 	if (bImmediate)
 	{
-		SetDarknessImmediate(0.0f);
+		SetDarknessImmediate(RestingDarknessStrength);
 	}
 	else
 	{
 		BlendDarkness(
-			0.0f,
+			RestingDarknessStrength,
 			PresentationFinishDuration,
 			ESDVisionBlendEase::EaseOut,
 			2.0f);
@@ -455,7 +942,7 @@ void USDGunVisionSequenceSubsystem::ResetToIdle(bool bImmediate)
 
 void USDGunVisionSequenceSubsystem::HandleGunRaised(ASDSelfShotGunActor* GunActor)
 {
-	if (!IsRoulettePhase())
+	if (!IsRoulettePresentation(GunActor))
 	{
 		ResetToIdle(true);
 		return;
@@ -466,6 +953,14 @@ void USDGunVisionSequenceSubsystem::HandleGunRaised(ASDSelfShotGunActor* GunActo
 		return;
 	}
 
+	bMatchPresentationActivated = true;
+	bPostShotBrightHoldActive = false;
+	if (SetZeroDarknessSpotlightEnabled(false))
+	{
+		PlaySpotlightTransitionSound();
+	}
+	IntroSequenceState = EIntroSequenceState::Idle;
+	IntroSequenceElapsedTime = 0.0f;
 	ActiveGun = GunActor;
 	SequenceState = ESequenceState::RaiseToTension;
 	SequenceElapsedTime = 0.0f;
@@ -488,7 +983,7 @@ void USDGunVisionSequenceSubsystem::HandleGunRaised(ASDSelfShotGunActor* GunActo
 
 void USDGunVisionSequenceSubsystem::HandleGunFired(ASDSelfShotGunActor* GunActor)
 {
-	if (!IsRoulettePhase())
+	if (!IsRoulettePresentation(GunActor))
 	{
 		ResetToIdle(true);
 		return;
@@ -499,16 +994,25 @@ void USDGunVisionSequenceSubsystem::HandleGunFired(ASDSelfShotGunActor* GunActor
 		return;
 	}
 
+	bMatchPresentationActivated = true;
 	ActiveGun = GunActor;
-	SequenceState = ESequenceState::LivePeakHold;
+	// FireGun emits this delegate on the real shot/result frame. That event owns
+	// the bright post-shot hold so pulling the trigger cannot reveal the scene
+	// before the gun actually fires.
+	SequenceState = ESequenceState::Idle;
 	SequenceElapsedTime = 0.0f;
-	SequenceStageDuration = LivePeakHoldDuration;
-	SetDarknessImmediate(PeakDarknessStrength);
+	SequenceStageDuration = 0.0f;
+	bPostShotBrightHoldActive = true;
+	SetDarknessImmediate(0.0f);
+	if (SetZeroDarknessSpotlightEnabled(true))
+	{
+		PlaySpotlightTransitionSound();
+	}
 }
 
 void USDGunVisionSequenceSubsystem::HandleGunEmptyFired(ASDSelfShotGunActor* GunActor)
 {
-	if (!IsRoulettePhase())
+	if (!IsRoulettePresentation(GunActor))
 	{
 		ResetToIdle(true);
 		return;
@@ -519,17 +1023,33 @@ void USDGunVisionSequenceSubsystem::HandleGunEmptyFired(ASDSelfShotGunActor* Gun
 		return;
 	}
 
+	bMatchPresentationActivated = true;
 	ActiveGun = GunActor;
-	SequenceState = ESequenceState::EmptyPeakHold;
+	SequenceState = ESequenceState::Idle;
 	SequenceElapsedTime = 0.0f;
-	SequenceStageDuration = EmptyPeakHoldDuration;
-	SetDarknessImmediate(PeakDarknessStrength);
+	SequenceStageDuration = 0.0f;
+	bPostShotBrightHoldActive = true;
+	SetDarknessImmediate(0.0f);
+	if (SetZeroDarknessSpotlightEnabled(true))
+	{
+		PlaySpotlightTransitionSound();
+	}
 }
 
 void USDGunVisionSequenceSubsystem::HandleGunPresentationFinished(ASDSelfShotGunActor* GunActor)
 {
 	if (ActiveGun.IsValid() && ActiveGun.Get() != GunActor)
 	{
+		return;
+	}
+
+	if (bPostShotBrightHoldActive)
+	{
+		SequenceState = ESequenceState::Idle;
+		SequenceElapsedTime = 0.0f;
+		SequenceStageDuration = 0.0f;
+		ShotResolveDelay = 0.0f;
+		ActiveGun.Reset();
 		return;
 	}
 
@@ -540,14 +1060,212 @@ void USDGunVisionSequenceSubsystem::HandleGunUnavailable(ASDSelfShotGunActor* Gu
 {
 	if (!ActiveGun.IsValid() || ActiveGun.Get() == GunActor)
 	{
-		ResetToIdle(true);
+		if (bPostShotBrightHoldActive)
+		{
+			SequenceState = ESequenceState::Idle;
+			SequenceElapsedTime = 0.0f;
+			SequenceStageDuration = 0.0f;
+			ShotResolveDelay = 0.0f;
+			ActiveGun.Reset();
+		}
+		else
+		{
+			ResetToIdle(true);
+		}
 	}
 }
 
 void USDGunVisionSequenceSubsystem::HandlePhaseChanged(EShowDownPhase NewPhase)
 {
-	if (NewPhase != EShowDownPhase::Roulette)
+	if (bPostShotBrightHoldActive && NewPhase != EShowDownPhase::Roulette)
 	{
-		ResetToIdle(true);
+		// Phase replication is the server-authoritative next-game boundary. Do
+		// not let a per-client timer restore Darkness ahead of that boundary.
+		bPostShotBrightHoldActive = false;
+	}
+	RefreshTurnSpotlightSoundState();
+	ApplyPhasePresentationPolicy(NewPhase);
+}
+
+void USDGunVisionSequenceSubsystem::HandleTableCinematicCue(
+	ESDTableCinematicCue Cue,
+	uint8 PlayerSlotMask)
+{
+	switch (Cue)
+	{
+	case ESDTableCinematicCue::MatchIntro:
+		{
+			bool bSpotlightChanged = ActiveTargetSpotlightMask != 0;
+			ActiveTargetSpotlightMask = 0;
+			QueueMatchEntryPresentation();
+			bSpotlightChanged |= SetTableSpotlightEnabled(false);
+			bSpotlightChanged |= SetZeroDarknessSpotlightEnabled(true);
+			if (bSpotlightChanged)
+			{
+				PlaySpotlightTransitionSound();
+			}
+		}
+		break;
+
+	case ESDTableCinematicCue::PreRevealBlackout:
+		{
+			bool bSpotlightChanged = ActiveTargetSpotlightMask != 0;
+			ActiveTargetSpotlightMask = 0;
+			bSpotlightChanged |= SetTableSpotlightEnabled(false);
+			bSpotlightChanged |= SetZeroDarknessSpotlightEnabled(false);
+			if (bSpotlightChanged)
+			{
+				PlaySpotlightTransitionSound();
+			}
+		}
+		bMatchPresentationActivated = true;
+		bInitialDealPresentationActive = false;
+		bPostShotBrightHoldActive = false;
+		IntroSequenceState = EIntroSequenceState::Idle;
+		IntroSequenceElapsedTime = 0.0f;
+		BlendVisionRangeToTable(0.45f, ESDVisionBlendEase::EaseOut);
+		BlendDarkness(
+			PeakDarknessStrength,
+			PreRevealDarkenDuration,
+			ESDVisionBlendEase::EaseInOut,
+			2.4f);
+		break;
+
+	case ESDTableCinematicCue::RevealStarted:
+		bMatchPresentationActivated = true;
+		{
+			bool bSpotlightChanged = ActiveTargetSpotlightMask != 0;
+			ActiveTargetSpotlightMask = 0;
+			bSpotlightChanged |= SetZeroDarknessSpotlightEnabled(false);
+			if (bSpotlightChanged)
+			{
+				PlaySpotlightTransitionSound();
+			}
+		}
+		SetDarknessImmediate(PeakDarknessStrength);
+		break;
+
+	case ESDTableCinematicCue::LoserSpotlight:
+		bMatchPresentationActivated = true;
+		SetDarknessImmediate(PeakDarknessStrength);
+		{
+			const bool bTargetsChanged = ActiveTargetSpotlightMask != PlayerSlotMask;
+			ActiveTargetSpotlightMask = PlayerSlotMask;
+			const bool bSpotlightChanged = SetTableSpotlightEnabled(false)
+				| SetZeroDarknessSpotlightEnabled(false)
+				| bTargetsChanged;
+			if (bSpotlightChanged)
+			{
+				PlaySpotlightTransitionSound();
+			}
+		}
+		break;
+
+	case ESDTableCinematicCue::TableSpotlightOn:
+		if (!bZeroDarknessSpotlightEnabled && SetTableSpotlightEnabled(true))
+		{
+			PlaySpotlightTransitionSound();
+		}
+		break;
+	case ESDTableCinematicCue::TableSpotlightOff:
+		if (SetTableSpotlightEnabled(false))
+		{
+			PlaySpotlightTransitionSound();
+		}
+		break;
+
+	case ESDTableCinematicCue::BetFocusStarted:
+		bMatchPresentationActivated = true;
+		BlendDarkness(
+			BetFocusDarknessStrength,
+			BetFocusDarknessBlendDuration,
+			ESDVisionBlendEase::EaseOut,
+			2.0f);
+		break;
+
+	case ESDTableCinematicCue::BetFocusEnded:
+		BlendDarkness(
+			BaseDarknessStrength,
+			BetFocusDarknessBlendDuration,
+			ESDVisionBlendEase::EaseIn,
+			2.0f);
+		break;
+
+	case ESDTableCinematicCue::TriggerPullStarted:
+		{
+			bool bSpotlightChanged = (ActiveTargetSpotlightMask & PlayerSlotMask) != 0;
+			ActiveTargetSpotlightMask &= ~PlayerSlotMask;
+			bSpotlightChanged |= SetTableSpotlightEnabled(false);
+			// Trigger travel only clears the target cue. Darkness and the bright
+			// spotlight switch together from the real fired/empty-fired callback.
+			if (bSpotlightChanged)
+			{
+				PlaySpotlightTransitionSound();
+			}
+		}
+		break;
+
+	case ESDTableCinematicCue::InitialDealStarted:
+		bMatchPresentationActivated = true;
+		bInitialDealPresentationActive = true;
+		bPostShotBrightHoldActive = false;
+		IntroSequenceState = EIntroSequenceState::Idle;
+		IntroSequenceElapsedTime = 0.0f;
+		SetVisionRangeImmediateToTable();
+		SetDarknessImmediate(0.0f);
+		{
+			bool bSpotlightChanged = ActiveTargetSpotlightMask != 0;
+			ActiveTargetSpotlightMask = 0;
+			bSpotlightChanged |= SetTableSpotlightEnabled(false);
+			bSpotlightChanged |= SetZeroDarknessSpotlightEnabled(true);
+			if (bSpotlightChanged)
+			{
+				PlaySpotlightTransitionSound();
+			}
+		}
+		break;
+
+	case ESDTableCinematicCue::InitialDealFinished:
+		bInitialDealPresentationActive = false;
+		{
+			bool bSpotlightChanged = ActiveTargetSpotlightMask != 0;
+			ActiveTargetSpotlightMask = 0;
+			bSpotlightChanged |= SetTableSpotlightEnabled(false);
+			bSpotlightChanged |= SetZeroDarknessSpotlightEnabled(false);
+			if (bSpotlightChanged)
+			{
+				PlaySpotlightTransitionSound();
+			}
+		}
+		BlendDarkness(
+			BaseDarknessStrength,
+			PresentationFinishDuration,
+			ESDVisionBlendEase::EaseInOut,
+			2.0f);
+		break;
+
+	case ESDTableCinematicCue::Reset:
+	default:
+		bInitialDealPresentationActive = false;
+		bPostShotBrightHoldActive = false;
+		IntroSequenceState = EIntroSequenceState::Idle;
+		IntroSequenceElapsedTime = 0.0f;
+		BlendVisionRangeToTable(0.6f, ESDVisionBlendEase::EaseOut);
+		{
+			bool bSpotlightChanged = ActiveTargetSpotlightMask != 0;
+			ActiveTargetSpotlightMask = 0;
+			bSpotlightChanged |= SetTableSpotlightEnabled(false);
+			bSpotlightChanged |= SetZeroDarknessSpotlightEnabled(false);
+			if (bSpotlightChanged)
+			{
+				PlaySpotlightTransitionSound();
+			}
+		}
+		ResetToIdle(false);
+		if (const AShowDownGameStateBase* GameState = BoundGameState.Get())
+		{
+			ApplyPhasePresentationPolicy(GameState->CurrentPhase);
+		}
+		break;
 	}
 }

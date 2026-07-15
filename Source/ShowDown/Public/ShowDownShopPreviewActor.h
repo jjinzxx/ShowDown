@@ -4,7 +4,6 @@
 #include "GameFramework/Actor.h"
 #include "ShowDownShopPreviewActor.generated.h"
 
-class UAnimInstance;
 class USceneComponent;
 class USkeletalMeshComponent;
 class UShowDownCharacterSkinCatalog;
@@ -14,7 +13,7 @@ class UShowDownCharacterSkinCatalog;
  * It deliberately owns just a mesh so opening the shop cannot trigger any
  * gameplay character logic, sockets, weapons, cards, or network state.
  */
-UCLASS(NotBlueprintable)
+UCLASS(Blueprintable)
 class SHOWDOWN_API AShowDownShopPreviewActor : public AActor
 {
 	GENERATED_BODY()
@@ -30,18 +29,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Shop Preview")
 	FString GetResolvedSkinId() const { return ResolvedSkinId; }
 
-private:
-	UPROPERTY(VisibleAnywhere, Category = "ShowDown|Shop Preview")
+protected:
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Shop Preview")
 	TObjectPtr<USceneComponent> SceneRoot;
 
-	UPROPERTY(VisibleAnywhere, Category = "ShowDown|Shop Preview")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Shop Preview")
 	TObjectPtr<USkeletalMeshComponent> PreviewMesh;
 
-	UPROPERTY(Transient)
+	/** Optional catalog containing per-skin meshes and shop animations. */
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "ShowDown|Shop Preview")
 	TObjectPtr<UShowDownCharacterSkinCatalog> SkinCatalog;
 
-	UPROPERTY()
-	TSubclassOf<UAnimInstance> DefaultPreviewAnimClass;
-
+private:
+	UPROPERTY(Transient)
 	FString ResolvedSkinId;
 };
