@@ -459,10 +459,8 @@ void UShowDownMainMenuWidget::HandleShopClicked()
 	USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
 		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
 		: nullptr;
-	if (SupabaseSubsystem)
+	if (SupabaseSubsystem && SupabaseSubsystem->HasCosmeticDataSnapshot())
 	{
-		SupabaseSubsystem->LoadCosmeticData();
-
 		const TArray<FShowDownSkin> ShopSkins = SupabaseSubsystem->GetShopSkins();
 		const TArray<FString> OwnedSkinIds = SupabaseSubsystem->GetOwnedSkinIds();
 
@@ -504,6 +502,13 @@ void UShowDownMainMenuWidget::HandleShopClicked()
 		SetVisibility(ESlateVisibility::Collapsed);
 		ShopWidget->AddToViewport();
 		ShopWidget->SetKeyboardFocus();
+
+		// The widget must subscribe to the load result before a request starts.
+		// Ensure also preserves a complete cached snapshot when reopening the shop.
+		if (SupabaseSubsystem)
+		{
+			SupabaseSubsystem->EnsureCosmeticDataLoaded();
+		}
 	}
 }
 

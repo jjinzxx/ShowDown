@@ -110,9 +110,15 @@ AShowDownCharacter::AShowDownCharacter()
 		TEXT("/Game/Character/hoodman_default_/hoodman.hoodman"));
 	static ConstructorHelpers::FObjectFinder<USkeletalMesh> BuiltInMicuMeshFinder(
 		TEXT("/Game/Character/micu/Tut_Hip_Hop_Dance__1_.Tut_Hip_Hop_Dance__1_"));
+	static ConstructorHelpers::FObjectFinder<UShowDownCharacterSkinCatalog> DefaultCharacterSkinCatalog(
+		TEXT("/Game/Data/Characters/DA_CharacterSkinCatalog"));
 	BuiltInRobotMesh = DefaultRobotMesh.Object;
 	BuiltInHoodmanMesh = BuiltInHoodmanMeshFinder.Object;
 	BuiltInMicuMesh = BuiltInMicuMeshFinder.Object;
+	if (DefaultCharacterSkinCatalog.Succeeded())
+	{
+		CharacterSkinCatalog = DefaultCharacterSkinCatalog.Object;
+	}
 	if (BuiltInRobotMesh)
 	{
 		CharacterMesh->SetSkeletalMesh(BuiltInRobotMesh);
@@ -381,8 +387,14 @@ void AShowDownCharacter::SetCharacterSkinId(const FString& NewSkinId)
 	const FString PreviousSkinId = CharacterSkinId;
 	FShowDownCharacterSkinDefinition Definition;
 	FString ResolvedSkinId;
+	const UShowDownCharacterSkinCatalog* RuntimeCatalog =
+		UShowDownCharacterSkinCatalog::LoadDefaultCatalog();
+	if (!RuntimeCatalog)
+	{
+		RuntimeCatalog = CharacterSkinCatalog;
+	}
 	UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
-		CharacterSkinCatalog,
+		RuntimeCatalog,
 		NewSkinId,
 		Definition,
 		ResolvedSkinId);
@@ -1165,8 +1177,14 @@ void AShowDownCharacter::ApplyCharacterSkin()
 
 	FShowDownCharacterSkinDefinition Definition;
 	FString ResolvedSkinId;
+	const UShowDownCharacterSkinCatalog* RuntimeCatalog =
+		UShowDownCharacterSkinCatalog::LoadDefaultCatalog();
+	if (!RuntimeCatalog)
+	{
+		RuntimeCatalog = CharacterSkinCatalog;
+	}
 	UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
-		CharacterSkinCatalog,
+		RuntimeCatalog,
 		CharacterSkinId,
 		Definition,
 		ResolvedSkinId);

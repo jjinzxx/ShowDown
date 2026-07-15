@@ -3,24 +3,72 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
 #include "Components/Button.h"
-#include "Components/ComboBoxString.h"
-#include "Components/HorizontalBox.h"
-#include "Components/HorizontalBoxSlot.h"
-#include "Components/Spacer.h"
+#include "Components/CanvasPanel.h"
+#include "Components/CanvasPanelSlot.h"
 #include "Components/TextBlock.h"
-#include "Components/VerticalBox.h"
-#include "Components/VerticalBoxSlot.h"
 #include "Engine/GameInstance.h"
 #include "Input/Reply.h"
 #include "InputCoreTypes.h"
-#include "ShowDownCharacterSkinCatalog.h"
 #include "ShowDownMainMenuWidget.h"
-#include "SupabaseSubsystem.h"
+#include "Styling/CoreStyle.h"
+#include "Styling/SlateTypes.h"
+
+namespace
+{
+	const FLinearColor ShopInk(0.93f, 0.94f, 0.96f, 1.0f);
+	const FLinearColor ShopMutedInk(0.62f, 0.64f, 0.68f, 1.0f);
+	const FLinearColor ShopError(0.94f, 0.2f, 0.18f, 1.0f);
+	const FLinearColor ShopSuccess(0.35f, 0.88f, 0.55f, 1.0f);
+
+	FSlateBrush MakeFlatBrush(const FLinearColor& Color)
+	{
+		FSlateBrush Brush;
+		Brush.DrawAs = ESlateBrushDrawType::Box;
+		Brush.TintColor = FSlateColor(Color);
+		Brush.Margin = FMargin(0.08f);
+		return Brush;
+	}
+
+	FButtonStyle MakeShopButtonStyle(const FLinearColor& Accent)
+	{
+		FButtonStyle Style;
+		Style.SetNormal(MakeFlatBrush(FLinearColor(0.025f, 0.025f, 0.03f, 0.9f)));
+		Style.SetHovered(MakeFlatBrush(FLinearColor(
+			FMath::Max(0.08f, Accent.R * 0.32f),
+			FMath::Max(0.08f, Accent.G * 0.32f),
+			FMath::Max(0.08f, Accent.B * 0.32f),
+			0.96f)));
+		Style.SetPressed(MakeFlatBrush(FLinearColor(
+			Accent.R * 0.2f,
+			Accent.G * 0.2f,
+			Accent.B * 0.2f,
+			1.0f)));
+		Style.SetDisabled(MakeFlatBrush(FLinearColor(0.035f, 0.035f, 0.04f, 0.5f)));
+		Style.SetNormalPadding(FMargin(14.0f, 7.0f));
+		Style.SetPressedPadding(FMargin(14.0f, 9.0f, 14.0f, 5.0f));
+		return Style;
+	}
+
+	EShowDownCharacterSkinRarity ParseServerRarity(const FString& Rarity)
+	{
+		if (Rarity.Equals(TEXT("rare"), ESearchCase::IgnoreCase))
+		{
+			return EShowDownCharacterSkinRarity::Rare;
+		}
+		if (Rarity.Equals(TEXT("epic"), ESearchCase::IgnoreCase))
+		{
+			return EShowDownCharacterSkinRarity::Epic;
+		}
+		if (Rarity.Equals(TEXT("legendary"), ESearchCase::IgnoreCase))
+		{
+			return EShowDownCharacterSkinRarity::Legendary;
+		}
+		return EShowDownCharacterSkinRarity::Common;
+	}
+}
 
 TSharedRef<SWidget> UShowDownShopWidget::RebuildWidget()
 {
-	// WBP 기반 위젯은 에디터가 WidgetTree를 만들어주지만,
-	// 이 데모 Shop은 C++만으로 만들기 때문에 Slate 위젯 생성 전에 트리를 직접 구성합니다.
 	BuildWidgetTreeIfNeeded();
 	return Super::RebuildWidget();
 }
@@ -30,149 +78,137 @@ void UShowDownShopWidget::SetMainMenuWidget(UShowDownMainMenuWidget* InMainMenuW
 	MainMenuWidget = InMainMenuWidget;
 }
 
-void UShowDownShopWidget::SetUseLegacyBackNavigation(bool bInUseLegacyBackNavigation)
+void UShowDownShopWidget::SetUseLegacyBackNavigation(const bool bInUseLegacyBackNavigation)
 {
 	bUseLegacyBackNavigation = bInUseLegacyBackNavigation;
+}
+
+void UShowDownShopWidget::SetSkinCatalog(UShowDownCharacterSkinCatalog* InSkinCatalog)
+{
+	SkinCatalog = InSkinCatalog;
+	if (IsConstructed())
+	{
+		RefreshDisplayItems();
+	}
 }
 
 void UShowDownShopWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
 
-	// 방향키/Enter/Escape 단축키를 받기 위해 Shop 위젯 자체가 포커스를 가져야 합니다.
 	SetIsFocusable(true);
 	SetKeyboardFocus();
+	bCosmeticLoadFailed = false;
 
-	if (UGameInstance* GameInstance = GetGameInstance())
+	if (USupabaseSubsystem* SupabaseSubsystem = GetSupabaseSubsystem())
 	{
-		if (USupabaseSubsystem* SupabaseSubsystem = GameInstance->GetSubsystem<USupabaseSubsystem>())
-		{
-			SupabaseSubsystem->OnCosmeticDataLoaded.AddUniqueDynamic(
-				this,
-				&UShowDownShopWidget::HandleCosmeticDataLoaded
-			);
-
-			SupabaseSubsystem->OnSkinEquipped.AddUniqueDynamic(
-				this,
-				&UShowDownShopWidget::HandleSkinEquipped
-			);
-
-			SupabaseSubsystem->OnSkinSetPurchased.AddUniqueDynamic(
-				this,
-				&UShowDownShopWidget::HandleSkinSetPurchased
-			);
-		}
-	}
-
-	if (ComboBox_Skins)
-	{
-		ComboBox_Skins->OnSelectionChanged.AddUniqueDynamic(
+		SupabaseSubsystem->OnCosmeticDataLoaded.AddUniqueDynamic(
 			this,
-			&UShowDownShopWidget::HandleSkinSelectionChanged
-		);
+			&UShowDownShopWidget::HandleCosmeticDataLoaded);
+		SupabaseSubsystem->OnSkinEquipped.AddUniqueDynamic(
+			this,
+			&UShowDownShopWidget::HandleSkinEquipped);
+		SupabaseSubsystem->OnSkinSetPurchased.AddUniqueDynamic(
+			this,
+			&UShowDownShopWidget::HandleSkinSetPurchased);
 	}
 
-	if (Button_Equip)
+	if (Button_Previous)
 	{
-		Button_Equip->OnClicked.AddUniqueDynamic(this, &UShowDownShopWidget::HandleEquipClicked);
+		Button_Previous->OnClicked.AddUniqueDynamic(this, &UShowDownShopWidget::HandlePreviousClicked);
 	}
-
-	if (Button_Buy)
+	if (Button_Next)
 	{
-		Button_Buy->OnClicked.AddUniqueDynamic(this, &UShowDownShopWidget::HandleBuyClicked);
+		Button_Next->OnClicked.AddUniqueDynamic(this, &UShowDownShopWidget::HandleNextClicked);
 	}
-
-	if (Button_Refresh)
+	if (Button_PrimaryAction)
 	{
-		Button_Refresh->OnClicked.AddUniqueDynamic(this, &UShowDownShopWidget::HandleRefreshClicked);
+		Button_PrimaryAction->OnClicked.AddUniqueDynamic(
+			this,
+			&UShowDownShopWidget::HandlePrimaryActionClicked);
 	}
-
 	if (Button_Back)
 	{
 		Button_Back->OnClicked.AddUniqueDynamic(this, &UShowDownShopWidget::HandleBackClicked);
 	}
 
-	RefreshSkinOptions();
+	RefreshDisplayItems();
 }
 
 void UShowDownShopWidget::NativeDestruct()
 {
-	if (ComboBox_Skins)
+	// The Hub reuses this widget instance. Its placed preview actor is reset when
+	// leaving the screen, so the first selection must be broadcast again when
+	// the same widget is added back to the viewport.
+	LastBroadcastPreviewSkinId.Empty();
+
+	if (Button_Previous)
 	{
-		ComboBox_Skins->OnSelectionChanged.RemoveDynamic(this, &UShowDownShopWidget::HandleSkinSelectionChanged);
+		Button_Previous->OnClicked.RemoveDynamic(this, &UShowDownShopWidget::HandlePreviousClicked);
 	}
-	if (Button_Equip)
+	if (Button_Next)
 	{
-		Button_Equip->OnClicked.RemoveDynamic(this, &UShowDownShopWidget::HandleEquipClicked);
+		Button_Next->OnClicked.RemoveDynamic(this, &UShowDownShopWidget::HandleNextClicked);
 	}
-	if (Button_Buy)
+	if (Button_PrimaryAction)
 	{
-		Button_Buy->OnClicked.RemoveDynamic(this, &UShowDownShopWidget::HandleBuyClicked);
-	}
-	if (Button_Refresh)
-	{
-		Button_Refresh->OnClicked.RemoveDynamic(this, &UShowDownShopWidget::HandleRefreshClicked);
+		Button_PrimaryAction->OnClicked.RemoveDynamic(
+			this,
+			&UShowDownShopWidget::HandlePrimaryActionClicked);
 	}
 	if (Button_Back)
 	{
 		Button_Back->OnClicked.RemoveDynamic(this, &UShowDownShopWidget::HandleBackClicked);
 	}
 
-	// Shop을 열고 닫을 때 이벤트가 중복 연결되지 않도록 제거합니다.
-	if (UGameInstance* GameInstance = GetGameInstance())
+	if (USupabaseSubsystem* SupabaseSubsystem = GetSupabaseSubsystem())
 	{
-		if (USupabaseSubsystem* SupabaseSubsystem = GameInstance->GetSubsystem<USupabaseSubsystem>())
-		{
-			SupabaseSubsystem->OnCosmeticDataLoaded.RemoveDynamic(
-				this,
-				&UShowDownShopWidget::HandleCosmeticDataLoaded
-			);
-
-			SupabaseSubsystem->OnSkinEquipped.RemoveDynamic(
-				this,
-				&UShowDownShopWidget::HandleSkinEquipped
-			);
-
-			SupabaseSubsystem->OnSkinSetPurchased.RemoveDynamic(
-				this,
-				&UShowDownShopWidget::HandleSkinSetPurchased
-			);
-		}
+		SupabaseSubsystem->OnCosmeticDataLoaded.RemoveDynamic(
+			this,
+			&UShowDownShopWidget::HandleCosmeticDataLoaded);
+		SupabaseSubsystem->OnSkinEquipped.RemoveDynamic(
+			this,
+			&UShowDownShopWidget::HandleSkinEquipped);
+		SupabaseSubsystem->OnSkinSetPurchased.RemoveDynamic(
+			this,
+			&UShowDownShopWidget::HandleSkinSetPurchased);
 	}
 
 	Super::NativeDestruct();
 }
 
-FReply UShowDownShopWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
+FReply UShowDownShopWidget::NativeOnKeyDown(
+	const FGeometry& InGeometry,
+	const FKeyEvent& InKeyEvent)
 {
 	const FKey PressedKey = InKeyEvent.GetKey();
-
-	// 좌/우 입력은 실제 3D carousel을 붙이기 전까지 선택 index만 이동시킵니다.
-	if (PressedKey == EKeys::Left || PressedKey == EKeys::A)
+	if (PressedKey == EKeys::Left
+		|| PressedKey == EKeys::A
+		|| PressedKey == EKeys::Gamepad_DPad_Left
+		|| PressedKey == EKeys::Gamepad_LeftShoulder)
 	{
 		SelectSkinByOffset(-1);
 		return FReply::Handled();
 	}
 
-	if (PressedKey == EKeys::Right || PressedKey == EKeys::D)
+	if (PressedKey == EKeys::Right
+		|| PressedKey == EKeys::D
+		|| PressedKey == EKeys::Gamepad_DPad_Right
+		|| PressedKey == EKeys::Gamepad_RightShoulder)
 	{
 		SelectSkinByOffset(1);
 		return FReply::Handled();
 	}
 
-	if (PressedKey == EKeys::Enter || PressedKey == EKeys::SpaceBar)
+	if (PressedKey == EKeys::Enter
+		|| PressedKey == EKeys::SpaceBar
+		|| PressedKey == EKeys::Gamepad_FaceButton_Bottom)
 	{
-		HandleEquipClicked();
+		HandlePrimaryActionClicked();
 		return FReply::Handled();
 	}
 
-	if (PressedKey == EKeys::B)
-	{
-		HandleBuyClicked();
-		return FReply::Handled();
-	}
-
-	if (PressedKey == EKeys::Escape)
+	if (PressedKey == EKeys::Escape || PressedKey == EKeys::Gamepad_FaceButton_Right)
 	{
 		HandleBackClicked();
 		return FReply::Handled();
@@ -181,325 +217,513 @@ FReply UShowDownShopWidget::NativeOnKeyDown(const FGeometry& InGeometry, const F
 	return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
 }
 
-void UShowDownShopWidget::BuildWidgetTreeIfNeeded()
+EShowDownShopPrimaryActionState UShowDownShopWidget::ResolvePrimaryActionState(
+	const bool bHasCosmeticSnapshot,
+	const bool bCosmeticLoadInFlight,
+	const bool bCosmeticLoadFailed,
+	const bool bHasServerProduct,
+	const bool bOwned,
+	const bool bEquipped,
+	const bool bPurchaseInFlight,
+	const bool bEquipInFlight)
 {
-	// RebuildWidget이 여러 번 호출될 수 있으므로 이미 만든 경우에는 다시 만들지 않습니다.
-	if (!WidgetTree || Text_Title)
+	if (bPurchaseInFlight)
 	{
-		return;
+		return EShowDownShopPrimaryActionState::Purchasing;
 	}
-
-	// Keep the left side clear for the world-space character preview and place
-	// controls in an opaque panel on the right.
-	UHorizontalBox* RootLayout = WidgetTree->ConstructWidget<UHorizontalBox>(
-		UHorizontalBox::StaticClass(),
-		TEXT("ShopRoot"));
-	WidgetTree->RootWidget = RootLayout;
-
-	USpacer* PreviewViewport = WidgetTree->ConstructWidget<USpacer>(
-		USpacer::StaticClass(),
-		TEXT("PreviewViewport"));
-	UHorizontalBoxSlot* PreviewSlot = RootLayout->AddChildToHorizontalBox(PreviewViewport);
-	FSlateChildSize PreviewSize;
-	PreviewSize.SizeRule = ESlateSizeRule::Fill;
-	PreviewSize.Value = 2.0f;
-	PreviewSlot->SetSize(PreviewSize);
-
-	UBorder* RootBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("ShopPanel"));
-	RootBorder->SetPadding(FMargin(32.0f));
-	RootBorder->SetBrushColor(FLinearColor(0.02f, 0.02f, 0.02f, 0.92f));
-	UHorizontalBoxSlot* PanelSlot = RootLayout->AddChildToHorizontalBox(RootBorder);
-	FSlateChildSize PanelSize;
-	PanelSize.SizeRule = ESlateSizeRule::Fill;
-	PanelSize.Value = 1.0f;
-	PanelSlot->SetSize(PanelSize);
-
-	UVerticalBox* RootBox = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("ShopContent"));
-	RootBorder->SetContent(RootBox);
-
-	Text_Title = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_Title"));
-	Text_Title->SetText(FText::FromString(TEXT("Shop")));
-	Text_Title->SetColorAndOpacity(FSlateColor(FLinearColor::White));
-	RootBox->AddChildToVerticalBox(Text_Title);
-
-	Text_Status = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_Status"));
-	Text_Status->SetText(FText::FromString(TEXT("Left/Right: select. Enter/Space: equip. B: buy. Escape: back.")));
-	Text_Status->SetColorAndOpacity(FSlateColor(FLinearColor::White));
-	RootBox->AddChildToVerticalBox(Text_Status);
-
-	ComboBox_Skins = WidgetTree->ConstructWidget<UComboBoxString>(
-		UComboBoxString::StaticClass(),
-		TEXT("ComboBox_Skins")
-	);
-	RootBox->AddChildToVerticalBox(ComboBox_Skins);
-
-	Text_SelectedSkin = WidgetTree->ConstructWidget<UTextBlock>(
-		UTextBlock::StaticClass(),
-		TEXT("Text_SelectedSkin")
-	);
-	Text_SelectedSkin->SetText(FText::FromString(TEXT("No skin selected.")));
-	Text_SelectedSkin->SetColorAndOpacity(FSlateColor(FLinearColor::White));
-	RootBox->AddChildToVerticalBox(Text_SelectedSkin);
-
-	UHorizontalBox* ButtonRow = WidgetTree->ConstructWidget<UHorizontalBox>(
-		UHorizontalBox::StaticClass(),
-		TEXT("ButtonRow")
-	);
-	RootBox->AddChildToVerticalBox(ButtonRow);
-
-	Button_Equip = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), TEXT("Button_Equip"));
-	UTextBlock* Text_Equip = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_Equip"));
-	Text_Equip->SetText(FText::FromString(TEXT("Equip")));
-	Text_Equip->SetColorAndOpacity(FSlateColor(FLinearColor::Black));
-	Button_Equip->AddChild(Text_Equip);
-	ButtonRow->AddChild(Button_Equip);
-
-	Button_Buy = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), TEXT("Button_Buy"));
-	UTextBlock* Text_Buy = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_Buy"));
-	Text_Buy->SetText(FText::FromString(TEXT("Buy")));
-	Text_Buy->SetColorAndOpacity(FSlateColor(FLinearColor::Black));
-	Button_Buy->AddChild(Text_Buy);
-	ButtonRow->AddChild(Button_Buy);
-
-	Button_Refresh = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), TEXT("Button_Refresh"));
-	UTextBlock* Text_Refresh = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_Refresh"));
-	Text_Refresh->SetText(FText::FromString(TEXT("Refresh")));
-	Text_Refresh->SetColorAndOpacity(FSlateColor(FLinearColor::Black));
-	Button_Refresh->AddChild(Text_Refresh);
-	ButtonRow->AddChild(Button_Refresh);
-
-	Button_Back = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), TEXT("Button_Back"));
-	UTextBlock* Text_Back = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_Back"));
-	Text_Back->SetText(FText::FromString(TEXT("Back")));
-	Text_Back->SetColorAndOpacity(FSlateColor(FLinearColor::Black));
-	Button_Back->AddChild(Text_Back);
-	ButtonRow->AddChild(Button_Back);
+	if (bEquipInFlight)
+	{
+		return EShowDownShopPrimaryActionState::Equipping;
+	}
+	if (bCosmeticLoadInFlight)
+	{
+		return EShowDownShopPrimaryActionState::Loading;
+	}
+	if (!bHasCosmeticSnapshot)
+	{
+		return bCosmeticLoadFailed
+			? EShowDownShopPrimaryActionState::Unavailable
+			: EShowDownShopPrimaryActionState::Loading;
+	}
+	if (!bHasServerProduct)
+	{
+		return EShowDownShopPrimaryActionState::Unavailable;
+	}
+	if (!bOwned)
+	{
+		return EShowDownShopPrimaryActionState::Purchase;
+	}
+	return bEquipped
+		? EShowDownShopPrimaryActionState::Equipped
+		: EShowDownShopPrimaryActionState::Equip;
 }
 
-void UShowDownShopWidget::RefreshSkinOptions()
+int32 UShowDownShopWidget::WrapSelectionIndex(
+	const int32 CurrentIndex,
+	const int32 Offset,
+	const int32 ItemCount)
 {
-	if (!ComboBox_Skins)
+	if (ItemCount <= 0)
+	{
+		return INDEX_NONE;
+	}
+	if (CurrentIndex < 0 || CurrentIndex >= ItemCount)
+	{
+		return Offset < 0 ? ItemCount - 1 : 0;
+	}
+
+	const int64 CandidateIndex = static_cast<int64>(CurrentIndex) + static_cast<int64>(Offset);
+	const int64 WrappedIndex = ((CandidateIndex % ItemCount) + ItemCount) % ItemCount;
+	return static_cast<int32>(WrappedIndex);
+}
+
+void UShowDownShopWidget::BuildWidgetTreeIfNeeded()
+{
+	if (!WidgetTree)
+	{
+		WidgetTree = NewObject<UWidgetTree>(this, TEXT("WidgetTree"));
+	}
+	if (WidgetTree->RootWidget)
 	{
 		return;
 	}
 
-	FString PreviousSelectedSkinId;
-	if (const FShowDownSkin* PreviousSelectedSkin = SkinsByOption.Find(SelectedOption))
+	UCanvasPanel* Root = WidgetTree->ConstructWidget<UCanvasPanel>(
+		UCanvasPanel::StaticClass(),
+		TEXT("RootCanvas"));
+	WidgetTree->RootWidget = Root;
+
+	auto AddPointAnchored = [Root](
+		UWidget* Widget,
+		const FVector2D& Anchor,
+		const FVector2D& Alignment,
+		const FVector2D& Position,
+		const FVector2D& Size)
 	{
-		// Refresh 후에도 가능하면 같은 상품을 계속 보고 있게 유지합니다.
-		PreviousSelectedSkinId = PreviousSelectedSkin->Id;
+		UCanvasPanelSlot* Slot = Root->AddChildToCanvas(Widget);
+		Slot->SetAnchors(FAnchors(Anchor.X, Anchor.Y));
+		Slot->SetAlignment(Alignment);
+		Slot->SetPosition(Position);
+		Slot->SetSize(Size);
+		return Slot;
+	};
+
+	auto MakeText = [this](
+		const TCHAR* Name,
+		const int32 Size,
+		const ETextJustify::Type Justification)
+	{
+		UTextBlock* Text = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), Name);
+		Text->SetColorAndOpacity(FSlateColor(ShopInk));
+		Text->SetJustification(Justification);
+		Text->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), Size));
+		return Text;
+	};
+
+	auto MakeButton = [this, &MakeText](const TCHAR* Name, const TCHAR* Label)
+	{
+		UButton* Button = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), Name);
+		Button->SetStyle(MakeShopButtonStyle(FLinearColor(0.72f, 0.12f, 0.08f, 1.0f)));
+		UTextBlock* LabelText = MakeText(
+			*FString::Printf(TEXT("%s_Label"), Name),
+			20,
+			ETextJustify::Center);
+		LabelText->SetText(FText::FromString(Label));
+		Button->SetContent(LabelText);
+		return Button;
+	};
+
+	UBorder* ScreenTint = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("ScreenTint"));
+	ScreenTint->SetBrushColor(FLinearColor(0.0f, 0.0f, 0.0f, 0.16f));
+	UCanvasPanelSlot* TintSlot = Root->AddChildToCanvas(ScreenTint);
+	TintSlot->SetAnchors(FAnchors(0.0f, 0.0f, 1.0f, 1.0f));
+	TintSlot->SetOffsets(FMargin(0.0f));
+
+	Button_Back = MakeButton(TEXT("Button_Back"), TEXT("뒤로"));
+	AddPointAnchored(Button_Back, FVector2D(0.03f, 0.055f), FVector2D::ZeroVector,
+		FVector2D::ZeroVector, FVector2D(190.0f, 52.0f));
+
+	Text_Coin = MakeText(TEXT("Text_Coin"), 20, ETextJustify::Right);
+	AddPointAnchored(Text_Coin, FVector2D(0.97f, 0.06f), FVector2D(1.0f, 0.0f),
+		FVector2D::ZeroVector, FVector2D(330.0f, 42.0f));
+
+	Text_SkinName = MakeText(TEXT("Text_SkinName"), 42, ETextJustify::Center);
+	AddPointAnchored(Text_SkinName, FVector2D(0.5f, 0.09f), FVector2D(0.5f, 0.0f),
+		FVector2D::ZeroVector, FVector2D(720.0f, 58.0f));
+
+	Border_RarityAccent = WidgetTree->ConstructWidget<UBorder>(
+		UBorder::StaticClass(),
+		TEXT("Border_RarityAccent"));
+	Border_RarityAccent->SetPadding(FMargin(18.0f, 4.0f));
+	Border_RarityAccent->SetBrushColor(FLinearColor(0.1f, 0.1f, 0.1f, 0.72f));
+	Text_Rarity = MakeText(TEXT("Text_Rarity"), 18, ETextJustify::Center);
+	Border_RarityAccent->SetContent(Text_Rarity);
+	AddPointAnchored(Border_RarityAccent, FVector2D(0.5f, 0.155f), FVector2D(0.5f, 0.0f),
+		FVector2D::ZeroVector, FVector2D(250.0f, 40.0f));
+
+	Text_Description = MakeText(TEXT("Text_Description"), 17, ETextJustify::Center);
+	Text_Description->SetColorAndOpacity(FSlateColor(ShopMutedInk));
+	Text_Description->SetAutoWrapText(true);
+	AddPointAnchored(Text_Description, FVector2D(0.5f, 0.205f), FVector2D(0.5f, 0.0f),
+		FVector2D::ZeroVector, FVector2D(720.0f, 72.0f));
+
+	Text_Price = MakeText(TEXT("Text_Price"), 24, ETextJustify::Center);
+	AddPointAnchored(Text_Price, FVector2D(0.5f, 0.76f), FVector2D(0.5f, 0.5f),
+		FVector2D::ZeroVector, FVector2D(340.0f, 44.0f));
+
+	Button_Previous = MakeButton(TEXT("Button_Previous"), TEXT("◀ 이전"));
+	AddPointAnchored(Button_Previous, FVector2D(0.15f, 0.86f), FVector2D(0.5f, 0.5f),
+		FVector2D::ZeroVector, FVector2D(240.0f, 66.0f));
+
+	Button_PrimaryAction = MakeButton(TEXT("Button_PrimaryAction"), TEXT("불러오는 중"));
+	Text_PrimaryAction = Cast<UTextBlock>(Button_PrimaryAction->GetContent());
+	AddPointAnchored(Button_PrimaryAction, FVector2D(0.5f, 0.86f), FVector2D(0.5f, 0.5f),
+		FVector2D::ZeroVector, FVector2D(320.0f, 72.0f));
+
+	Button_Next = MakeButton(TEXT("Button_Next"), TEXT("다음 ▶"));
+	AddPointAnchored(Button_Next, FVector2D(0.85f, 0.86f), FVector2D(0.5f, 0.5f),
+		FVector2D::ZeroVector, FVector2D(240.0f, 66.0f));
+
+	Text_Status = MakeText(TEXT("Text_Status"), 16, ETextJustify::Center);
+	Text_Status->SetColorAndOpacity(FSlateColor(ShopMutedInk));
+	AddPointAnchored(Text_Status, FVector2D(0.5f, 0.94f), FVector2D(0.5f, 0.5f),
+		FVector2D::ZeroVector, FVector2D(900.0f, 42.0f));
+}
+
+void UShowDownShopWidget::RefreshDisplayItems(const bool bAllowPreviewBroadcast)
+{
+	FString PreviousSkinId;
+	if (const FShopDisplayItem* PreviousItem = GetSelectedItem())
+	{
+		PreviousSkinId = PreviousItem->CharacterSkinId;
 	}
 
-	ComboBox_Skins->ClearOptions();
-	SkinsByOption.Empty();
-	OrderedSkinOptions.Empty();
-	SelectedOption.Empty();
-	SelectedSkinIndex = INDEX_NONE;
+	DisplayItems.Reset();
+	SelectedItemIndex = INDEX_NONE;
 
-	USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
-		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
-		: nullptr;
+	USupabaseSubsystem* SupabaseSubsystem = GetSupabaseSubsystem();
+	TMap<FString, FShowDownSkin> ProductsByCharacterSkinId;
+	TArray<FString> ProductSkinOrder;
 
-	if (!SupabaseSubsystem)
+	if (SupabaseSubsystem)
 	{
-		if (Text_Status)
+		for (const FShowDownSkin& Product : SupabaseSubsystem->GetShopSkins())
 		{
-			Text_Status->SetText(FText::FromString(TEXT("Supabase subsystem not found.")));
-		}
+			if (!ShouldShowSkinAsShopOption(Product))
+			{
+				continue;
+			}
 
-		RefreshSelectedSkinText();
-		return;
+			const FString CharacterSkinId = UShowDownCharacterSkinCatalog::CanonicalizeSkinId(
+				SupabaseSubsystem->GetSkinIdForShopSet(Product.Id, TEXT("character")));
+			if (CharacterSkinId.IsEmpty())
+			{
+				UE_LOG(
+					LogTemp,
+					Warning,
+					TEXT("Character shop set '%s' has no character skin item."),
+					*Product.Id);
+				continue;
+			}
+
+			if (ProductsByCharacterSkinId.Contains(CharacterSkinId))
+			{
+				UE_LOG(
+					LogTemp,
+					Warning,
+					TEXT("Multiple active shop sets target character skin '%s'; keeping the first."),
+					*CharacterSkinId);
+				continue;
+			}
+
+			ProductsByCharacterSkinId.Add(CharacterSkinId, Product);
+			ProductSkinOrder.Add(CharacterSkinId);
+		}
 	}
 
-	const TArray<FShowDownSkin> ShopSkins = SupabaseSubsystem->GetShopSkins();
-	FString PreservedOption;
-	FString EquippedOption;
-	FString DefaultOption;
-	FString FirstOwnedOption;
-
-	for (const FShowDownSkin& Skin : ShopSkins)
+	TSet<FString> ConsumedProductSkinIds;
+	TArray<FShowDownCharacterSkinDefinition> OrderedDefinitions;
+	UShowDownCharacterSkinCatalog::GetOrderedSkinDefinitions(SkinCatalog, OrderedDefinitions);
+	for (const FShowDownCharacterSkinDefinition& Definition : OrderedDefinitions)
 	{
-		// 현재는 모든 skin_sets 상품을 보여줍니다.
-		// 나중에 개발용/숨김 상품이 생기면 ShouldShowSkinAsShopOption에서 제외하면 됩니다.
-		if (!ShouldShowSkinAsShopOption(Skin))
+		const FString CharacterSkinId = UShowDownCharacterSkinCatalog::CanonicalizeSkinId(
+			Definition.SkinId);
+		if (CharacterSkinId.IsEmpty())
 		{
 			continue;
 		}
 
-		const FString OptionText = MakeSkinOptionText(Skin);
-		ComboBox_Skins->AddOption(OptionText);
-		SkinsByOption.Add(OptionText, Skin);
-		OrderedSkinOptions.Add(OptionText);
-
-		if (!PreviousSelectedSkinId.IsEmpty() && Skin.Id == PreviousSelectedSkinId)
+		FShopDisplayItem& Item = DisplayItems.AddDefaulted_GetRef();
+		Item.CharacterSkinId = CharacterSkinId;
+		Item.Presentation = Definition;
+		if (const FShowDownSkin* Product = ProductsByCharacterSkinId.Find(CharacterSkinId))
 		{
-			PreservedOption = OptionText;
-		}
-
-		if (EquippedOption.IsEmpty() && SupabaseSubsystem->IsShopItemEquipped(Skin.Id))
-		{
-			EquippedOption = OptionText;
-		}
-
-		const FString CharacterSkinId = SupabaseSubsystem->GetSkinIdForShopSet(Skin.Id, TEXT("character"));
-		if (DefaultOption.IsEmpty()
-			&& !CharacterSkinId.IsEmpty()
-			&& UShowDownCharacterSkinCatalog::CanonicalizeSkinId(CharacterSkinId).Equals(
-				UShowDownCharacterSkinCatalog::GetDefaultSkinId(),
-				ESearchCase::IgnoreCase))
-		{
-			DefaultOption = OptionText;
-		}
-
-		if (FirstOwnedOption.IsEmpty() && SupabaseSubsystem->IsSkinOwned(Skin.Id))
-		{
-			FirstOwnedOption = OptionText;
+			Item.Product = *Product;
+			Item.SetId = Product->Id;
+			Item.bHasServerProduct = true;
+			ConsumedProductSkinIds.Add(CharacterSkinId);
 		}
 	}
 
-	if (!PreservedOption.IsEmpty())
+	for (const FString& CharacterSkinId : ProductSkinOrder)
 	{
-		SelectedOption = PreservedOption;
-	}
-	else if (!EquippedOption.IsEmpty())
-	{
-		SelectedOption = EquippedOption;
-	}
-	else if (!DefaultOption.IsEmpty())
-	{
-		SelectedOption = DefaultOption;
-	}
-	else if (!FirstOwnedOption.IsEmpty())
-	{
-		SelectedOption = FirstOwnedOption;
-	}
-	else if (OrderedSkinOptions.Num() > 0)
-	{
-		SelectedOption = OrderedSkinOptions[0];
+		if (ConsumedProductSkinIds.Contains(CharacterSkinId))
+		{
+			continue;
+		}
+
+		const FShowDownSkin* Product = ProductsByCharacterSkinId.Find(CharacterSkinId);
+		if (!Product)
+		{
+			continue;
+		}
+
+		FShopDisplayItem& Item = DisplayItems.AddDefaulted_GetRef();
+		Item.CharacterSkinId = CharacterSkinId;
+		Item.Product = *Product;
+		Item.SetId = Product->Id;
+		Item.bHasServerProduct = true;
+
+		FString ResolvedSkinId;
+		UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
+			SkinCatalog,
+			CharacterSkinId,
+			Item.Presentation,
+			ResolvedSkinId);
+		if (!UShowDownCharacterSkinCatalog::CanonicalizeSkinId(ResolvedSkinId).Equals(CharacterSkinId))
+		{
+			// The backend may be deployed ahead of a client content build. Keep the
+			// item visible as unavailable for diagnostics, but never charge for or
+			// equip a skin that this build can only render as the robot fallback.
+			Item.bHasServerProduct = false;
+			Item.SetId.Empty();
+			Item.Presentation.SkinId = CharacterSkinId;
+			Item.Presentation.DisplayName = FText::FromString(Product->Name);
+			Item.Presentation.Description = FText::GetEmpty();
+			Item.Presentation.Rarity = ParseServerRarity(Product->Rarity);
+			UE_LOG(
+				LogTemp,
+				Warning,
+				TEXT("Character shop product '%s' targets skin '%s', which is missing from this build's catalog. Purchase and equip are disabled."),
+				*Product->Id,
+				*CharacterSkinId);
+		}
 	}
 
-	if (!SelectedOption.IsEmpty())
+	int32 NewSelectionIndex = INDEX_NONE;
+	if (!PreviousSkinId.IsEmpty())
 	{
-		SelectSkinOption(SelectedOption);
+		NewSelectionIndex = DisplayItems.IndexOfByPredicate(
+			[&PreviousSkinId](const FShopDisplayItem& Item)
+			{
+				return Item.CharacterSkinId.Equals(PreviousSkinId, ESearchCase::IgnoreCase);
+			});
 	}
 
+	if (NewSelectionIndex == INDEX_NONE && SupabaseSubsystem)
+	{
+		const FString EquippedSkinId = UShowDownCharacterSkinCatalog::CanonicalizeSkinId(
+			SupabaseSubsystem->GetEquippedSkinId(TEXT("character")));
+		NewSelectionIndex = DisplayItems.IndexOfByPredicate(
+			[&EquippedSkinId](const FShopDisplayItem& Item)
+			{
+				return Item.CharacterSkinId.Equals(EquippedSkinId, ESearchCase::IgnoreCase);
+			});
+	}
+
+	if (NewSelectionIndex == INDEX_NONE)
+	{
+		const FString DefaultSkinId = UShowDownCharacterSkinCatalog::GetDefaultSkinId();
+		NewSelectionIndex = DisplayItems.IndexOfByPredicate(
+			[&DefaultSkinId](const FShopDisplayItem& Item)
+			{
+				return Item.CharacterSkinId.Equals(DefaultSkinId, ESearchCase::IgnoreCase);
+			});
+	}
+	if (NewSelectionIndex == INDEX_NONE && DisplayItems.Num() > 0)
+	{
+		NewSelectionIndex = 0;
+	}
+
+	SelectSkinIndex(NewSelectionIndex, bAllowPreviewBroadcast);
+}
+
+void UShowDownShopWidget::RefreshSelectedPresentation()
+{
+	const FShopDisplayItem* Item = GetSelectedItem();
+	USupabaseSubsystem* SupabaseSubsystem = GetSupabaseSubsystem();
+	if (!Item)
+	{
+		if (Text_SkinName) Text_SkinName->SetText(FText::FromString(TEXT("스킨 없음")));
+		if (Text_Rarity) Text_Rarity->SetText(FText::GetEmpty());
+		if (Text_Description) Text_Description->SetText(FText::GetEmpty());
+		if (Text_Price) Text_Price->SetText(FText::FromString(TEXT("-")));
+		if (Text_Coin) Text_Coin->SetText(FText::GetEmpty());
+		if (Text_PrimaryAction) Text_PrimaryAction->SetText(FText::FromString(TEXT("사용 불가")));
+		if (Button_PrimaryAction) Button_PrimaryAction->SetIsEnabled(false);
+		if (Button_Previous) Button_Previous->SetIsEnabled(false);
+		if (Button_Next) Button_Next->SetIsEnabled(false);
+		return;
+	}
+
+	const EShowDownShopPrimaryActionState ActionState = GetCurrentPrimaryActionState();
+	const EShowDownCharacterSkinRarity Rarity =
+		Item->Presentation.Rarity == EShowDownCharacterSkinRarity::Unspecified
+			? ParseServerRarity(Item->Product.Rarity)
+			: Item->Presentation.Rarity;
+	const FLinearColor RarityColor = UShowDownCharacterSkinCatalog::GetRarityColor(Rarity);
+
+	FText DisplayName = Item->Presentation.DisplayName;
+	if (DisplayName.IsEmpty())
+	{
+		DisplayName = !Item->Product.Name.IsEmpty()
+			? FText::FromString(Item->Product.Name)
+			: FText::FromString(Item->CharacterSkinId);
+	}
+
+	if (Text_SkinName)
+	{
+		Text_SkinName->SetText(DisplayName);
+		Text_SkinName->SetColorAndOpacity(FSlateColor(RarityColor));
+	}
+	if (Text_Rarity)
+	{
+		Text_Rarity->SetText(UShowDownCharacterSkinCatalog::GetRarityDisplayName(Rarity));
+		Text_Rarity->SetColorAndOpacity(FSlateColor(RarityColor));
+	}
+	if (Border_RarityAccent)
+	{
+		Border_RarityAccent->SetBrushColor(FLinearColor(
+			RarityColor.R * 0.18f,
+			RarityColor.G * 0.18f,
+			RarityColor.B * 0.18f,
+			0.88f));
+	}
+	if (Text_Description)
+	{
+		Text_Description->SetText(Item->Presentation.Description);
+	}
+	if (Text_Price)
+	{
+		Text_Price->SetText(Item->bHasServerProduct
+			? FText::FromString(FString::Printf(TEXT("%d COIN"), Item->Product.Price))
+			: FText::FromString(TEXT("-")));
+		Text_Price->SetColorAndOpacity(FSlateColor(RarityColor));
+	}
+	if (Text_Coin)
+	{
+		Text_Coin->SetText(FText::FromString(FString::Printf(
+			TEXT("보유 코인  %d"),
+			SupabaseSubsystem ? SupabaseSubsystem->GetCoin() : 0)));
+	}
+
+	FString ActionLabel;
+	switch (ActionState)
+	{
+	case EShowDownShopPrimaryActionState::Purchase:
+		ActionLabel = TEXT("구매");
+		break;
+	case EShowDownShopPrimaryActionState::Equip:
+		ActionLabel = TEXT("적용");
+		break;
+	case EShowDownShopPrimaryActionState::Equipped:
+		ActionLabel = TEXT("적용됨");
+		break;
+	case EShowDownShopPrimaryActionState::Purchasing:
+		ActionLabel = TEXT("처리 중");
+		break;
+	case EShowDownShopPrimaryActionState::Equipping:
+		ActionLabel = TEXT("적용 중");
+		break;
+	case EShowDownShopPrimaryActionState::Loading:
+		ActionLabel = TEXT("불러오는 중");
+		break;
+	case EShowDownShopPrimaryActionState::Unavailable:
+	default:
+		ActionLabel = TEXT("판매 준비 중");
+		break;
+	}
+
+	if (Text_PrimaryAction)
+	{
+		Text_PrimaryAction->SetText(FText::FromString(ActionLabel));
+	}
+	if (Button_PrimaryAction)
+	{
+		Button_PrimaryAction->SetIsEnabled(
+			ActionState == EShowDownShopPrimaryActionState::Purchase
+			|| ActionState == EShowDownShopPrimaryActionState::Equip);
+	}
+
+	const bool bOperationInFlight = SupabaseSubsystem && SupabaseSubsystem->IsShopOperationInFlight();
+	const bool bCanNavigate = DisplayItems.Num() > 1 && !bOperationInFlight;
+	if (Button_Previous) Button_Previous->SetIsEnabled(bCanNavigate);
+	if (Button_Next) Button_Next->SetIsEnabled(bCanNavigate);
+
+	if (ActionState == EShowDownShopPrimaryActionState::Purchasing)
+	{
+		SetStatusMessage(TEXT("구매를 처리하고 있습니다..."), ShopMutedInk);
+	}
+	else if (ActionState == EShowDownShopPrimaryActionState::Equipping)
+	{
+		SetStatusMessage(TEXT("스킨을 적용하고 있습니다..."), ShopMutedInk);
+	}
+	else if (ActionState == EShowDownShopPrimaryActionState::Loading)
+	{
+		SetStatusMessage(TEXT("상점 데이터를 불러오는 중입니다..."), ShopMutedInk);
+	}
+}
+
+void UShowDownShopWidget::SelectSkinByOffset(const int32 Offset)
+{
+	if (USupabaseSubsystem* SupabaseSubsystem = GetSupabaseSubsystem();
+		SupabaseSubsystem && SupabaseSubsystem->IsShopOperationInFlight())
+	{
+		return;
+	}
+
+	const int32 NextIndex = WrapSelectionIndex(SelectedItemIndex, Offset, DisplayItems.Num());
+	if (NextIndex != INDEX_NONE)
+	{
+		SetStatusMessage(TEXT(""), ShopMutedInk);
+		SelectSkinIndex(NextIndex);
+	}
+}
+
+void UShowDownShopWidget::SelectSkinIndex(
+	const int32 NewIndex,
+	const bool bAllowPreviewBroadcast)
+{
+	SelectedItemIndex = DisplayItems.IsValidIndex(NewIndex) ? NewIndex : INDEX_NONE;
+	RefreshSelectedPresentation();
+	if (bAllowPreviewBroadcast)
+	{
+		BroadcastSelectedPreviewSkin();
+	}
+}
+
+void UShowDownShopWidget::BroadcastSelectedPreviewSkin()
+{
+	const FShopDisplayItem* Item = GetSelectedItem();
+	const FString PreviewSkinId = Item
+		? Item->CharacterSkinId
+		: UShowDownCharacterSkinCatalog::GetDefaultSkinId();
+	if (!PreviewSkinId.IsEmpty() && PreviewSkinId != LastBroadcastPreviewSkinId)
+	{
+		LastBroadcastPreviewSkinId = PreviewSkinId;
+		OnPreviewSkinChanged.Broadcast(PreviewSkinId);
+	}
+}
+
+void UShowDownShopWidget::SetStatusMessage(
+	const FString& Message,
+	const FLinearColor& Color)
+{
 	if (Text_Status)
 	{
-		Text_Status->SetText(
-			FText::FromString(FString::Printf(TEXT("Loaded %d shop items."), OrderedSkinOptions.Num()))
-		);
+		Text_Status->SetText(FText::FromString(Message));
+		Text_Status->SetColorAndOpacity(FSlateColor(Color));
 	}
-
-	RefreshSelectedSkinText();
-}
-
-void UShowDownShopWidget::RefreshSelectedSkinText()
-{
-	if (!Text_SelectedSkin)
-	{
-		return;
-	}
-
-	const FShowDownSkin* SelectedSkin = SkinsByOption.Find(SelectedOption);
-	USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
-		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
-		: nullptr;
-
-	if (!SelectedSkin || !SupabaseSubsystem)
-	{
-		Text_SelectedSkin->SetText(FText::FromString(TEXT("No skin selected.")));
-		if (Button_Equip) Button_Equip->SetIsEnabled(false);
-		if (Button_Buy) Button_Buy->SetIsEnabled(false);
-		return;
-	}
-
-	const bool bOwned = SupabaseSubsystem->IsSkinOwned(SelectedSkin->Id);
-	const bool bEquipped = SupabaseSubsystem->IsShopItemEquipped(SelectedSkin->Id);
-	if (Button_Equip) Button_Equip->SetIsEnabled(bOwned && !bEquipped);
-	if (Button_Buy) Button_Buy->SetIsEnabled(!bOwned);
-
-	// SelectedSkin은 skin_sets의 상품 정보입니다.
-	// Equipped는 세트 안의 실제 스킨들이 모두 player_equipment와 일치하는지로 판단합니다.
-	Text_SelectedSkin->SetText(
-		FText::FromString(
-			FString::Printf(
-				TEXT("%d / %d\n%s\nItem Type: %s\nRarity: %s\nPrice: %d\nCoin: %d\nOwned: %s\nEquipped: %s"),
-				SelectedSkinIndex + 1,
-				OrderedSkinOptions.Num(),
-				*SelectedSkin->Name,
-				*SelectedSkin->Type,
-				*SelectedSkin->Rarity,
-				SelectedSkin->Price,
-				SupabaseSubsystem->GetCoin(),
-				bOwned ? TEXT("true") : TEXT("false"),
-				bEquipped ? TEXT("true") : TEXT("false")
-			)
-		)
-	);
-}
-
-void UShowDownShopWidget::SelectSkinByOffset(int32 Offset)
-{
-	if (OrderedSkinOptions.Num() == 0)
-	{
-		return;
-	}
-
-	int32 NextIndex = SelectedSkinIndex;
-
-	if (NextIndex == INDEX_NONE)
-	{
-		NextIndex = 0;
-	}
-	else
-	{
-		// 배열 끝에서 한 번 더 이동하면 반대쪽 끝으로 순환합니다.
-		NextIndex = (NextIndex + Offset + OrderedSkinOptions.Num()) % OrderedSkinOptions.Num();
-	}
-
-	SelectSkinOption(OrderedSkinOptions[NextIndex]);
-}
-
-void UShowDownShopWidget::SelectSkinOption(const FString& OptionText)
-{
-	if (bUpdatingSelection || !SkinsByOption.Contains(OptionText))
-	{
-		return;
-	}
-
-	TGuardValue<bool> SelectionGuard(bUpdatingSelection, true);
-
-	// ComboBox 선택, 내부 선택 문자열, carousel index를 한 곳에서 동기화합니다.
-	SelectedOption = OptionText;
-	SelectedSkinIndex = OrderedSkinOptions.IndexOfByKey(SelectedOption);
-
-	if (ComboBox_Skins && ComboBox_Skins->GetSelectedOption() != SelectedOption)
-	{
-		ComboBox_Skins->SetSelectedOption(SelectedOption);
-	}
-
-	RefreshSelectedSkinText();
-	BroadcastSelectedPreviewSkin();
-}
-
-FString UShowDownShopWidget::MakeSkinOptionText(const FShowDownSkin& Skin) const
-{
-	USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
-		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
-		: nullptr;
-
-	const bool bOwned = SupabaseSubsystem && SupabaseSubsystem->IsSkinOwned(Skin.Id);
-	const bool bEquipped = SupabaseSubsystem && SupabaseSubsystem->IsShopItemEquipped(Skin.Id);
-
-	return FString::Printf(
-		TEXT("%s%s [%s] %s - %d (%s)"),
-		bEquipped ? TEXT("* ") : TEXT(""),
-		*Skin.Name,
-		*Skin.Type,
-		bOwned ? TEXT("Owned") : TEXT("Locked"),
-		Skin.Price,
-		*Skin.Id
-	);
 }
 
 bool UShowDownShopWidget::ShouldShowSkinAsShopOption(const FShowDownSkin& Skin) const
@@ -509,126 +733,86 @@ bool UShowDownShopWidget::ShouldShowSkinAsShopOption(const FShowDownSkin& Skin) 
 		return false;
 	}
 
-	const USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
-		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
-		: nullptr;
-
-	// This first shop release intentionally exposes character products only.
-	// Set contents cover legacy rows whose skin_sets.type is missing.
+	const USupabaseSubsystem* SupabaseSubsystem = GetSupabaseSubsystem();
 	return Skin.Type.Equals(TEXT("character"), ESearchCase::IgnoreCase)
 		|| (SupabaseSubsystem
 			&& !SupabaseSubsystem->GetSkinIdForShopSet(Skin.Id, TEXT("character")).IsEmpty());
 }
 
-void UShowDownShopWidget::BroadcastSelectedPreviewSkin()
+EShowDownShopPrimaryActionState UShowDownShopWidget::GetCurrentPrimaryActionState() const
 {
-	const FShowDownSkin* SelectedSkin = SkinsByOption.Find(SelectedOption);
-	const USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
-		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
+	const FShopDisplayItem* Item = GetSelectedItem();
+	const USupabaseSubsystem* SupabaseSubsystem = GetSupabaseSubsystem();
+	const bool bHasProduct = Item && Item->bHasServerProduct;
+	const bool bOwned = bHasProduct && SupabaseSubsystem
+		&& SupabaseSubsystem->IsSkinOwned(Item->SetId);
+	const bool bEquipped = bHasProduct && SupabaseSubsystem
+		&& SupabaseSubsystem->IsShopItemEquipped(Item->SetId);
+
+	return ResolvePrimaryActionState(
+		SupabaseSubsystem && SupabaseSubsystem->HasCosmeticDataSnapshot(),
+		SupabaseSubsystem && SupabaseSubsystem->IsCosmeticDataLoadInFlight(),
+		bCosmeticLoadFailed,
+		bHasProduct,
+		bOwned,
+		bEquipped,
+		SupabaseSubsystem && SupabaseSubsystem->IsSkinPurchaseInFlight(),
+		SupabaseSubsystem && SupabaseSubsystem->IsSkinEquipInFlight());
+}
+
+USupabaseSubsystem* UShowDownShopWidget::GetSupabaseSubsystem() const
+{
+	UGameInstance* GameInstance = GetGameInstance();
+	return GameInstance ? GameInstance->GetSubsystem<USupabaseSubsystem>() : nullptr;
+}
+
+const UShowDownShopWidget::FShopDisplayItem* UShowDownShopWidget::GetSelectedItem() const
+{
+	return DisplayItems.IsValidIndex(SelectedItemIndex)
+		? &DisplayItems[SelectedItemIndex]
 		: nullptr;
-
-	FString PreviewSkinId;
-	if (SelectedSkin && SupabaseSubsystem)
-	{
-		PreviewSkinId = SupabaseSubsystem->GetSkinIdForShopSet(SelectedSkin->Id, TEXT("character"));
-	}
-
-	if (PreviewSkinId.IsEmpty())
-	{
-		PreviewSkinId = UShowDownCharacterSkinCatalog::GetDefaultSkinId();
-	}
-
-	OnPreviewSkinChanged.Broadcast(PreviewSkinId);
 }
 
-void UShowDownShopWidget::HandleSkinSelectionChanged(FString SelectedItem, ESelectInfo::Type SelectionType)
+void UShowDownShopWidget::HandlePreviousClicked()
 {
-	SelectSkinOption(SelectedItem);
+	SelectSkinByOffset(-1);
 }
 
-void UShowDownShopWidget::HandleEquipClicked()
+void UShowDownShopWidget::HandleNextClicked()
 {
-	const FShowDownSkin* SelectedSkin = SkinsByOption.Find(SelectedOption);
+	SelectSkinByOffset(1);
+}
 
-	if (!SelectedSkin)
+void UShowDownShopWidget::HandlePrimaryActionClicked()
+{
+	FShopDisplayItem const* Item = GetSelectedItem();
+	USupabaseSubsystem* SupabaseSubsystem = GetSupabaseSubsystem();
+	if (!Item || !SupabaseSubsystem)
 	{
-		if (Text_Status)
-		{
-			Text_Status->SetText(FText::FromString(TEXT("No skin selected.")));
-		}
-
+		SetStatusMessage(TEXT("상점 데이터를 사용할 수 없습니다."), ShopError);
 		return;
 	}
 
-	USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
-		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
-		: nullptr;
-	if (SupabaseSubsystem)
+	switch (GetCurrentPrimaryActionState())
 	{
-		if (!SupabaseSubsystem->IsSkinOwned(SelectedSkin->Id))
-		{
-			if (Text_Status)
-			{
-				Text_Status->SetText(FText::FromString(TEXT("Locked skin cannot be equipped.")));
-			}
-
-			return;
-		}
-
-		// SelectedSkin->Id는 skin_sets.id입니다.
-		// SupabaseSubsystem이 세트 안의 실제 skins를 찾아 slot별로 장착 저장합니다.
-		SupabaseSubsystem->EquipSkin(SelectedSkin->Id);
-	}
-}
-
-void UShowDownShopWidget::HandleBuyClicked()
-{
-	const FShowDownSkin* SelectedSkin = SkinsByOption.Find(SelectedOption);
-
-	if (!SelectedSkin)
-	{
-		if (Text_Status)
-		{
-			Text_Status->SetText(FText::FromString(TEXT("No shop item selected.")));
-		}
-
+	case EShowDownShopPrimaryActionState::Purchase:
+		SetStatusMessage(TEXT("구매를 요청했습니다..."), ShopMutedInk);
+		SupabaseSubsystem->PurchaseSkinSet(Item->SetId);
+		break;
+	case EShowDownShopPrimaryActionState::Equip:
+		SetStatusMessage(TEXT("스킨 적용을 요청했습니다..."), ShopMutedInk);
+		SupabaseSubsystem->EquipSkin(Item->SetId);
+		break;
+	default:
 		return;
 	}
 
-	USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
-		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
-		: nullptr;
-	if (SupabaseSubsystem)
-	{
-		if (SupabaseSubsystem->IsSkinOwned(SelectedSkin->Id))
-		{
-			if (Text_Status)
-			{
-				Text_Status->SetText(FText::FromString(TEXT("Shop item is already owned.")));
-			}
-
-			return;
-		}
-
-		SupabaseSubsystem->PurchaseSkinSet(SelectedSkin->Id);
-	}
-}
-
-void UShowDownShopWidget::HandleRefreshClicked()
-{
-	USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
-		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
-		: nullptr;
-	if (SupabaseSubsystem)
-	{
-		SupabaseSubsystem->LoadCosmeticData();
-	}
+	RefreshSelectedPresentation();
 }
 
 void UShowDownShopWidget::HandleBackClicked()
 {
 	OnBackRequested.Broadcast();
-
 	if (!bUseLegacyBackNavigation)
 	{
 		return;
@@ -638,49 +822,43 @@ void UShowDownShopWidget::HandleBackClicked()
 	{
 		MainMenuWidget->SetVisibility(ESlateVisibility::Visible);
 	}
-
 	RemoveFromParent();
 }
 
-void UShowDownShopWidget::HandleCosmeticDataLoaded(bool bSuccess, const FString& Message)
+void UShowDownShopWidget::HandleCosmeticDataLoaded(
+	const bool bSuccess,
+	const FString& Message)
 {
-	if (Text_Status)
-	{
-		Text_Status->SetText(FText::FromString(Message));
-	}
-
+	const USupabaseSubsystem* SupabaseSubsystem = GetSupabaseSubsystem();
+	bCosmeticLoadFailed = !bSuccess
+		&& (!SupabaseSubsystem || !SupabaseSubsystem->HasCosmeticDataSnapshot());
+	RefreshDisplayItems();
 	if (bSuccess)
 	{
-		// skin_sets / player_skin_sets / skin_set_items / equipment 중 하나라도 갱신되면
-		// 화면의 owned/equipped 상태가 바뀔 수 있으므로 목록을 다시 구성합니다.
-		RefreshSkinOptions();
+		SetStatusMessage(TEXT(""), ShopMutedInk);
+	}
+	else
+	{
+		SetStatusMessage(Message, ShopError);
 	}
 }
 
-void UShowDownShopWidget::HandleSkinEquipped(bool bSuccess, const FString& Message)
+void UShowDownShopWidget::HandleSkinEquipped(
+	const bool bSuccess,
+	const FString& Message)
 {
-	if (Text_Status)
-	{
-		Text_Status->SetText(FText::FromString(Message));
-	}
-
-	if (bSuccess)
-	{
-		// 장착 요청은 세트 안의 slot 수만큼 여러 PATCH가 나갈 수 있습니다.
-		// 각 응답이 올 때마다 최신 장착 상태를 화면에 반영합니다.
-		RefreshSkinOptions();
-	}
+	RefreshDisplayItems(false);
+	SetStatusMessage(
+		bSuccess ? TEXT("스킨을 적용했습니다.") : Message,
+		bSuccess ? ShopSuccess : ShopError);
 }
 
-void UShowDownShopWidget::HandleSkinSetPurchased(bool bSuccess, const FString& Message)
+void UShowDownShopWidget::HandleSkinSetPurchased(
+	const bool bSuccess,
+	const FString& Message)
 {
-	if (Text_Status)
-	{
-		Text_Status->SetText(FText::FromString(Message));
-	}
-
-	if (bSuccess)
-	{
-		RefreshSkinOptions();
-	}
+	RefreshDisplayItems(false);
+	SetStatusMessage(
+		bSuccess ? TEXT("구매가 완료되었습니다. 이제 스킨을 적용할 수 있습니다.") : Message,
+		bSuccess ? ShopSuccess : ShopError);
 }

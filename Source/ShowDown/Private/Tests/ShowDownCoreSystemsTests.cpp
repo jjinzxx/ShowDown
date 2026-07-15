@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Animation/AnimationAsset.h"
+#include "Animation/Skeleton.h"
 #include "Audio/ShowDownAudioConfig.h"
 #include "Audio/ShowDownAudioSubsystem.h"
 #include "BettingSystem.h"
@@ -19,7 +20,9 @@
 #include "ShowDownCharacterSkinCatalog.h"
 #include "ShowDownGameModeBase.h"
 #include "ShowDownGameStateBase.h"
+#include "ShowDownShopWidget.h"
 #include "ShowDownTypes.h"
+#include "Engine/SkeletalMesh.h"
 #include "Sound/SoundWave.h"
 #include "UObject/UnrealType.h"
 
@@ -564,7 +567,7 @@ bool FShowDownCollectorAISystemTest::RunTest(const FString& Parameters)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FShowDownCharacterSkinCatalogTest,
-	"ShowDown.Core.CharacterSkinCatalog",
+	"ShowDown.Core.CharacterSkinCatalog.ResolveAndAssets",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FShowDownCharacterSkinCatalogTest::RunTest(const FString& Parameters)
@@ -581,6 +584,17 @@ bool FShowDownCharacterSkinCatalogTest::RunTest(const FString& Parameters)
 		TEXT("Miku's product-style alias resolves independently from Micu"),
 		UShowDownCharacterSkinCatalog::CanonicalizeSkinId(TEXT("character_miku")),
 		FString(TEXT("miku")));
+	TestTrue(
+		TEXT("Skin ids with path separators are rejected before replication"),
+		UShowDownCharacterSkinCatalog::CanonicalizeSkinId(TEXT("unsafe/skin")).IsEmpty());
+	TestTrue(
+		TEXT("Oversized skin ids are rejected before replication"),
+		UShowDownCharacterSkinCatalog::CanonicalizeSkinId(
+			FString::ChrN(65, TEXT('a'))).IsEmpty());
+	TestEqual(
+		TEXT("Unknown replicated ids resolve to the safe default"),
+		UShowDownCharacterSkinCatalog::NormalizeKnownSkinId(nullptr, TEXT("not_in_this_build")),
+		FString(TEXT("robot")));
 
 	FShowDownCharacterSkinDefinition Definition;
 	FString ResolvedSkinId;
@@ -603,10 +617,26 @@ bool FShowDownCharacterSkinCatalogTest::RunTest(const FString& Parameters)
 			ResolvedSkinId));
 	TestEqual(TEXT("Unknown ids fall back to robot"), ResolvedSkinId, FString(TEXT("robot")));
 
-	TSet<FString> BuiltInPreviewAnimations;
-	for (const FString SkinId :
-		{ FString(TEXT("robot")), FString(TEXT("hoodman")), FString(TEXT("micu")), FString(TEXT("miku")) })
+	const TArray<FString> BuiltInSkinIds =
 	{
+		TEXT("robot"),
+		TEXT("hoodman"),
+		TEXT("micu"),
+		TEXT("miku")
+	};
+	const TArray<EShowDownCharacterSkinRarity> BuiltInRarities =
+	{
+		EShowDownCharacterSkinRarity::Common,
+		EShowDownCharacterSkinRarity::Rare,
+		EShowDownCharacterSkinRarity::Epic,
+		EShowDownCharacterSkinRarity::Legendary
+	};
+
+	TSet<FString> BuiltInShopPreviewAnimations;
+	FString BuiltInMikuMainMenuAnimationPath;
+	for (int32 SkinIndex = 0; SkinIndex < BuiltInSkinIds.Num(); ++SkinIndex)
+	{
+		const FString& SkinId = BuiltInSkinIds[SkinIndex];
 		TestTrue(
 			*FString::Printf(TEXT("Built-in skin '%s' is registered"), *SkinId),
 			UShowDownCharacterSkinCatalog::FindBuiltInSkinDefinition(SkinId, Definition));
@@ -615,28 +645,69 @@ bool FShowDownCharacterSkinCatalogTest::RunTest(const FString& Parameters)
 			Definition.SkeletalMesh.IsNull());
 		TestTrue(
 			*FString::Printf(TEXT("Built-in skin '%s' has a shop preview animation"), *SkinId),
-			Definition.PreviewAnimationMode
+			Definition.ShopPreview.AnimationMode
 				== EShowDownShopPreviewAnimationMode::SingleAnimation
-			&& !Definition.PreviewAnimation.IsNull());
-		if (!Definition.PreviewAnimation.IsNull())
+			&& !Definition.ShopPreview.Animation.IsNull());
+		TestTrue(
+			*FString::Printf(TEXT("Built-in skin '%s' has a main-menu preview animation"), *SkinId),
+			Definition.MainMenuPreview.AnimationMode
+				== EShowDownShopPreviewAnimationMode::SingleAnimation
+			&& !Definition.MainMenuPreview.Animation.IsNull());
+		USkeletalMesh* PreviewMesh = Definition.SkeletalMesh.LoadSynchronous();
+		UAnimationAsset* ShopAnimation = Definition.ShopPreview.Animation.LoadSynchronous();
+		TestNotNull(
+			*FString::Printf(TEXT("Built-in skin '%s' preview mesh loads"), *SkinId),
+			PreviewMesh);
+		TestNotNull(
+			*FString::Printf(TEXT("Built-in skin '%s' shop animation loads"), *SkinId),
+			ShopAnimation);
+		if (PreviewMesh && ShopAnimation)
 		{
-			BuiltInPreviewAnimations.Add(Definition.PreviewAnimation.ToSoftObjectPath().ToString());
+			const USkeleton* MeshSkeleton = PreviewMesh->GetSkeleton();
+			const USkeleton* AnimationSkeleton = ShopAnimation->GetSkeleton();
+			TestNotNull(
+				*FString::Printf(TEXT("Built-in skin '%s' mesh has a skeleton"), *SkinId),
+				MeshSkeleton);
+			TestNotNull(
+				*FString::Printf(TEXT("Built-in skin '%s' animation has a skeleton"), *SkinId),
+				AnimationSkeleton);
+			if (MeshSkeleton && AnimationSkeleton)
+			{
+				TestTrue(
+					*FString::Printf(TEXT("Built-in skin '%s' animation is compatible with its mesh"), *SkinId),
+					AnimationSkeleton->IsCompatibleMesh(PreviewMesh, false));
+			}
+		}
+		TestEqual(
+			*FString::Printf(TEXT("Built-in skin '%s' has its authored rarity"), *SkinId),
+			Definition.Rarity,
+			BuiltInRarities[SkinIndex]);
+		if (!Definition.ShopPreview.Animation.IsNull())
+		{
+			BuiltInShopPreviewAnimations.Add(
+				Definition.ShopPreview.Animation.ToSoftObjectPath().ToString());
+		}
+		if (SkinId == TEXT("miku"))
+		{
+			BuiltInMikuMainMenuAnimationPath =
+				Definition.MainMenuPreview.Animation.ToSoftObjectPath().ToString();
 		}
 	}
 	TestEqual(
 		TEXT("Each built-in skin uses a distinct single-node preview animation"),
-		BuiltInPreviewAnimations.Num(),
+		BuiltInShopPreviewAnimations.Num(),
 		4);
 
 	UShowDownCharacterSkinCatalog* AnimationOverrideCatalog =
 		NewObject<UShowDownCharacterSkinCatalog>();
 	FShowDownCharacterSkinDefinition AnimationOverride;
 	AnimationOverride.SkinId = TEXT("miku");
-	AnimationOverride.PreviewAnimationMode = EShowDownShopPreviewAnimationMode::SingleAnimation;
-	AnimationOverride.PreviewAnimation = TSoftObjectPtr<UAnimationAsset>(
+	AnimationOverride.ShopPreview.AnimationMode =
+		EShowDownShopPreviewAnimationMode::SingleAnimation;
+	AnimationOverride.ShopPreview.Animation = TSoftObjectPtr<UAnimationAsset>(
 		FSoftObjectPath(TEXT("/Game/Character/Animation/selectCard.selectCard")));
-	AnimationOverride.bLoopPreviewAnimation = false;
-	AnimationOverride.PreviewAnimationPlayRate = 0.75f;
+	AnimationOverride.ShopPreview.bLoop = false;
+	AnimationOverride.ShopPreview.PlayRate = 0.75f;
 	AnimationOverrideCatalog->Skins.Add(AnimationOverride);
 
 	TestTrue(
@@ -649,34 +720,258 @@ bool FShowDownCharacterSkinCatalogTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Animation-only overrides retain the built-in mesh"), Definition.SkeletalMesh.IsNull());
 	TestEqual(
 		TEXT("Animation-only overrides replace the built-in preview animation"),
-		Definition.PreviewAnimation.ToSoftObjectPath().ToString(),
+		Definition.ShopPreview.Animation.ToSoftObjectPath().ToString(),
 		FString(TEXT("/Game/Character/Animation/selectCard.selectCard")));
-	TestFalse(TEXT("Animation-only overrides retain their loop setting"), Definition.bLoopPreviewAnimation);
+	TestFalse(TEXT("Animation-only overrides retain their loop setting"), Definition.ShopPreview.bLoop);
 	TestEqual(
 		TEXT("Animation-only overrides retain their play rate"),
-		Definition.PreviewAnimationPlayRate,
+		Definition.ShopPreview.PlayRate,
 		0.75f);
+	TestEqual(
+		TEXT("A shop-only override preserves the independent built-in main-menu animation"),
+		Definition.MainMenuPreview.Animation.ToSoftObjectPath().ToString(),
+		BuiltInMikuMainMenuAnimationPath);
+	TestEqual(
+		TEXT("An unspecified rarity preserves the built-in rarity"),
+		Definition.Rarity,
+		EShowDownCharacterSkinRarity::Legendary);
 
 	FShowDownCharacterSkinDefinition& ReferencePoseOverride =
 		AnimationOverrideCatalog->Skins[0];
-	ReferencePoseOverride.PreviewAnimationMode =
+	ReferencePoseOverride.ShopPreview.AnimationMode =
 		EShowDownShopPreviewAnimationMode::ReferencePose;
-	ReferencePoseOverride.PreviewAnimation.Reset();
+	ReferencePoseOverride.ShopPreview.Animation.Reset();
+	ReferencePoseOverride.MainMenuPreview.AnimationMode =
+		EShowDownShopPreviewAnimationMode::SingleAnimation;
+	ReferencePoseOverride.MainMenuPreview.Animation = TSoftObjectPtr<UAnimationAsset>(
+		FSoftObjectPath(TEXT("/Game/Character/Animation/selectCard.selectCard")));
+	ReferencePoseOverride.MainMenuPreview.bLoop = false;
+	ReferencePoseOverride.MainMenuPreview.PlayRate = 1.25f;
+	ReferencePoseOverride.Rarity = EShowDownCharacterSkinRarity::Rare;
 	TestTrue(
-		TEXT("A catalog can explicitly disable a built-in preview animation"),
+		TEXT("A catalog can independently override both preview contexts"),
 		UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
 			AnimationOverrideCatalog,
 			TEXT("miku"),
 			Definition,
 			ResolvedSkinId));
 	TestEqual(
-		TEXT("Reference pose overrides are retained"),
-		Definition.PreviewAnimationMode,
+		TEXT("Shop reference-pose overrides are retained"),
+		Definition.ShopPreview.AnimationMode,
 		EShowDownShopPreviewAnimationMode::ReferencePose);
 	TestTrue(
-		TEXT("Reference pose overrides clear the built-in animation asset"),
-		Definition.PreviewAnimation.IsNull());
+		TEXT("Shop reference-pose overrides clear the built-in animation asset"),
+		Definition.ShopPreview.Animation.IsNull());
+	TestEqual(
+		TEXT("The main-menu profile is resolved independently from the shop profile"),
+		Definition.MainMenuPreview.Animation.ToSoftObjectPath().ToString(),
+		FString(TEXT("/Game/Character/Animation/selectCard.selectCard")));
+	TestFalse(
+		TEXT("The main-menu profile retains its independent loop setting"),
+		Definition.MainMenuPreview.bLoop);
+	TestEqual(
+		TEXT("The main-menu profile retains its independent play rate"),
+		Definition.MainMenuPreview.PlayRate,
+		1.25f);
+	TestEqual(
+		TEXT("A catalog rarity override replaces the built-in rarity"),
+		Definition.Rarity,
+		EShowDownCharacterSkinRarity::Rare);
+	TestTrue(
+		TEXT("The shop context accessor returns the shop profile"),
+		&UShowDownCharacterSkinCatalog::GetPreviewProfile(
+			Definition,
+			EShowDownCharacterPreviewContext::Shop)
+			== &Definition.ShopPreview);
+	TestTrue(
+		TEXT("The main-menu context accessor returns the main-menu profile"),
+		&UShowDownCharacterSkinCatalog::GetPreviewProfile(
+			Definition,
+			EShowDownCharacterPreviewContext::MainMenu)
+			== &Definition.MainMenuPreview);
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownCharacterSkinCatalogOrderTest,
+	"ShowDown.Core.CharacterSkinCatalog.Order",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownCharacterSkinCatalogOrderTest::RunTest(const FString& Parameters)
+{
+	UShowDownCharacterSkinCatalog* Catalog = NewObject<UShowDownCharacterSkinCatalog>();
+	TestNotNull(TEXT("A character skin catalog can be created"), Catalog);
+	if (!Catalog)
+	{
+		return false;
+	}
+
+	FShowDownCharacterSkinDefinition CustomGold;
+	CustomGold.SkinId = TEXT("custom_gold");
+	CustomGold.DisplayName = FText::FromString(TEXT("Custom Gold"));
+	Catalog->Skins.Add(CustomGold);
+	TestEqual(
+		TEXT("A catalog-authored custom id survives replication validation"),
+		UShowDownCharacterSkinCatalog::NormalizeKnownSkinId(Catalog, TEXT(" CUSTOM_GOLD ")),
+		FString(TEXT("custom_gold")));
+
+	FShowDownCharacterSkinDefinition MikuOverride;
+	MikuOverride.SkinId = TEXT("character_miku");
+	MikuOverride.Rarity = EShowDownCharacterSkinRarity::Rare;
+	Catalog->Skins.Add(MikuOverride);
+
+	FShowDownCharacterSkinDefinition CustomBlue;
+	CustomBlue.SkinId = TEXT("custom_blue");
+	CustomBlue.DisplayName = FText::FromString(TEXT("Custom Blue"));
+	CustomBlue.Rarity = EShowDownCharacterSkinRarity::Epic;
+	Catalog->Skins.Add(CustomBlue);
+	Catalog->Skins.Add(CustomGold);
+	Catalog->Skins.AddDefaulted();
+
+	TArray<FShowDownCharacterSkinDefinition> OrderedDefinitions;
+	UShowDownCharacterSkinCatalog::GetOrderedSkinDefinitions(Catalog, OrderedDefinitions);
+
+	const TArray<FString> ExpectedOrder =
+	{
+		TEXT("custom_gold"),
+		TEXT("miku"),
+		TEXT("custom_blue"),
+		TEXT("robot"),
+		TEXT("hoodman"),
+		TEXT("micu")
+	};
+	TestEqual(
+		TEXT("Catalog order is retained, duplicates are removed, and missing built-ins are appended"),
+		OrderedDefinitions.Num(),
+		ExpectedOrder.Num());
+	for (int32 Index = 0; Index < FMath::Min(OrderedDefinitions.Num(), ExpectedOrder.Num()); ++Index)
+	{
+		TestEqual(
+			*FString::Printf(TEXT("Ordered skin %d has the expected stable id"), Index),
+			OrderedDefinitions[Index].SkinId,
+			ExpectedOrder[Index]);
+	}
+
+	if (OrderedDefinitions.Num() >= 3)
+	{
+		TestEqual(
+			TEXT("A custom skin with unspecified rarity falls back to Common"),
+			OrderedDefinitions[0].Rarity,
+			EShowDownCharacterSkinRarity::Common);
+		TestEqual(
+			TEXT("A built-in catalog entry keeps its explicit rarity override"),
+			OrderedDefinitions[1].Rarity,
+			EShowDownCharacterSkinRarity::Rare);
+		TestEqual(
+			TEXT("A custom skin keeps its explicit rarity"),
+			OrderedDefinitions[2].Rarity,
+			EShowDownCharacterSkinRarity::Epic);
+	}
+
+	TArray<FShowDownCharacterSkinDefinition> BuiltInOnlyDefinitions;
+	UShowDownCharacterSkinCatalog::GetOrderedSkinDefinitions(
+		nullptr,
+		BuiltInOnlyDefinitions);
+	TestEqual(
+		TEXT("A missing editor catalog still exposes all built-in skins"),
+		BuiltInOnlyDefinitions.Num(),
+		4);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownShopPrimaryActionStateTest,
+	"ShowDown.Core.Shop.PrimaryActionState",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownShopPrimaryActionStateTest::RunTest(const FString& Parameters)
+{
+	struct FActionStateCase
+	{
+		const TCHAR* Label;
+		bool bHasSnapshot;
+		bool bLoadInFlight;
+		bool bLoadFailed;
+		bool bHasProduct;
+		bool bOwned;
+		bool bEquipped;
+		bool bPurchaseInFlight;
+		bool bEquipInFlight;
+		EShowDownShopPrimaryActionState ExpectedState;
+	};
+
+	const FActionStateCase Cases[] =
+	{
+		{ TEXT("Initial data load shows Loading"), false, false, false, true, false, false, false, false, EShowDownShopPrimaryActionState::Loading },
+		{ TEXT("A failed first load disables the action"), false, false, true, true, false, false, false, false, EShowDownShopPrimaryActionState::Unavailable },
+		{ TEXT("An active refresh temporarily shows Loading"), true, true, false, true, true, true, false, false, EShowDownShopPrimaryActionState::Loading },
+		{ TEXT("A catalog-only skin without a server product is unavailable"), true, false, false, false, false, false, false, false, EShowDownShopPrimaryActionState::Unavailable },
+		{ TEXT("An unowned product can be purchased"), true, false, false, true, false, false, false, false, EShowDownShopPrimaryActionState::Purchase },
+		{ TEXT("An owned product can be equipped"), true, false, false, true, true, false, false, false, EShowDownShopPrimaryActionState::Equip },
+		{ TEXT("The equipped product is disabled as already equipped"), true, false, false, true, true, true, false, false, EShowDownShopPrimaryActionState::Equipped },
+		{ TEXT("Purchase progress has priority over all background state"), true, true, false, true, true, true, true, true, EShowDownShopPrimaryActionState::Purchasing },
+		{ TEXT("Equip progress has priority over cosmetic refresh"), true, true, false, true, true, false, false, true, EShowDownShopPrimaryActionState::Equipping }
+	};
+
+	for (const FActionStateCase& TestCase : Cases)
+	{
+		TestEqual(
+			TestCase.Label,
+			UShowDownShopWidget::ResolvePrimaryActionState(
+				TestCase.bHasSnapshot,
+				TestCase.bLoadInFlight,
+				TestCase.bLoadFailed,
+				TestCase.bHasProduct,
+				TestCase.bOwned,
+				TestCase.bEquipped,
+				TestCase.bPurchaseInFlight,
+				TestCase.bEquipInFlight),
+			TestCase.ExpectedState);
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownShopSelectionWrapTest,
+	"ShowDown.Core.Shop.SelectionWrap",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownShopSelectionWrapTest::RunTest(const FString& Parameters)
+{
+	TestEqual(
+		TEXT("An empty catalog has no valid selection"),
+		UShowDownShopWidget::WrapSelectionIndex(0, 1, 0),
+		INDEX_NONE);
+	TestEqual(
+		TEXT("A negative item count has no valid selection"),
+		UShowDownShopWidget::WrapSelectionIndex(0, -1, -1),
+		INDEX_NONE);
+	TestEqual(
+		TEXT("Forward navigation initializes an invalid selection at the first item"),
+		UShowDownShopWidget::WrapSelectionIndex(INDEX_NONE, 1, 4),
+		0);
+	TestEqual(
+		TEXT("Backward navigation initializes an invalid selection at the last item"),
+		UShowDownShopWidget::WrapSelectionIndex(INDEX_NONE, -1, 4),
+		3);
+	TestEqual(
+		TEXT("Next wraps the final item to the first item"),
+		UShowDownShopWidget::WrapSelectionIndex(3, 1, 4),
+		0);
+	TestEqual(
+		TEXT("Previous wraps the first item to the final item"),
+		UShowDownShopWidget::WrapSelectionIndex(0, -1, 4),
+		3);
+	TestEqual(
+		TEXT("Large positive offsets wrap repeatedly"),
+		UShowDownShopWidget::WrapSelectionIndex(1, 9, 4),
+		2);
+	TestEqual(
+		TEXT("Large negative offsets wrap repeatedly"),
+		UShowDownShopWidget::WrapSelectionIndex(2, -7, 4),
+		3);
 	return true;
 }
 

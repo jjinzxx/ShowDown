@@ -214,14 +214,9 @@ namespace
 
 	FString NormalizeSubmittedCharacterSkinId(const FString& SkinId)
 	{
-		FShowDownCharacterSkinDefinition Definition;
-		FString ResolvedSkinId;
-		UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
-			nullptr,
-			SkinId,
-			Definition,
-			ResolvedSkinId);
-		return ResolvedSkinId;
+		return UShowDownCharacterSkinCatalog::NormalizeKnownSkinId(
+			UShowDownCharacterSkinCatalog::LoadDefaultCatalog(),
+			SkinId);
 	}
 }
 

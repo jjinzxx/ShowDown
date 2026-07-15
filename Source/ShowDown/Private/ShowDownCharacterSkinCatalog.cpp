@@ -9,10 +9,27 @@ namespace
 	const FString HoodmanSkinId(TEXT("hoodman"));
 	const FString MicuSkinId(TEXT("micu"));
 	const FString MikuSkinId(TEXT("miku"));
+	const TCHAR* DefaultCatalogObjectPath =
+		TEXT("/Game/Data/Characters/DA_CharacterSkinCatalog.DA_CharacterSkinCatalog");
+	constexpr int32 MaximumReplicatedSkinIdLength = 64;
+
+	FShowDownCharacterPreviewAnimationProfile MakeSingleAnimationProfile(
+		const TCHAR* AnimationPath,
+		const bool bLoop = true,
+		const float PlayRate = 1.0f)
+	{
+		FShowDownCharacterPreviewAnimationProfile Profile;
+		Profile.AnimationMode = EShowDownShopPreviewAnimationMode::SingleAnimation;
+		Profile.Animation = TSoftObjectPtr<UAnimationAsset>(FSoftObjectPath(AnimationPath));
+		Profile.bLoop = bLoop;
+		Profile.PlayRate = PlayRate;
+		return Profile;
+	}
 
 	FShowDownCharacterSkinDefinition MakeBuiltInSkinDefinition(
 		const FString& SkinId,
 		const FText& DisplayName,
+		const EShowDownCharacterSkinRarity Rarity,
 		const TCHAR* SkeletalMeshPath,
 		const TCHAR* PreviewAnimationPath,
 		const bool bLoopPreviewAnimation = true)
@@ -20,10 +37,15 @@ namespace
 		FShowDownCharacterSkinDefinition Definition;
 		Definition.SkinId = SkinId;
 		Definition.DisplayName = DisplayName;
+		Definition.Rarity = Rarity;
 		Definition.SkeletalMesh = TSoftObjectPtr<USkeletalMesh>(FSoftObjectPath(SkeletalMeshPath));
-		Definition.PreviewAnimationMode = EShowDownShopPreviewAnimationMode::SingleAnimation;
-		Definition.PreviewAnimation = TSoftObjectPtr<UAnimationAsset>(FSoftObjectPath(PreviewAnimationPath));
-		Definition.bLoopPreviewAnimation = bLoopPreviewAnimation;
+		Definition.ShopPreview = MakeSingleAnimationProfile(
+			PreviewAnimationPath,
+			bLoopPreviewAnimation);
+		// Main-menu animation is independently authorable in the data asset. The
+		// built-in fallback deliberately starts with the compatible shop animation
+		// so every shipping skin remains animated before that asset is authored.
+		Definition.MainMenuPreview = Definition.ShopPreview;
 		return Definition;
 	}
 
@@ -34,22 +56,26 @@ namespace
 			MakeBuiltInSkinDefinition(
 				RobotSkinId,
 				NSLOCTEXT("ShowDownCharacterSkins", "Robot", "Robot"),
+				EShowDownCharacterSkinRarity::Common,
 				TEXT("/Game/Character/Robot/robot.robot"),
 				TEXT("/Game/Character/Animation/Idle_default_.Idle_default_")),
 			MakeBuiltInSkinDefinition(
 				HoodmanSkinId,
 				NSLOCTEXT("ShowDownCharacterSkins", "Hoodman", "Hoodman"),
+				EShowDownCharacterSkinRarity::Rare,
 				TEXT("/Game/Character/hoodman_default_/hoodman.hoodman"),
 				TEXT("/Game/Character/Animation/Dismissing_Gesture.Dismissing_Gesture"),
 				false),
 			MakeBuiltInSkinDefinition(
 				MicuSkinId,
 				NSLOCTEXT("ShowDownCharacterSkins", "Micu", "Micu"),
+				EShowDownCharacterSkinRarity::Epic,
 				TEXT("/Game/Character/micu/Tut_Hip_Hop_Dance__1_.Tut_Hip_Hop_Dance__1_"),
 				TEXT("/Game/Character/micu/Tut_Hip_Hop_Dance__1__Anim.Tut_Hip_Hop_Dance__1__Anim")),
 			MakeBuiltInSkinDefinition(
 				MikuSkinId,
 				NSLOCTEXT("ShowDownCharacterSkins", "Miku", "Miku"),
+				EShowDownCharacterSkinRarity::Legendary,
 				TEXT("/Game/Character/miku/miku.miku"),
 				TEXT("/Game/Character/Animation/Reacting.Reacting"),
 				false)
@@ -68,6 +94,19 @@ FString UShowDownCharacterSkinCatalog::CanonicalizeSkinId(const FString& SkinId)
 	FString CanonicalId = SkinId;
 	CanonicalId.TrimStartAndEndInline();
 	CanonicalId.ToLowerInline();
+	if (CanonicalId.Len() > MaximumReplicatedSkinIdLength)
+	{
+		return FString();
+	}
+	for (const TCHAR Character : CanonicalId)
+	{
+		if (!FChar::IsAlnum(Character)
+			&& Character != TEXT('_')
+			&& Character != TEXT('-'))
+		{
+			return FString();
+		}
+	}
 
 	// Accept the older product-style aliases while keeping the replicated and
 	// persisted runtime ids short and stable.
@@ -89,6 +128,31 @@ FString UShowDownCharacterSkinCatalog::CanonicalizeSkinId(const FString& SkinId)
 	}
 
 	return CanonicalId;
+}
+
+UShowDownCharacterSkinCatalog* UShowDownCharacterSkinCatalog::LoadDefaultCatalog()
+{
+	return LoadObject<UShowDownCharacterSkinCatalog>(nullptr, DefaultCatalogObjectPath);
+}
+
+FString UShowDownCharacterSkinCatalog::NormalizeKnownSkinId(
+	const UShowDownCharacterSkinCatalog* Catalog,
+	const FString& SkinId)
+{
+	const FString CanonicalSkinId = CanonicalizeSkinId(SkinId);
+	if (CanonicalSkinId.IsEmpty())
+	{
+		return RobotSkinId;
+	}
+
+	FShowDownCharacterSkinDefinition Definition;
+	if (FindBuiltInSkinDefinition(CanonicalSkinId, Definition)
+		|| (Catalog && Catalog->FindSkinDefinition(CanonicalSkinId, Definition)))
+	{
+		return CanonicalSkinId;
+	}
+
+	return RobotSkinId;
 }
 
 bool UShowDownCharacterSkinCatalog::FindSkinDefinition(
@@ -170,6 +234,10 @@ bool UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
 			{
 				OutDefinition.Description = CatalogDefinition.Description;
 			}
+			if (CatalogDefinition.Rarity != EShowDownCharacterSkinRarity::Unspecified)
+			{
+				OutDefinition.Rarity = CatalogDefinition.Rarity;
+			}
 			if (!CatalogDefinition.Thumbnail.IsNull())
 			{
 				OutDefinition.Thumbnail = CatalogDefinition.Thumbnail;
@@ -179,15 +247,16 @@ bool UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
 				OutDefinition.SkeletalMesh = CatalogDefinition.SkeletalMesh;
 			}
 
-			if (CatalogDefinition.PreviewAnimationMode
+			if (CatalogDefinition.ShopPreview.AnimationMode
 				!= EShowDownShopPreviewAnimationMode::InheritBuiltIn)
 			{
-				OutDefinition.PreviewAnimationMode = CatalogDefinition.PreviewAnimationMode;
-				OutDefinition.PreviewAnimClass = CatalogDefinition.PreviewAnimClass;
-				OutDefinition.PreviewAnimation = CatalogDefinition.PreviewAnimation;
-				OutDefinition.bLoopPreviewAnimation = CatalogDefinition.bLoopPreviewAnimation;
-				OutDefinition.PreviewAnimationPlayRate =
-					CatalogDefinition.PreviewAnimationPlayRate;
+				OutDefinition.ShopPreview = CatalogDefinition.ShopPreview;
+			}
+
+			if (CatalogDefinition.MainMenuPreview.AnimationMode
+				!= EShowDownShopPreviewAnimationMode::InheritBuiltIn)
+			{
+				OutDefinition.MainMenuPreview = CatalogDefinition.MainMenuPreview;
 			}
 
 			OutDefinition.PreviewLocationOffset = CatalogDefinition.PreviewLocationOffset;
@@ -197,6 +266,10 @@ bool UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
 		else
 		{
 			OutDefinition = CatalogDefinition;
+			if (OutDefinition.Rarity == EShowDownCharacterSkinRarity::Unspecified)
+			{
+				OutDefinition.Rarity = EShowDownCharacterSkinRarity::Common;
+			}
 		}
 
 		OutDefinition.SkinId = CanonicalRequestedId;
@@ -230,4 +303,89 @@ bool UShowDownCharacterSkinCatalog::ResolveSkinDefinition(
 	OutDefinition = FShowDownCharacterSkinDefinition();
 	OutResolvedSkinId = RobotSkinId;
 	return false;
+}
+
+void UShowDownCharacterSkinCatalog::GetOrderedSkinDefinitions(
+	const UShowDownCharacterSkinCatalog* Catalog,
+	TArray<FShowDownCharacterSkinDefinition>& OutDefinitions)
+{
+	OutDefinitions.Reset();
+	TSet<FString> AddedSkinIds;
+
+	auto AddResolvedDefinition = [&](const FString& RequestedSkinId)
+	{
+		const FString CanonicalSkinId = CanonicalizeSkinId(RequestedSkinId);
+		if (CanonicalSkinId.IsEmpty() || AddedSkinIds.Contains(CanonicalSkinId))
+		{
+			return;
+		}
+
+		FShowDownCharacterSkinDefinition Definition;
+		FString ResolvedSkinId;
+		if (ResolveSkinDefinition(Catalog, CanonicalSkinId, Definition, ResolvedSkinId)
+			&& CanonicalizeSkinId(ResolvedSkinId) == CanonicalSkinId)
+		{
+			AddedSkinIds.Add(CanonicalSkinId);
+			OutDefinitions.Add(MoveTemp(Definition));
+		}
+	};
+
+	if (Catalog)
+	{
+		for (const FShowDownCharacterSkinDefinition& Definition : Catalog->Skins)
+		{
+			AddResolvedDefinition(Definition.SkinId);
+		}
+	}
+
+	for (const FShowDownCharacterSkinDefinition& BuiltInDefinition : GetBuiltInSkinDefinitions())
+	{
+		AddResolvedDefinition(BuiltInDefinition.SkinId);
+	}
+}
+
+const FShowDownCharacterPreviewAnimationProfile&
+UShowDownCharacterSkinCatalog::GetPreviewProfile(
+	const FShowDownCharacterSkinDefinition& Definition,
+	const EShowDownCharacterPreviewContext Context)
+{
+	return Context == EShowDownCharacterPreviewContext::MainMenu
+		? Definition.MainMenuPreview
+		: Definition.ShopPreview;
+}
+
+FText UShowDownCharacterSkinCatalog::GetRarityDisplayName(
+	const EShowDownCharacterSkinRarity Rarity)
+{
+	switch (Rarity)
+	{
+	case EShowDownCharacterSkinRarity::Rare:
+		return NSLOCTEXT("ShowDownCharacterSkins", "Rare", "RARE");
+	case EShowDownCharacterSkinRarity::Epic:
+		return NSLOCTEXT("ShowDownCharacterSkins", "Epic", "EPIC");
+	case EShowDownCharacterSkinRarity::Legendary:
+		return NSLOCTEXT("ShowDownCharacterSkins", "Legendary", "LEGENDARY");
+	case EShowDownCharacterSkinRarity::Unspecified:
+	case EShowDownCharacterSkinRarity::Common:
+	default:
+		return NSLOCTEXT("ShowDownCharacterSkins", "Common", "COMMON");
+	}
+}
+
+FLinearColor UShowDownCharacterSkinCatalog::GetRarityColor(
+	const EShowDownCharacterSkinRarity Rarity)
+{
+	switch (Rarity)
+	{
+	case EShowDownCharacterSkinRarity::Rare:
+		return FLinearColor(0.16f, 0.48f, 1.0f, 1.0f);
+	case EShowDownCharacterSkinRarity::Epic:
+		return FLinearColor(0.65f, 0.24f, 0.94f, 1.0f);
+	case EShowDownCharacterSkinRarity::Legendary:
+		return FLinearColor(0.95f, 0.69f, 0.16f, 1.0f);
+	case EShowDownCharacterSkinRarity::Unspecified:
+	case EShowDownCharacterSkinRarity::Common:
+	default:
+		return FLinearColor(0.82f, 0.84f, 0.86f, 1.0f);
+	}
 }

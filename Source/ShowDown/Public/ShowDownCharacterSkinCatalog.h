@@ -9,7 +9,26 @@ class UAnimInstance;
 class USkeletalMesh;
 class UTexture2D;
 
-/** Selects how a skin is animated by the shop-only preview actor. */
+/** Presentation rarity authored locally for character previews and UI styling. */
+UENUM(BlueprintType)
+enum class EShowDownCharacterSkinRarity : uint8
+{
+	Unspecified UMETA(Hidden),
+	Common UMETA(DisplayName = "Common"),
+	Rare UMETA(DisplayName = "Rare"),
+	Epic UMETA(DisplayName = "Epic"),
+	Legendary UMETA(DisplayName = "Legendary")
+};
+
+/** Selects which editor-placed presentation actor is requesting animation data. */
+UENUM(BlueprintType)
+enum class EShowDownCharacterPreviewContext : uint8
+{
+	Shop UMETA(DisplayName = "Shop"),
+	MainMenu UMETA(DisplayName = "Main Menu")
+};
+
+/** Selects how a skin is animated by a lightweight character preview actor. */
 UENUM(BlueprintType)
 enum class EShowDownShopPreviewAnimationMode : uint8
 {
@@ -17,6 +36,58 @@ enum class EShowDownShopPreviewAnimationMode : uint8
 	ReferencePose UMETA(DisplayName = "Reference Pose"),
 	SingleAnimation UMETA(DisplayName = "Single Animation"),
 	AnimationBlueprint UMETA(DisplayName = "Animation Blueprint")
+};
+
+/** A screen-specific animation profile for one character skin. */
+USTRUCT(BlueprintType)
+struct SHOWDOWN_API FShowDownCharacterPreviewAnimationProfile
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Preview")
+	EShowDownShopPreviewAnimationMode AnimationMode =
+		EShowDownShopPreviewAnimationMode::InheritBuiltIn;
+
+	/** Animation blueprint used when Animation Mode is Animation Blueprint. */
+	UPROPERTY(
+		EditAnywhere,
+		BlueprintReadOnly,
+		Category = "ShowDown|Character Preview",
+		meta = (
+			EditCondition = "AnimationMode == EShowDownShopPreviewAnimationMode::AnimationBlueprint",
+			EditConditionHides))
+	TSoftClassPtr<UAnimInstance> AnimClass;
+
+	/** Single animation sequence, composite, or blend space used by the preview. */
+	UPROPERTY(
+		EditAnywhere,
+		BlueprintReadOnly,
+		Category = "ShowDown|Character Preview",
+		meta = (
+			EditCondition = "AnimationMode == EShowDownShopPreviewAnimationMode::SingleAnimation",
+			EditConditionHides))
+	TSoftObjectPtr<UAnimationAsset> Animation;
+
+	UPROPERTY(
+		EditAnywhere,
+		BlueprintReadOnly,
+		Category = "ShowDown|Character Preview",
+		meta = (
+			EditCondition = "AnimationMode == EShowDownShopPreviewAnimationMode::SingleAnimation",
+			EditConditionHides))
+	bool bLoop = true;
+
+	UPROPERTY(
+		EditAnywhere,
+		BlueprintReadOnly,
+		Category = "ShowDown|Character Preview",
+		meta = (
+			ClampMin = "0.0",
+			UIMin = "0.0",
+			UIMax = "3.0",
+			EditCondition = "AnimationMode == EShowDownShopPreviewAnimationMode::SingleAnimation",
+			EditConditionHides))
+	float PlayRate = 1.0f;
 };
 
 /**
@@ -39,6 +110,9 @@ struct SHOWDOWN_API FShowDownCharacterSkinDefinition
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Skin")
 	FText Description;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Skin")
+	EShowDownCharacterSkinRarity Rarity = EShowDownCharacterSkinRarity::Unspecified;
+
 	/** Optional local thumbnail for future list/grid layouts. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Skin")
 	TSoftObjectPtr<UTexture2D> Thumbnail;
@@ -46,62 +120,25 @@ struct SHOWDOWN_API FShowDownCharacterSkinDefinition
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Skin")
 	TSoftObjectPtr<USkeletalMesh> SkeletalMesh;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Skin|Shop Preview")
-	EShowDownShopPreviewAnimationMode PreviewAnimationMode =
-		EShowDownShopPreviewAnimationMode::InheritBuiltIn;
+	/** Animation shown while this skin is selected in the shop. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Skin|Preview")
+	FShowDownCharacterPreviewAnimationProfile ShopPreview;
 
-	/** Animation blueprint used when Preview Animation Mode is Animation Blueprint. */
-	UPROPERTY(
-		EditAnywhere,
-		BlueprintReadOnly,
-		Category = "ShowDown|Character Skin|Shop Preview",
-		meta = (
-			EditCondition = "PreviewAnimationMode == EShowDownShopPreviewAnimationMode::AnimationBlueprint",
-			EditConditionHides))
-	TSoftClassPtr<UAnimInstance> PreviewAnimClass;
-
-	/** Single animation sequence, composite, or blend space used by the preview. */
-	UPROPERTY(
-		EditAnywhere,
-		BlueprintReadOnly,
-		Category = "ShowDown|Character Skin|Shop Preview",
-		meta = (
-			EditCondition = "PreviewAnimationMode == EShowDownShopPreviewAnimationMode::SingleAnimation",
-			EditConditionHides))
-	TSoftObjectPtr<UAnimationAsset> PreviewAnimation;
-
-	UPROPERTY(
-		EditAnywhere,
-		BlueprintReadOnly,
-		Category = "ShowDown|Character Skin|Shop Preview",
-		meta = (
-			EditCondition = "PreviewAnimationMode == EShowDownShopPreviewAnimationMode::SingleAnimation",
-			EditConditionHides))
-	bool bLoopPreviewAnimation = true;
-
-	UPROPERTY(
-		EditAnywhere,
-		BlueprintReadOnly,
-		Category = "ShowDown|Character Skin|Shop Preview",
-		meta = (
-			ClampMin = "0.0",
-			UIMin = "0.0",
-			UIMax = "3.0",
-			EditCondition = "PreviewAnimationMode == EShowDownShopPreviewAnimationMode::SingleAnimation",
-			EditConditionHides))
-	float PreviewAnimationPlayRate = 1.0f;
+	/** Animation shown for the equipped skin on the main menu. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Skin|Preview")
+	FShowDownCharacterPreviewAnimationProfile MainMenuPreview;
 
 	/** Per-skin mesh correction relative to the preview actor. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Skin|Shop Preview|Transform")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Skin|Preview|Transform")
 	FVector PreviewLocationOffset = FVector::ZeroVector;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Skin|Shop Preview|Transform")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Skin|Preview|Transform")
 	FRotator PreviewRotationOffset = FRotator::ZeroRotator;
 
 	UPROPERTY(
 		EditAnywhere,
 		BlueprintReadOnly,
-		Category = "ShowDown|Character Skin|Shop Preview|Transform",
+		Category = "ShowDown|Character Skin|Preview|Transform",
 		meta = (ClampMin = "0.01"))
 	FVector PreviewScale = FVector::OneVector;
 };
@@ -123,6 +160,17 @@ public:
 
 	static FString CanonicalizeSkinId(const FString& SkinId);
 
+	/** Loads the project-wide catalog used by gameplay replication validation. */
+	static UShowDownCharacterSkinCatalog* LoadDefaultCatalog();
+
+	/**
+	 * Canonicalizes and validates an id against the supplied catalog plus the
+	 * built-in skins. Unknown or unsafe replicated values resolve to robot.
+	 */
+	static FString NormalizeKnownSkinId(
+		const UShowDownCharacterSkinCatalog* Catalog,
+		const FString& SkinId);
+
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Character Skin")
 	bool FindSkinDefinition(
 		const FString& RequestedSkinId,
@@ -137,6 +185,21 @@ public:
 		const FString& RequestedSkinId,
 		FShowDownCharacterSkinDefinition& OutDefinition,
 		FString& OutResolvedSkinId);
+
+	/** Returns catalog entries in editor order, then appends missing built-ins. */
+	static void GetOrderedSkinDefinitions(
+		const UShowDownCharacterSkinCatalog* Catalog,
+		TArray<FShowDownCharacterSkinDefinition>& OutDefinitions);
+
+	static const FShowDownCharacterPreviewAnimationProfile& GetPreviewProfile(
+		const FShowDownCharacterSkinDefinition& Definition,
+		EShowDownCharacterPreviewContext Context);
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Character Skin")
+	static FText GetRarityDisplayName(EShowDownCharacterSkinRarity Rarity);
+
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Character Skin")
+	static FLinearColor GetRarityColor(EShowDownCharacterSkinRarity Rarity);
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Character Skin", meta = (TitleProperty = "SkinId"))
 	TArray<FShowDownCharacterSkinDefinition> Skins;

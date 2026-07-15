@@ -61,6 +61,8 @@ FString MakeRewardFailureMessage(int32 StatusCode)
 
 void USupabaseSubsystem::LoginWithEmail(const FString& Email, const FString& Password)
 {
+	const uint64 LoginGeneration = ++LoginAttemptGeneration;
+
 	// 이메일이나 비밀번호가 비어 있으면 서버에 요청하지 않고 바로 실패 처리합니다.
 	if (Email.IsEmpty() || Password.IsEmpty())
 	{
@@ -96,11 +98,19 @@ void USupabaseSubsystem::LoginWithEmail(const FString& Email, const FString& Pas
 	// 서버 응답이 돌아오면 HandleLoginResponse 함수가 호출되도록 연결합니다.
 	Request->OnProcessRequestComplete().BindUObject(
 		this,
-		&USupabaseSubsystem::HandleLoginResponse
+		&USupabaseSubsystem::HandleLoginResponse,
+		LoginGeneration
 	);
 
 	// 실제 HTTP 요청을 시작합니다. 이 요청은 비동기로 처리됩니다.
-	Request->ProcessRequest();
+	if (!Request->ProcessRequest())
+	{
+		if (LoginGeneration == LoginAttemptGeneration)
+		{
+			OnLoginResult.Broadcast(false, TEXT("Could not start login request."));
+		}
+		return;
+	}
 
 	// UI에 즉시 "로그인 중" 상태를 알려줍니다.
 	OnLoginResult.Broadcast(false, TEXT("Logging in..."));
@@ -109,9 +119,15 @@ void USupabaseSubsystem::LoginWithEmail(const FString& Email, const FString& Pas
 void USupabaseSubsystem::HandleLoginResponse(
 	FHttpRequestPtr Request,
 	FHttpResponsePtr Response,
-	bool bWasSuccessful
+	bool bWasSuccessful,
+	const uint64 LoginGeneration
 )
 {
+	if (LoginGeneration != LoginAttemptGeneration)
+	{
+		return;
+	}
+
 	// 네트워크 요청 자체가 실패했거나 응답 객체가 없으면 실패 처리합니다.
 	if (!bWasSuccessful || !Response.IsValid())
 	{
@@ -143,7 +159,8 @@ void USupabaseSubsystem::HandleLoginResponse(
 
 	// 로그인 성공 응답에서 access_token을 꺼내 저장합니다.
 	// 이후 DB 요청에서 Authorization: Bearer 토큰 형태로 사용합니다.
-	if (!JsonObject->TryGetStringField(TEXT("access_token"), AccessToken))
+	FString NewAccessToken;
+	if (!JsonObject->TryGetStringField(TEXT("access_token"), NewAccessToken))
 	{
 		OnLoginResult.Broadcast(false, TEXT("Access token not found."));
 		return;
@@ -151,11 +168,21 @@ void USupabaseSubsystem::HandleLoginResponse(
 
 	// 로그인 응답 안의 user 객체에서 유저 id를 꺼내 저장합니다.
 	// 현재 DB 테이블들의 user_id와 같은 값입니다.
+	FString NewUserId;
 	const TSharedPtr<FJsonObject>* UserObject = nullptr;
 	if (JsonObject->TryGetObjectField(TEXT("user"), UserObject) && UserObject && UserObject->IsValid())
 	{
-		(*UserObject)->TryGetStringField(TEXT("id"), UserId);
+		(*UserObject)->TryGetStringField(TEXT("id"), NewUserId);
 	}
+	if (NewUserId.IsEmpty())
+	{
+		OnLoginResult.Broadcast(false, TEXT("User id not found."));
+		return;
+	}
+
+	AccessToken = MoveTemp(NewAccessToken);
+	UserId = MoveTemp(NewUserId);
+	BeginAuthenticatedSession();
 
 	UE_LOG(LogTemp, Log, TEXT("Supabase login success"));
 	UE_LOG(LogTemp, Log, TEXT("UserId: %s"), *UserId);
@@ -169,6 +196,8 @@ void USupabaseSubsystem::HandleLoginResponse(
 
 void USupabaseSubsystem::LoginWithId(const FString& Id, const FString& Password)
 {
+	const uint64 LoginGeneration = ++LoginAttemptGeneration;
+
 	// 아이디나 비밀번호가 비어 있으면 서버에 요청하지 않고 바로 실패 처리합니다.
 	if (Id.IsEmpty() || Password.IsEmpty())
 	{
@@ -200,10 +229,18 @@ void USupabaseSubsystem::LoginWithId(const FString& Id, const FString& Password)
 
 	Request->OnProcessRequestComplete().BindUObject(
 		this,
-		&USupabaseSubsystem::HandleLoginWithIdResponse
+		&USupabaseSubsystem::HandleLoginWithIdResponse,
+		LoginGeneration
 	);
 
-	Request->ProcessRequest();
+	if (!Request->ProcessRequest())
+	{
+		if (LoginGeneration == LoginAttemptGeneration)
+		{
+			OnLoginResult.Broadcast(false, TEXT("Could not start login request."));
+		}
+		return;
+	}
 
 	OnLoginResult.Broadcast(false, TEXT("Logging in..."));
 }
@@ -211,9 +248,15 @@ void USupabaseSubsystem::LoginWithId(const FString& Id, const FString& Password)
 void USupabaseSubsystem::HandleLoginWithIdResponse(
 	FHttpRequestPtr Request,
 	FHttpResponsePtr Response,
-	bool bWasSuccessful
+	bool bWasSuccessful,
+	const uint64 LoginGeneration
 )
 {
+	if (LoginGeneration != LoginAttemptGeneration)
+	{
+		return;
+	}
+
 	if (!bWasSuccessful || !Response.IsValid())
 	{
 		OnLoginResult.Broadcast(false, TEXT("Network error. Check your connection and try again."));
@@ -241,13 +284,24 @@ void USupabaseSubsystem::HandleLoginWithIdResponse(
 	}
 
 	// Edge Function이 돌려준 세션에서 access_token과 user_id를 저장합니다.
-	if (!JsonObject->TryGetStringField(TEXT("access_token"), AccessToken))
+	FString NewAccessToken;
+	if (!JsonObject->TryGetStringField(TEXT("access_token"), NewAccessToken))
 	{
 		OnLoginResult.Broadcast(false, TEXT("Access token not found."));
 		return;
 	}
 
-	JsonObject->TryGetStringField(TEXT("user_id"), UserId);
+	FString NewUserId;
+	JsonObject->TryGetStringField(TEXT("user_id"), NewUserId);
+	if (NewUserId.IsEmpty())
+	{
+		OnLoginResult.Broadcast(false, TEXT("User id not found."));
+		return;
+	}
+
+	AccessToken = MoveTemp(NewAccessToken);
+	UserId = MoveTemp(NewUserId);
+	BeginAuthenticatedSession();
 
 	UE_LOG(LogTemp, Log, TEXT("Login (id) success. UserId: %s"), *UserId);
 
@@ -255,6 +309,41 @@ void USupabaseSubsystem::HandleLoginWithIdResponse(
 	LoadPlayerData();
 
 	OnLoginResult.Broadcast(true, TEXT("Login success."));
+}
+
+void USupabaseSubsystem::BeginAuthenticatedSession()
+{
+	// Every successful login starts a new response epoch. Requests issued with
+	// an older access token may still complete, but their handlers reject the
+	// stale generation before touching the new account's state.
+	++AuthSessionGeneration;
+	++PlayerDataRequestGeneration;
+
+	Nickname.Empty();
+	Coin = 0;
+	Score = 1000;
+	Leaderboard.Empty();
+
+	bAwardWinRewardInFlight = false;
+	bCosmeticDataLoadInFlight = false;
+	bCosmeticDataLoadFailed = false;
+	bHasCosmeticDataSnapshot = false;
+	bSkinPurchaseInFlight = false;
+	bSkinEquipInFlight = false;
+	PendingCosmeticDataRequests = 0;
+	CosmeticDataLoadErrors.Empty();
+	PendingShopSetId.Empty();
+
+	ShopSkins.Empty();
+	OwnedSkinIds.Empty();
+	OwnedSkinSetIds.Empty();
+	EquippedSkinIdsByType.Empty();
+	SkinSetItemsBySetId.Empty();
+	PendingShopSkins.Empty();
+	PendingOwnedSkinIds.Empty();
+	PendingOwnedSkinSetIds.Empty();
+	PendingEquippedSkinIdsByType.Empty();
+	PendingSkinSetItemsBySetId.Empty();
 }
 
 void USupabaseSubsystem::LoadLeaderboard(int32 Limit)
@@ -276,10 +365,12 @@ void USupabaseSubsystem::LoadLeaderboard(int32 Limit)
 	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&BodyString);
 	FJsonSerializer::Serialize(BodyObject.ToSharedRef(), Writer);
 	Request->SetContentAsString(BodyString);
+	const uint64 RequestGeneration = AuthSessionGeneration;
 
 	Request->OnProcessRequestComplete().BindUObject(
 		this,
-		&USupabaseSubsystem::HandleLeaderboardResponse
+		&USupabaseSubsystem::HandleLeaderboardResponse,
+		RequestGeneration
 	);
 
 	Request->ProcessRequest();
@@ -289,9 +380,15 @@ void USupabaseSubsystem::LoadLeaderboard(int32 Limit)
 void USupabaseSubsystem::HandleLeaderboardResponse(
 	FHttpRequestPtr Request,
 	FHttpResponsePtr Response,
-	bool bWasSuccessful
+	bool bWasSuccessful,
+	const uint64 RequestGeneration
 )
 {
+	if (RequestGeneration != AuthSessionGeneration)
+	{
+		return;
+	}
+
 	if (!bWasSuccessful || !Response.IsValid())
 	{
 		OnLeaderboardLoaded.Broadcast(false, TEXT("Could not load rankings. Check your connection and try again."));
@@ -372,6 +469,8 @@ void USupabaseSubsystem::LoadPlayerData()
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("Loading player data..."));
+	const uint64 RequestGeneration = AuthSessionGeneration;
+	const uint64 PlayerDataGeneration = ++PlayerDataRequestGeneration;
 
 	// profiles 테이블에서 현재 로그인한 유저의 nickname을 가져옵니다.
 	// RLS 정책 때문에 auth.uid()에 해당하는 자기 데이터만 반환됩니다.
@@ -380,7 +479,9 @@ void USupabaseSubsystem::LoadPlayerData()
 
 	ProfileRequest->OnProcessRequestComplete().BindUObject(
 		this,
-		&USupabaseSubsystem::HandleProfileResponse
+		&USupabaseSubsystem::HandleProfileResponse,
+		RequestGeneration,
+		PlayerDataGeneration
 	);
 
 	ProfileRequest->ProcessRequest();
@@ -394,7 +495,9 @@ void USupabaseSubsystem::LoadPlayerData()
 
 	WalletRequest->OnProcessRequestComplete().BindUObject(
 		this,
-		&USupabaseSubsystem::HandleWalletResponse
+		&USupabaseSubsystem::HandleWalletResponse,
+		RequestGeneration,
+		PlayerDataGeneration
 	);
 
 	WalletRequest->ProcessRequest();
@@ -409,7 +512,9 @@ void USupabaseSubsystem::LoadPlayerData()
 
 	RankRequest->OnProcessRequestComplete().BindUObject(
 		this,
-		&USupabaseSubsystem::HandleRankResponse
+		&USupabaseSubsystem::HandleRankResponse,
+		RequestGeneration,
+		PlayerDataGeneration
 	);
 
 	RankRequest->ProcessRequest();
@@ -420,6 +525,14 @@ void USupabaseSubsystem::LoadCosmeticData()
 	// 상점 상품은 skin_sets 기준으로 보여주고,
 	// 실제 장착은 skin_set_items에 묶인 skins 기준으로 처리합니다.
 	// 그래서 상품/보유 세트/세트 구성품/현재 장착값을 함께 불러와야 합니다.
+	// A refresh and a mutation must never overlap: a refresh started from an
+	// older snapshot could otherwise replace the just-purchased/equipped cache.
+	if (IsShopOperationInFlight())
+	{
+		UE_LOG(LogTemp, Verbose, TEXT("Cosmetic data refresh was skipped during a shop operation."));
+		return;
+	}
+
 	if (AccessToken.IsEmpty())
 	{
 		OnCosmeticDataLoaded.Broadcast(false, TEXT("Access token is empty."));
@@ -441,11 +554,12 @@ void USupabaseSubsystem::LoadCosmeticData()
 	PendingCosmeticDataRequests = 5;
 	CosmeticDataLoadErrors.Empty();
 
-	ShopSkins.Empty();
-	OwnedSkinIds.Empty();
-	OwnedSkinSetIds.Empty();
-	EquippedSkinIdsByType.Empty();
-	SkinSetItemsBySetId.Empty();
+	PendingShopSkins.Empty();
+	PendingOwnedSkinIds.Empty();
+	PendingOwnedSkinSetIds.Empty();
+	PendingEquippedSkinIdsByType.Empty();
+	PendingSkinSetItemsBySetId.Empty();
+	const uint64 RequestGeneration = AuthSessionGeneration;
 
 	// 상점에 표시할 상품 목록입니다.
 	// card와 card_back 같은 실제 스킨 조각은 skin_set_items에서 묶이고,
@@ -458,20 +572,28 @@ void USupabaseSubsystem::LoadCosmeticData()
 
 	SkinsRequest->OnProcessRequestComplete().BindUObject(
 		this,
-		&USupabaseSubsystem::HandleSkinsResponse
+		&USupabaseSubsystem::HandleSkinsResponse,
+		RequestGeneration
 	);
 
-	SkinsRequest->ProcessRequest();
+	if (!SkinsRequest->ProcessRequest())
+	{
+		CompleteCosmeticDataRequest(false, TEXT("Could not start shop items request."));
+	}
 
 	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> PlayerSkinsRequest =
 		CreateAuthorizedRequest(TEXT("/rest/v1/player_skins?select=skin_id"), TEXT("GET"));
 
 	PlayerSkinsRequest->OnProcessRequestComplete().BindUObject(
 		this,
-		&USupabaseSubsystem::HandlePlayerSkinsResponse
+		&USupabaseSubsystem::HandlePlayerSkinsResponse,
+		RequestGeneration
 	);
 
-	PlayerSkinsRequest->ProcessRequest();
+	if (!PlayerSkinsRequest->ProcessRequest())
+	{
+		CompleteCosmeticDataRequest(false, TEXT("Could not start owned skins request."));
+	}
 
 	// 새 상점 구조의 보유 여부입니다.
 	// 이전 구조 호환을 위해 player_skins도 읽지만, 상품 보유 판단은 이 테이블이 기준입니다.
@@ -480,10 +602,14 @@ void USupabaseSubsystem::LoadCosmeticData()
 
 	PlayerSkinSetsRequest->OnProcessRequestComplete().BindUObject(
 		this,
-		&USupabaseSubsystem::HandlePlayerSkinSetsResponse
+		&USupabaseSubsystem::HandlePlayerSkinSetsResponse,
+		RequestGeneration
 	);
 
-	PlayerSkinSetsRequest->ProcessRequest();
+	if (!PlayerSkinSetsRequest->ProcessRequest())
+	{
+		CompleteCosmeticDataRequest(false, TEXT("Could not start owned sets request."));
+	}
 
 	// 상품 세트가 실제로 어떤 장착 slot들을 포함하는지 읽습니다.
 	// 예: gold_card_set -> gold_card(card), gold_card_back(card_back)
@@ -492,20 +618,36 @@ void USupabaseSubsystem::LoadCosmeticData()
 
 	SkinSetItemsRequest->OnProcessRequestComplete().BindUObject(
 		this,
-		&USupabaseSubsystem::HandleSkinSetItemsResponse
+		&USupabaseSubsystem::HandleSkinSetItemsResponse,
+		RequestGeneration
 	);
 
-	SkinSetItemsRequest->ProcessRequest();
+	if (!SkinSetItemsRequest->ProcessRequest())
+	{
+		CompleteCosmeticDataRequest(false, TEXT("Could not start skin set items request."));
+	}
 
 	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> EquipmentRequest =
 		CreateAuthorizedRequest(TEXT("/rest/v1/player_equipment?select=skin_type,equipped_skin_id"), TEXT("GET"));
 
 	EquipmentRequest->OnProcessRequestComplete().BindUObject(
 		this,
-		&USupabaseSubsystem::HandlePlayerEquipmentResponse
+		&USupabaseSubsystem::HandlePlayerEquipmentResponse,
+		RequestGeneration
 	);
 
-	EquipmentRequest->ProcessRequest();
+	if (!EquipmentRequest->ProcessRequest())
+	{
+		CompleteCosmeticDataRequest(false, TEXT("Could not start equipment request."));
+	}
+}
+
+void USupabaseSubsystem::EnsureCosmeticDataLoaded()
+{
+	if (!bHasCosmeticDataSnapshot && !bCosmeticDataLoadInFlight)
+	{
+		LoadCosmeticData();
+	}
 }
 
 void USupabaseSubsystem::CompleteCosmeticDataRequest(bool bSuccess, const FString& Message)
@@ -538,15 +680,30 @@ void USupabaseSubsystem::CompleteCosmeticDataRequest(bool bSuccess, const FStrin
 		return;
 	}
 
+	ShopSkins = MoveTemp(PendingShopSkins);
+	OwnedSkinIds = MoveTemp(PendingOwnedSkinIds);
+	OwnedSkinSetIds = MoveTemp(PendingOwnedSkinSetIds);
+	EquippedSkinIdsByType = MoveTemp(PendingEquippedSkinIdsByType);
+	SkinSetItemsBySetId = MoveTemp(PendingSkinSetItemsBySetId);
+	bHasCosmeticDataSnapshot = true;
+
 	OnCosmeticDataLoaded.Broadcast(true, TEXT("Cosmetic data loaded."));
 }
 
 void USupabaseSubsystem::HandleProfileResponse(
 	FHttpRequestPtr Request,
 	FHttpResponsePtr Response,
-	bool bWasSuccessful
+	bool bWasSuccessful,
+	const uint64 RequestGeneration,
+	const uint64 PlayerDataGeneration
 )
 {
+	if (RequestGeneration != AuthSessionGeneration
+		|| PlayerDataGeneration != PlayerDataRequestGeneration)
+	{
+		return;
+	}
+
 	// 프로필 요청 자체가 실패한 경우입니다.
 	if (!bWasSuccessful || !Response.IsValid())
 	{
@@ -591,9 +748,17 @@ void USupabaseSubsystem::HandleProfileResponse(
 void USupabaseSubsystem::HandleWalletResponse(
 	FHttpRequestPtr Request,
 	FHttpResponsePtr Response,
-	bool bWasSuccessful
+	bool bWasSuccessful,
+	const uint64 RequestGeneration,
+	const uint64 PlayerDataGeneration
 )
 {
+	if (RequestGeneration != AuthSessionGeneration
+		|| PlayerDataGeneration != PlayerDataRequestGeneration)
+	{
+		return;
+	}
+
 	// 재화 요청 자체가 실패한 경우입니다.
 	if (!bWasSuccessful || !Response.IsValid())
 	{
@@ -637,9 +802,17 @@ void USupabaseSubsystem::HandleWalletResponse(
 void USupabaseSubsystem::HandleRankResponse(
 	FHttpRequestPtr Request,
 	FHttpResponsePtr Response,
-	bool bWasSuccessful
+	bool bWasSuccessful,
+	const uint64 RequestGeneration,
+	const uint64 PlayerDataGeneration
 )
 {
+	if (RequestGeneration != AuthSessionGeneration
+		|| PlayerDataGeneration != PlayerDataRequestGeneration)
+	{
+		return;
+	}
+
 	// 랭크 요청 자체가 실패한 경우입니다.
 	if (!bWasSuccessful || !Response.IsValid())
 	{
@@ -683,9 +856,15 @@ void USupabaseSubsystem::HandleRankResponse(
 void USupabaseSubsystem::HandleSkinsResponse(
 	FHttpRequestPtr Request,
 	FHttpResponsePtr Response,
-	bool bWasSuccessful
+	bool bWasSuccessful,
+	const uint64 RequestGeneration
 )
 {
+	if (RequestGeneration != AuthSessionGeneration)
+	{
+		return;
+	}
+
 	// 함수 이름은 이전 skins 구조에서 이어졌지만,
 	// 현재 응답은 skin_sets 테이블의 상점 상품 목록입니다.
 	if (!bWasSuccessful || !Response.IsValid())
@@ -713,7 +892,7 @@ void USupabaseSubsystem::HandleSkinsResponse(
 		return;
 	}
 
-	ShopSkins.Empty();
+	PendingShopSkins.Empty();
 
 	for (const TSharedPtr<FJsonValue>& JsonValue : JsonArray)
 	{
@@ -739,19 +918,25 @@ void USupabaseSubsystem::HandleSkinsResponse(
 			Skin.Price = FMath::RoundToInt(Price);
 		}
 
-		ShopSkins.Add(Skin);
+		PendingShopSkins.Add(Skin);
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("Shop skins loaded: %d"), ShopSkins.Num());
+	UE_LOG(LogTemp, Log, TEXT("Shop skins loaded: %d"), PendingShopSkins.Num());
 	CompleteCosmeticDataRequest(true, TEXT("Shop skins loaded."));
 }
 
 void USupabaseSubsystem::HandlePlayerSkinsResponse(
 	FHttpRequestPtr Request,
 	FHttpResponsePtr Response,
-	bool bWasSuccessful
+	bool bWasSuccessful,
+	const uint64 RequestGeneration
 )
 {
+	if (RequestGeneration != AuthSessionGeneration)
+	{
+		return;
+	}
+
 	if (!bWasSuccessful || !Response.IsValid())
 	{
 		CompleteCosmeticDataRequest(false, TEXT("Player skins request failed."));
@@ -777,7 +962,7 @@ void USupabaseSubsystem::HandlePlayerSkinsResponse(
 		return;
 	}
 
-	OwnedSkinIds.Empty();
+	PendingOwnedSkinIds.Empty();
 
 	for (const TSharedPtr<FJsonValue>& JsonValue : JsonArray)
 	{
@@ -793,20 +978,26 @@ void USupabaseSubsystem::HandlePlayerSkinsResponse(
 		FString SkinId;
 		if (PlayerSkinObject->TryGetStringField(TEXT("skin_id"), SkinId))
 		{
-			OwnedSkinIds.Add(SkinId);
+			PendingOwnedSkinIds.Add(SkinId);
 		}
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("Owned skins loaded: %d"), OwnedSkinIds.Num());
+	UE_LOG(LogTemp, Log, TEXT("Owned skins loaded: %d"), PendingOwnedSkinIds.Num());
 	CompleteCosmeticDataRequest(true, TEXT("Player skins loaded."));
 }
 
 void USupabaseSubsystem::HandlePlayerSkinSetsResponse(
 	FHttpRequestPtr Request,
 	FHttpResponsePtr Response,
-	bool bWasSuccessful
+	bool bWasSuccessful,
+	const uint64 RequestGeneration
 )
 {
+	if (RequestGeneration != AuthSessionGeneration)
+	{
+		return;
+	}
+
 	if (!bWasSuccessful || !Response.IsValid())
 	{
 		CompleteCosmeticDataRequest(false, TEXT("Player skin sets request failed."));
@@ -832,7 +1023,7 @@ void USupabaseSubsystem::HandlePlayerSkinSetsResponse(
 		return;
 	}
 
-	OwnedSkinSetIds.Empty();
+	PendingOwnedSkinSetIds.Empty();
 
 	for (const TSharedPtr<FJsonValue>& JsonValue : JsonArray)
 	{
@@ -848,20 +1039,26 @@ void USupabaseSubsystem::HandlePlayerSkinSetsResponse(
 		FString SetId;
 		if (PlayerSkinSetObject->TryGetStringField(TEXT("set_id"), SetId))
 		{
-			OwnedSkinSetIds.Add(SetId);
+			PendingOwnedSkinSetIds.Add(SetId);
 		}
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("Owned skin sets loaded: %d"), OwnedSkinSetIds.Num());
+	UE_LOG(LogTemp, Log, TEXT("Owned skin sets loaded: %d"), PendingOwnedSkinSetIds.Num());
 	CompleteCosmeticDataRequest(true, TEXT("Player skin sets loaded."));
 }
 
 void USupabaseSubsystem::HandleSkinSetItemsResponse(
 	FHttpRequestPtr Request,
 	FHttpResponsePtr Response,
-	bool bWasSuccessful
+	bool bWasSuccessful,
+	const uint64 RequestGeneration
 )
 {
+	if (RequestGeneration != AuthSessionGeneration)
+	{
+		return;
+	}
+
 	if (!bWasSuccessful || !Response.IsValid())
 	{
 		CompleteCosmeticDataRequest(false, TEXT("Skin set items request failed."));
@@ -887,7 +1084,7 @@ void USupabaseSubsystem::HandleSkinSetItemsResponse(
 		return;
 	}
 
-	SkinSetItemsBySetId.Empty();
+	PendingSkinSetItemsBySetId.Empty();
 
 	for (const TSharedPtr<FJsonValue>& JsonValue : JsonArray)
 	{
@@ -909,20 +1106,26 @@ void USupabaseSubsystem::HandleSkinSetItemsResponse(
 			SkinSetItemObject->TryGetStringField(TEXT("slot"), SkinItem.Type)
 		)
 		{
-			SkinSetItemsBySetId.FindOrAdd(SetId).Add(SkinItem);
+			PendingSkinSetItemsBySetId.FindOrAdd(SetId).Add(SkinItem);
 		}
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("Skin set items loaded: %d"), SkinSetItemsBySetId.Num());
+	UE_LOG(LogTemp, Log, TEXT("Skin set items loaded: %d"), PendingSkinSetItemsBySetId.Num());
 	CompleteCosmeticDataRequest(true, TEXT("Skin set items loaded."));
 }
 
 void USupabaseSubsystem::HandlePlayerEquipmentResponse(
 	FHttpRequestPtr Request,
 	FHttpResponsePtr Response,
-	bool bWasSuccessful
+	bool bWasSuccessful,
+	const uint64 RequestGeneration
 )
 {
+	if (RequestGeneration != AuthSessionGeneration)
+	{
+		return;
+	}
+
 	if (!bWasSuccessful || !Response.IsValid())
 	{
 		CompleteCosmeticDataRequest(false, TEXT("Equipment request failed."));
@@ -948,7 +1151,7 @@ void USupabaseSubsystem::HandlePlayerEquipmentResponse(
 		return;
 	}
 
-	EquippedSkinIdsByType.Empty();
+	PendingEquippedSkinIdsByType.Empty();
 
 	for (const TSharedPtr<FJsonValue>& JsonValue : JsonArray)
 	{
@@ -969,11 +1172,11 @@ void USupabaseSubsystem::HandlePlayerEquipmentResponse(
 			EquipmentObject->TryGetStringField(TEXT("equipped_skin_id"), EquippedSkinId)
 		)
 		{
-			EquippedSkinIdsByType.Add(SkinType, EquippedSkinId);
+			PendingEquippedSkinIdsByType.Add(SkinType, EquippedSkinId);
 		}
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("Equipment loaded: %d"), EquippedSkinIdsByType.Num());
+	UE_LOG(LogTemp, Log, TEXT("Equipment loaded: %d"), PendingEquippedSkinIdsByType.Num());
 	CompleteCosmeticDataRequest(true, TEXT("Equipment loaded."));
 }
 
@@ -1099,6 +1302,18 @@ void USupabaseSubsystem::EquipSkin(const FString& SkinId)
 {
 	// SkinId라는 이름은 기존 API 호환 때문에 유지하지만,
 	// 현재 Shop에서는 skin_sets.id, 즉 상품 세트 id가 들어옵니다.
+	if (IsShopOperationInFlight())
+	{
+		OnSkinEquipped.Broadcast(false, TEXT("Another shop operation is already in progress."));
+		return;
+	}
+
+	if (bCosmeticDataLoadInFlight)
+	{
+		OnSkinEquipped.Broadcast(false, TEXT("Cosmetic data is still loading."));
+		return;
+	}
+
 	if (AccessToken.IsEmpty())
 	{
 		OnSkinEquipped.Broadcast(false, TEXT("Access token is empty."));
@@ -1138,20 +1353,39 @@ void USupabaseSubsystem::EquipSkin(const FString& SkinId)
 	FJsonSerializer::Serialize(BodyObject.ToSharedRef(), Writer);
 
 	Request->SetContentAsString(BodyString);
+	const uint64 RequestGeneration = AuthSessionGeneration;
 	Request->OnProcessRequestComplete().BindUObject(
 		this,
-		&USupabaseSubsystem::HandleEquipSkinResponse
+		&USupabaseSubsystem::HandleEquipSkinResponse,
+		RequestGeneration
 	);
 
-	Request->ProcessRequest();
-
-	OnSkinEquipped.Broadcast(false, TEXT("Equipping shop item..."));
+	bSkinEquipInFlight = true;
+	PendingShopSetId = SkinId;
+	if (!Request->ProcessRequest())
+	{
+		bSkinEquipInFlight = false;
+		PendingShopSetId.Empty();
+		OnSkinEquipped.Broadcast(false, TEXT("Could not start equip request."));
+	}
 }
 
 void USupabaseSubsystem::PurchaseSkinSet(const FString& SetId)
 {
 	// 구매는 coin 차감, player_skin_sets 추가, player_skins 추가가 모두 맞물린 작업입니다.
 	// 클라이언트에서 여러 REST 요청으로 나누지 않고 DB의 purchase_skin_set RPC에서 한 번에 처리합니다.
+	if (IsShopOperationInFlight())
+	{
+		OnSkinSetPurchased.Broadcast(false, TEXT("Another shop operation is already in progress."));
+		return;
+	}
+
+	if (bCosmeticDataLoadInFlight)
+	{
+		OnSkinSetPurchased.Broadcast(false, TEXT("Cosmetic data is still loading."));
+		return;
+	}
+
 	if (AccessToken.IsEmpty())
 	{
 		OnSkinSetPurchased.Broadcast(false, TEXT("Access token is empty."));
@@ -1181,14 +1415,21 @@ void USupabaseSubsystem::PurchaseSkinSet(const FString& SetId)
 	FJsonSerializer::Serialize(BodyObject.ToSharedRef(), Writer);
 
 	Request->SetContentAsString(BodyString);
+	const uint64 RequestGeneration = AuthSessionGeneration;
 	Request->OnProcessRequestComplete().BindUObject(
 		this,
-		&USupabaseSubsystem::HandlePurchaseSkinSetResponse
+		&USupabaseSubsystem::HandlePurchaseSkinSetResponse,
+		RequestGeneration
 	);
 
-	Request->ProcessRequest();
-
-	OnSkinSetPurchased.Broadcast(false, TEXT("Purchasing shop item..."));
+	bSkinPurchaseInFlight = true;
+	PendingShopSetId = SetId;
+	if (!Request->ProcessRequest())
+	{
+		bSkinPurchaseInFlight = false;
+		PendingShopSetId.Empty();
+		OnSkinSetPurchased.Broadcast(false, TEXT("Could not start purchase request."));
+	}
 }
 
 void USupabaseSubsystem::UpdateNickname(const FString& NewNickname)
@@ -1241,15 +1482,21 @@ void USupabaseSubsystem::UpdateNickname(const FString& NewNickname)
 	FJsonSerializer::Serialize(BodyObject.ToSharedRef(), Writer);
 
 	Request->SetContentAsString(BodyString);
+	const uint64 RequestGeneration = AuthSessionGeneration;
 
 	// 서버 응답이 돌아오면 HandleUpdateNicknameResponse가 실행되도록 연결합니다.
 	Request->OnProcessRequestComplete().BindUObject(
 		this,
-		&USupabaseSubsystem::HandleUpdateNicknameResponse
+		&USupabaseSubsystem::HandleUpdateNicknameResponse,
+		RequestGeneration
 	);
 
 	// 실제 HTTP 요청을 시작합니다.
-	Request->ProcessRequest();
+	if (!Request->ProcessRequest())
+	{
+		OnNicknameUpdated.Broadcast(false, TEXT("Could not start nickname update request."));
+		return;
+	}
 
 	// UI에 즉시 "업데이트 중" 상태를 알려줍니다.
 	OnNicknameUpdated.Broadcast(false, TEXT("Updating nickname..."));
@@ -1258,9 +1505,15 @@ void USupabaseSubsystem::UpdateNickname(const FString& NewNickname)
 void USupabaseSubsystem::HandleUpdateNicknameResponse(
 	FHttpRequestPtr Request,
 	FHttpResponsePtr Response,
-	bool bWasSuccessful
+	bool bWasSuccessful,
+	const uint64 RequestGeneration
 )
 {
+	if (RequestGeneration != AuthSessionGeneration)
+	{
+		return;
+	}
+
 	// 네트워크 요청 자체가 실패했거나 응답 객체가 없으면 실패 처리합니다.
 	if (!bWasSuccessful || !Response.IsValid())
 	{
@@ -1304,6 +1557,9 @@ void USupabaseSubsystem::HandleUpdateNicknameResponse(
 
 	// UI에 닉네임 변경 성공을 알립니다.
 	OnNicknameUpdated.Broadcast(true, TEXT("Nickname updated."));
+	// Supersede any older profile/wallet/rank GET that may still be in flight,
+	// then read one coherent post-mutation player-data snapshot.
+	LoadPlayerData();
 }
 
 void USupabaseSubsystem::AwardWinReward(const FString& MatchId)
@@ -1340,15 +1596,22 @@ void USupabaseSubsystem::AwardWinReward(const FString& MatchId)
 	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&BodyString);
 	FJsonSerializer::Serialize(BodyObject.ToSharedRef(), Writer);
 	Request->SetContentAsString(BodyString);
+	const uint64 RequestGeneration = AuthSessionGeneration;
 
 	Request->OnProcessRequestComplete().BindUObject(
 		this,
-		&USupabaseSubsystem::HandleAwardWinRewardResponse
+		&USupabaseSubsystem::HandleAwardWinRewardResponse,
+		RequestGeneration
 	);
 
-	Request->ProcessRequest();
-
 	bAwardWinRewardInFlight = true;
+	if (!Request->ProcessRequest())
+	{
+		bAwardWinRewardInFlight = false;
+		OnPlayerDataLoaded.Broadcast(false, TEXT("Could not start reward request."));
+		return;
+	}
+
 	UE_LOG(LogTemp, Log, TEXT("AwardWinReward requested. MatchId=%s"), *MatchId);
 	OnPlayerDataLoaded.Broadcast(false, TEXT("Processing win reward..."));
 }
@@ -1356,9 +1619,15 @@ void USupabaseSubsystem::AwardWinReward(const FString& MatchId)
 void USupabaseSubsystem::HandleAwardWinRewardResponse(
 	FHttpRequestPtr Request,
 	FHttpResponsePtr Response,
-	bool bWasSuccessful
+	bool bWasSuccessful,
+	const uint64 RequestGeneration
 )
 {
+	if (RequestGeneration != AuthSessionGeneration)
+	{
+		return;
+	}
+
 	if (!bWasSuccessful || !Response.IsValid())
 	{
 		bAwardWinRewardInFlight = false;
@@ -1387,6 +1656,9 @@ void USupabaseSubsystem::HandleAwardWinRewardResponse(
 		OnPlayerDataLoaded.Broadcast(false, TEXT("Reward response could not be read. Please check your score later."));
 		return;
 	}
+
+	// The reward RPC result is newer than any player-data GET issued before it.
+	++PlayerDataRequestGeneration;
 
 	int32 ScoreReward = 0;
 	JsonObject->TryGetNumberField(TEXT("reward"), ScoreReward);
@@ -1423,9 +1695,19 @@ void USupabaseSubsystem::HandleAwardWinRewardResponse(
 void USupabaseSubsystem::HandleEquipSkinResponse(
 	FHttpRequestPtr Request,
 	FHttpResponsePtr Response,
-	bool bWasSuccessful
+	bool bWasSuccessful,
+	const uint64 RequestGeneration
 )
 {
+	if (RequestGeneration != AuthSessionGeneration)
+	{
+		return;
+	}
+
+	const FString RequestedSetId = PendingShopSetId;
+	bSkinEquipInFlight = false;
+	PendingShopSetId.Empty();
+
 	if (!bWasSuccessful || !Response.IsValid())
 	{
 		OnSkinEquipped.Broadcast(false, TEXT("Equip skin request failed."));
@@ -1458,6 +1740,7 @@ void USupabaseSubsystem::HandleEquipSkinResponse(
 	}
 
 	const TSharedPtr<FJsonObject>* EquippedObject = nullptr;
+	bool bUpdatedEquipmentCache = false;
 	if (ResultObject->TryGetObjectField(TEXT("equipped"), EquippedObject) && EquippedObject)
 	{
 		for (const TPair<FString, TSharedPtr<FJsonValue>>& Entry : (*EquippedObject)->Values)
@@ -1466,21 +1749,42 @@ void USupabaseSubsystem::HandleEquipSkinResponse(
 			if (Entry.Value.IsValid() && Entry.Value->TryGetString(EquippedSkinId))
 			{
 				EquippedSkinIdsByType.Add(Entry.Key, EquippedSkinId);
+				bUpdatedEquipmentCache = true;
+			}
+		}
+	}
+	if (!bUpdatedEquipmentCache)
+	{
+		if (const TArray<FShowDownSkin>* RequestedSetItems =
+			SkinSetItemsBySetId.Find(RequestedSetId))
+		{
+			for (const FShowDownSkin& SkinItem : *RequestedSetItems)
+			{
+				EquippedSkinIdsByType.Add(SkinItem.Type, SkinItem.Id);
 			}
 		}
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("Skin set equipped successfully."));
 	OnSkinEquipped.Broadcast(true, TEXT("Skin equipped."));
-	LoadCosmeticData();
 }
 
 void USupabaseSubsystem::HandlePurchaseSkinSetResponse(
 	FHttpRequestPtr Request,
 	FHttpResponsePtr Response,
-	bool bWasSuccessful
+	bool bWasSuccessful,
+	const uint64 RequestGeneration
 )
 {
+	if (RequestGeneration != AuthSessionGeneration)
+	{
+		return;
+	}
+
+	const FString RequestedSetId = PendingShopSetId;
+	bSkinPurchaseInFlight = false;
+	PendingShopSetId.Empty();
+
 	if (!bWasSuccessful || !Response.IsValid())
 	{
 		OnSkinSetPurchased.Broadcast(false, TEXT("Purchase request failed."));
@@ -1515,6 +1819,10 @@ void USupabaseSubsystem::HandlePurchaseSkinSetResponse(
 		return;
 	}
 
+	// The purchase RPC result and the refresh started below supersede any
+	// player-data GET that began before the transaction committed.
+	++PlayerDataRequestGeneration;
+
 	double UpdatedCoin = 0.0;
 	if (JsonObject->TryGetNumberField(TEXT("coin"), UpdatedCoin))
 	{
@@ -1523,6 +1831,10 @@ void USupabaseSubsystem::HandlePurchaseSkinSetResponse(
 
 	FString PurchasedSetId;
 	JsonObject->TryGetStringField(TEXT("set_id"), PurchasedSetId);
+	if (PurchasedSetId.IsEmpty())
+	{
+		PurchasedSetId = RequestedSetId;
+	}
 	if (!PurchasedSetId.IsEmpty())
 	{
 		OwnedSkinSetIds.AddUnique(PurchasedSetId);
@@ -1533,5 +1845,4 @@ void USupabaseSubsystem::HandlePurchaseSkinSetResponse(
 
 	// RPC가 DB를 갱신했으므로 클라이언트 캐시도 다시 맞춥니다.
 	LoadPlayerData();
-	LoadCosmeticData();
 }

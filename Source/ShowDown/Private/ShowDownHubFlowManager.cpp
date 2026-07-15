@@ -36,7 +36,6 @@ AShowDownHubFlowManager::AShowDownHubFlowManager()
 {
 	PrimaryActorTick.bCanEverTick = false;
 	ShopWidgetClass = UShowDownShopWidget::StaticClass();
-	ShopPreviewActorClass = AShowDownShopPreviewActor::StaticClass();
 	TransitionWidgetClass = UShowDownTransitionWidget::StaticClass();
 	static ConstructorHelpers::FObjectFinder<UShowDownCharacterSkinCatalog> DefaultCharacterSkinCatalog(
 		TEXT("/Game/Data/Characters/DA_CharacterSkinCatalog"));
@@ -44,6 +43,8 @@ AShowDownHubFlowManager::AShowDownHubFlowManager()
 	{
 		CharacterSkinCatalog = DefaultCharacterSkinCatalog.Object;
 	}
+	static ConstructorHelpers::FClassFinder<UShowDownShopWidget> ShopWidgetBlueprint(TEXT("/Game/UI/WBP_Shop"));
+	if (ShopWidgetBlueprint.Succeeded()) ShopWidgetClass = ShopWidgetBlueprint.Class;
 	static ConstructorHelpers::FClassFinder<UShowDownMultiplayerWidget> MultiplayerWidgetBlueprint(TEXT("/Game/UI/WBP_Multiplayer"));
 	MultiplayerWidgetClass = UShowDownMultiplayerWidget::StaticClass();
 	if (MultiplayerWidgetBlueprint.Succeeded()) MultiplayerWidgetClass = MultiplayerWidgetBlueprint.Class;
@@ -58,14 +59,40 @@ AShowDownHubFlowManager::AShowDownHubFlowManager()
 void AShowDownHubFlowManager::BeginPlay()
 {
 	Super::BeginPlay();
+	if (IsValid(MainMenuPreviewActor)
+		&& MainMenuPreviewActor == ShopPreviewActor)
+	{
+		UE_LOG(
+			LogTemp,
+			Error,
+			TEXT("MainMenuPreviewActor and ShopPreviewActor reference the same placed actor. Assign two separate actors so each camera shot can be composed independently."));
+	}
+
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
+		if (USupabaseSubsystem* SupabaseSubsystem = GameInstance->GetSubsystem<USupabaseSubsystem>())
+		{
+			SupabaseSubsystem->OnCosmeticDataLoaded.RemoveDynamic(
+				this,
+				&AShowDownHubFlowManager::HandleHubCosmeticDataLoaded);
+			SupabaseSubsystem->OnCosmeticDataLoaded.AddDynamic(
+				this,
+				&AShowDownHubFlowManager::HandleHubCosmeticDataLoaded);
+			SupabaseSubsystem->OnSkinEquipped.RemoveDynamic(
+				this,
+				&AShowDownHubFlowManager::HandleHubSkinEquipped);
+			SupabaseSubsystem->OnSkinEquipped.AddDynamic(
+				this,
+				&AShowDownHubFlowManager::HandleHubSkinEquipped);
+		}
+
 		if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
 		{
 			EosSubsystem->OnManagedTravelFailed.RemoveDynamic(this, &AShowDownHubFlowManager::HandleManagedTravelFailed);
 			EosSubsystem->OnManagedTravelFailed.AddDynamic(this, &AShowDownHubFlowManager::HandleManagedTravelFailed);
 		}
 	}
+	DeactivateCharacterPreviews();
 	ApplySinglePlayerVoiceSettings();
 
 	bool bHasSession = false;
@@ -157,6 +184,16 @@ void AShowDownHubFlowManager::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
+		if (USupabaseSubsystem* SupabaseSubsystem = GameInstance->GetSubsystem<USupabaseSubsystem>())
+		{
+			SupabaseSubsystem->OnCosmeticDataLoaded.RemoveDynamic(
+				this,
+				&AShowDownHubFlowManager::HandleHubCosmeticDataLoaded);
+			SupabaseSubsystem->OnSkinEquipped.RemoveDynamic(
+				this,
+				&AShowDownHubFlowManager::HandleHubSkinEquipped);
+		}
+
 		if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
 		{
 			EosSubsystem->OnEosLoginResult.RemoveDynamic(this, &AShowDownHubFlowManager::HandleEosLoginForMultiplayer);
@@ -168,7 +205,7 @@ void AShowDownHubFlowManager::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	}
 
 	bPendingMultiplayerOpenAfterEosLogin = false;
-	DestroyShopPreviewActor();
+	DeactivateCharacterPreviews();
 	if (TransitionWidget)
 	{
 		TransitionWidget->RemoveFromParent();
@@ -257,20 +294,19 @@ void AShowDownHubFlowManager::ShowMainMenu()
 	SetActiveWidget(MainMenuWidget);
 	SetUiOnlyInput(MainMenuWidget);
 	OnScreenChanged.Broadcast(EShowDownHubFlowScreen::MainMenu);
-}
-
-void AShowDownHubFlowManager::ShowShop()
-{
-	PlayCamera(ShopCamera ? ShopCamera : MainMenuCamera);
 
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
 		if (USupabaseSubsystem* SupabaseSubsystem = GameInstance->GetSubsystem<USupabaseSubsystem>())
 		{
-			// Shop data is loaded on demand instead of during login.
-			SupabaseSubsystem->LoadCosmeticData();
+			SupabaseSubsystem->EnsureCosmeticDataLoaded();
 		}
 	}
+}
+
+void AShowDownHubFlowManager::ShowShop()
+{
+	PlayCamera(ShopCamera ? ShopCamera : MainMenuCamera);
 
 	TSubclassOf<UShowDownShopWidget> WidgetClass = ShopWidgetClass;
 	if (!WidgetClass)
@@ -290,17 +326,26 @@ void AShowDownHubFlowManager::ShowShop()
 	}
 
 	ShopWidget->SetUseLegacyBackNavigation(false);
+	ShopWidget->SetSkinCatalog(ResolveCharacterSkinCatalog());
 	ShopWidget->OnBackRequested.AddUniqueDynamic(this, &AShowDownHubFlowManager::HandleShopBackRequested);
 	ShopWidget->OnPreviewSkinChanged.AddUniqueDynamic(
 		this,
 		&AShowDownHubFlowManager::HandleShopPreviewSkinChanged);
 
-	SpawnShopPreviewActor();
-
 	SetActiveWidget(ShopWidget);
 	SetUiOnlyInput(ShopWidget);
 	ShopWidget->SetKeyboardFocus();
 	OnScreenChanged.Broadcast(EShowDownHubFlowScreen::Shop);
+
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (USupabaseSubsystem* SupabaseSubsystem = GameInstance->GetSubsystem<USupabaseSubsystem>())
+		{
+			// Subscribe the widget before starting a request so even synchronous
+			// validation failures are visible on the shop screen.
+			SupabaseSubsystem->EnsureCosmeticDataLoaded();
+		}
+	}
 }
 
 void AShowDownHubFlowManager::ShowRanking()
@@ -766,20 +811,13 @@ void AShowDownHubFlowManager::QuitGame()
 
 void AShowDownHubFlowManager::SetActiveWidget(UUserWidget* NextWidget)
 {
-	if (ActiveWidget
-		&& ActiveWidget != NextWidget
-		&& Cast<UShowDownShopWidget>(ActiveWidget)
-		&& !Cast<UShowDownShopWidget>(NextWidget))
-	{
-		DestroyShopPreviewActor();
-	}
-
 	if (ActiveWidget)
 	{
 		ActiveWidget->RemoveFromParent();
 	}
 
 	ActiveWidget = NextWidget;
+	UpdateCharacterPreviewsForWidget(NextWidget);
 
 	if (ActiveWidget)
 	{
@@ -957,76 +995,135 @@ APlayerController* AShowDownHubFlowManager::GetPrimaryPlayerController() const
 	return UGameplayStatics::GetPlayerController(this, 0);
 }
 
-void AShowDownHubFlowManager::SpawnShopPreviewActor()
+void AShowDownHubFlowManager::UpdateCharacterPreviewsForWidget(UUserWidget* NextWidget)
 {
-	DestroyShopPreviewActor();
-
-	UWorld* World = GetWorld();
-	ACameraActor* PreviewCamera = ShopCamera ? ShopCamera : MainMenuCamera;
-	if (!World || !PreviewCamera)
+	if (NextWidget && NextWidget == MainMenuWidget)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Shop preview needs a shop or main menu camera."));
+		if (IsValid(ShopPreviewActor))
+		{
+			ShopPreviewActor->DeactivatePreview();
+		}
+		RefreshMainMenuCharacterPreview();
 		return;
 	}
 
-	const FVector CameraLocation = PreviewCamera->GetActorLocation();
-	const FVector PreviewLocation = CameraLocation
-		+ PreviewCamera->GetActorForwardVector() * ShopPreviewDistance
-		+ FVector::UpVector * ShopPreviewHeight;
-
-	FRotator PreviewRotation = (CameraLocation - PreviewLocation).Rotation();
-	PreviewRotation.Pitch = 0.0f;
-	PreviewRotation.Roll = 0.0f;
-	PreviewRotation.Yaw += ShopPreviewYawOffset;
-
-	FActorSpawnParameters SpawnParameters;
-	SpawnParameters.Owner = this;
-	SpawnParameters.SpawnCollisionHandlingOverride =
-		ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-	TSubclassOf<AShowDownShopPreviewActor> PreviewClass = ShopPreviewActorClass;
-	if (!PreviewClass)
+	if (NextWidget && NextWidget == ShopWidget)
 	{
-		PreviewClass = AShowDownShopPreviewActor::StaticClass();
-	}
+		if (IsValid(MainMenuPreviewActor))
+		{
+			MainMenuPreviewActor->DeactivatePreview();
+		}
+		if (!IsValid(ShopPreviewActor))
+		{
+			UE_LOG(
+				LogTemp,
+				Warning,
+				TEXT("ShopPreviewActor is not assigned on the placed HubFlowManager."));
+			return;
+		}
 
-	ShopPreviewActor = World->SpawnActor<AShowDownShopPreviewActor>(
-		PreviewClass,
-		PreviewLocation,
-		PreviewRotation,
-		SpawnParameters);
-
-	if (!ShopPreviewActor)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("Failed to spawn shop character preview."));
+		ShopPreviewActor->SetSkinCatalog(ResolveCharacterSkinCatalog());
+		ShopPreviewActor->SetPreviewContext(EShowDownCharacterPreviewContext::Shop);
+		ShopPreviewActor->ActivatePreview(
+			UShowDownCharacterSkinCatalog::GetDefaultSkinId());
 		return;
 	}
 
-	ShopPreviewActor->SetFlags(RF_Transient);
-	ShopPreviewActor->SetSkinCatalog(CharacterSkinCatalog);
-	ShopPreviewActor->SetPreviewSkin(UShowDownCharacterSkinCatalog::GetDefaultSkinId());
+	DeactivateCharacterPreviews();
 }
 
-void AShowDownHubFlowManager::DestroyShopPreviewActor()
+void AShowDownHubFlowManager::DeactivateCharacterPreviews()
 {
 	if (IsValid(ShopPreviewActor))
 	{
-		ShopPreviewActor->Destroy();
+		ShopPreviewActor->DeactivatePreview();
 	}
-
-	ShopPreviewActor = nullptr;
+	if (IsValid(MainMenuPreviewActor))
+	{
+		MainMenuPreviewActor->DeactivatePreview();
+	}
 }
 
 void AShowDownHubFlowManager::HandleShopPreviewSkinChanged(const FString& SkinId)
 {
-	if (!IsValid(ShopPreviewActor))
-	{
-		SpawnShopPreviewActor();
-	}
-
-	if (IsValid(ShopPreviewActor))
+	if (ActiveWidget == ShopWidget && IsValid(ShopPreviewActor))
 	{
 		ShopPreviewActor->SetPreviewSkin(SkinId);
+	}
+}
+
+void AShowDownHubFlowManager::RefreshMainMenuCharacterPreview()
+{
+	if (!IsValid(MainMenuPreviewActor))
+	{
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("MainMenuPreviewActor is not assigned on the placed HubFlowManager."));
+		return;
+	}
+
+	FString EquippedSkinId = UShowDownCharacterSkinCatalog::GetDefaultSkinId();
+	if (const UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (const USupabaseSubsystem* SupabaseSubsystem =
+			GameInstance->GetSubsystem<USupabaseSubsystem>())
+		{
+			const FString LoadedSkinId = SupabaseSubsystem->GetEquippedSkinId(TEXT("character"));
+			if (!LoadedSkinId.IsEmpty())
+			{
+				EquippedSkinId = LoadedSkinId;
+			}
+		}
+	}
+
+	MainMenuPreviewActor->SetSkinCatalog(ResolveCharacterSkinCatalog());
+	MainMenuPreviewActor->SetPreviewContext(EShowDownCharacterPreviewContext::MainMenu);
+	MainMenuPreviewActor->ActivatePreview(EquippedSkinId);
+}
+
+UShowDownCharacterSkinCatalog* AShowDownHubFlowManager::ResolveCharacterSkinCatalog() const
+{
+	// Hub UI, manually placed preview actors, network validation, and gameplay characters
+	// must all resolve custom skin IDs against the same catalog asset.
+	if (UShowDownCharacterSkinCatalog* DefaultCatalog =
+		UShowDownCharacterSkinCatalog::LoadDefaultCatalog())
+	{
+		return DefaultCatalog;
+	}
+
+	if (CharacterSkinCatalog)
+	{
+		return CharacterSkinCatalog;
+	}
+	if (IsValid(ShopPreviewActor) && ShopPreviewActor->GetSkinCatalog())
+	{
+		return ShopPreviewActor->GetSkinCatalog();
+	}
+	if (IsValid(MainMenuPreviewActor) && MainMenuPreviewActor->GetSkinCatalog())
+	{
+		return MainMenuPreviewActor->GetSkinCatalog();
+	}
+	return nullptr;
+}
+
+void AShowDownHubFlowManager::HandleHubCosmeticDataLoaded(
+	const bool bSuccess,
+	const FString& Message)
+{
+	if (bSuccess && ActiveWidget == MainMenuWidget)
+	{
+		RefreshMainMenuCharacterPreview();
+	}
+}
+
+void AShowDownHubFlowManager::HandleHubSkinEquipped(
+	const bool bSuccess,
+	const FString& Message)
+{
+	if (bSuccess && ActiveWidget == MainMenuWidget)
+	{
+		RefreshMainMenuCharacterPreview();
 	}
 }
 

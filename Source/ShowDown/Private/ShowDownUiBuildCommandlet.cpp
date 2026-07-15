@@ -16,8 +16,12 @@
 #include "Components/Slider.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
+#include "HAL/FileManager.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/PackageName.h"
+#include "Misc/Parse.h"
+#include "Misc/Paths.h"
+#include "ShowDownCharacterSkinCatalog.h"
 #include "ShowDownLobbyWidget.h"
 #include "ShowDownLoginWidget.h"
 #include "ShowDownMainMenuWidget.h"
@@ -26,16 +30,22 @@
 #include "ShowDownRankWidget.h"
 #include "ShowDownPauseMenuWidget.h"
 #include "ShowDownSettingsWidget.h"
+#include "ShowDownShopWidget.h"
 #include "Styling/CoreStyle.h"
 #include "Styling/SlateTypes.h"
 #include "WidgetBlueprint.h"
 #include "UObject/SavePackage.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogShowDownUiBuild, Log, All);
 
 namespace
 {
 const FLinearColor Ink(0.92f, 0.95f, 0.96f, 1.0f);
 const FLinearColor Panel(0.0f, 0.0f, 0.0f, 0.68f);
 const FLinearColor Accent(0.0f, 0.0f, 0.0f, 0.82f);
+const TCHAR* ShopWidgetObjectPath = TEXT("/Game/UI/WBP_Shop.WBP_Shop");
+const TCHAR* CharacterSkinCatalogObjectPath =
+	TEXT("/Game/Data/Characters/DA_CharacterSkinCatalog.DA_CharacterSkinCatalog");
 
 UObject* PretendardRegular()
 {
@@ -173,6 +183,52 @@ UButton* BarButton(
 	return B;
 }
 
+UButton* ShopButton(
+	UWidgetTree* Tree,
+	const TCHAR* ButtonName,
+	const TCHAR* TextName,
+	const TCHAR* Label,
+	const FLinearColor& NormalColor,
+	const FLinearColor& HoveredColor,
+	const FLinearColor& PressedColor,
+	const FLinearColor& TextColor,
+	const int32 FontSize)
+{
+	UButton* ShopButtonWidget = Tree->ConstructWidget<UButton>(
+		UButton::StaticClass(),
+		ButtonName);
+	ShopButtonWidget->SetBackgroundColor(FLinearColor::White);
+
+	FButtonStyle Style;
+	Style.SetNormal(FlatColorBrush(NormalColor));
+	Style.SetHovered(FlatColorBrush(HoveredColor));
+	Style.SetPressed(FlatColorBrush(PressedColor));
+	Style.SetDisabled(FlatColorBrush(FLinearColor(0.09f, 0.09f, 0.10f, 0.74f)));
+	Style.SetNormalPadding(FMargin(2.0f));
+	Style.SetPressedPadding(FMargin(2.0f, 4.0f, 2.0f, 0.0f));
+	ShopButtonWidget->SetStyle(Style);
+
+	UTextBlock* LabelText = Text(
+		Tree,
+		TextName,
+		Label,
+		FontSize,
+		ETextJustify::Center);
+	LabelText->SetColorAndOpacity(FSlateColor(TextColor));
+	LabelText->SetShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.72f));
+	LabelText->SetShadowOffset(FVector2D(1.0f, 2.0f));
+	ShopButtonWidget->SetContent(LabelText);
+
+	if (UButtonSlot* ContentSlot = Cast<UButtonSlot>(ShopButtonWidget->GetContentSlot()))
+	{
+		ContentSlot->SetPadding(FMargin(18.0f, 6.0f));
+		ContentSlot->SetHorizontalAlignment(HAlign_Fill);
+		ContentSlot->SetVerticalAlignment(VAlign_Center);
+	}
+
+	return ShopButtonWidget;
+}
+
 void Reset(UWidgetBlueprint* BP)
 {
 	BP->Modify();
@@ -191,7 +247,7 @@ void Reset(UWidgetBlueprint* BP)
 	BP->WidgetVariableNameToGuidMap.Reset();
 }
 
-void Save(UWidgetBlueprint* BP)
+bool Save(UWidgetBlueprint* BP)
 {
 	// Match the compiler's source-widget traversal so every generated variable gets
 	// a GUID, including widgets that are not reachable from RootWidget yet.
@@ -205,7 +261,26 @@ void Save(UWidgetBlueprint* BP)
 	});
 	FKismetEditorUtilities::CompileBlueprint(BP);
 	BP->MarkPackageDirty();
-	UPackage::SavePackage(BP->GetOutermost(), BP, *FPackageName::LongPackageNameToFilename(BP->GetOutermost()->GetName(), FPackageName::GetAssetPackageExtension()), FSavePackageArgs());
+	const FString Filename = FPackageName::LongPackageNameToFilename(
+		BP->GetOutermost()->GetName(),
+		FPackageName::GetAssetPackageExtension());
+	const FString Directory = FPaths::GetPath(Filename);
+	if ((!IFileManager::Get().MakeDirectory(*Directory, true)
+		&& !IFileManager::Get().DirectoryExists(*Directory))
+		|| !UPackage::SavePackage(
+			BP->GetOutermost(),
+			BP,
+			*Filename,
+			FSavePackageArgs()))
+	{
+		UE_LOG(
+			LogShowDownUiBuild,
+			Error,
+			TEXT("Failed to save Widget Blueprint '%s'."),
+			*BP->GetPathName());
+		return false;
+	}
+	return true;
 }
 
 void SaveExisting(UWidgetBlueprint* BP)
@@ -217,6 +292,513 @@ void SaveExisting(UWidgetBlueprint* BP)
 		BP,
 		*FPackageName::LongPackageNameToFilename(BP->GetOutermost()->GetName(), FPackageName::GetAssetPackageExtension()),
 		FSavePackageArgs());
+}
+
+bool BuildShop(UWidgetBlueprint* BP)
+{
+	Reset(BP);
+	UWidgetTree* Tree = BP->WidgetTree;
+	UCanvasPanel* Root = Tree->ConstructWidget<UCanvasPanel>(
+		UCanvasPanel::StaticClass(),
+		TEXT("RootCanvas"));
+	Tree->RootWidget = Root;
+
+	// Keep the center transparent for the editor-placed 3D preview actor. The
+	// dark edge panels and the top/bottom bands frame it without replacing the
+	// level art or forcing a particular camera composition.
+	UBorder* TopShade = Tree->ConstructWidget<UBorder>(
+		UBorder::StaticClass(),
+		TEXT("Border_TopShade"));
+	TopShade->SetBrushColor(FLinearColor(0.025f, 0.008f, 0.014f, 0.86f));
+	AddAnchored(Root, TopShade, 0.0f, 0.0f, 1.0f, 0.0f, FMargin(0.0f, 0.0f, 0.0f, 214.0f));
+
+	UBorder* BottomShade = Tree->ConstructWidget<UBorder>(
+		UBorder::StaticClass(),
+		TEXT("Border_BottomShade"));
+	BottomShade->SetBrushColor(FLinearColor(0.018f, 0.006f, 0.011f, 0.91f));
+	AddAnchored(Root, BottomShade, 0.0f, 1.0f, 1.0f, 1.0f, FMargin(0.0f, -258.0f, 0.0f, 258.0f));
+
+	UBorder* LeftShade = Tree->ConstructWidget<UBorder>(
+		UBorder::StaticClass(),
+		TEXT("Border_LeftShade"));
+	LeftShade->SetBrushColor(FLinearColor(0.01f, 0.004f, 0.008f, 0.30f));
+	AddAnchored(Root, LeftShade, 0.0f, 0.0f, 0.25f, 1.0f);
+
+	UBorder* RightShade = Tree->ConstructWidget<UBorder>(
+		UBorder::StaticClass(),
+		TEXT("Border_RightShade"));
+	RightShade->SetBrushColor(FLinearColor(0.01f, 0.004f, 0.008f, 0.30f));
+	AddAnchored(Root, RightShade, 0.75f, 0.0f, 1.0f, 1.0f);
+
+	UBorder* HeaderLine = Tree->ConstructWidget<UBorder>(
+		UBorder::StaticClass(),
+		TEXT("Border_HeaderLine"));
+	HeaderLine->SetBrushColor(FLinearColor(0.76f, 0.52f, 0.17f, 0.72f));
+	AddAnchored(Root, HeaderLine, 0.0f, 0.0f, 1.0f, 0.0f, FMargin(0.0f, 210.0f, 0.0f, 2.0f));
+
+	UButton* BackButton = ShopButton(
+		Tree,
+		TEXT("Button_Back"),
+		TEXT("Text_BackLabel"),
+		TEXT("<  뒤로"),
+		FLinearColor(0.055f, 0.028f, 0.036f, 0.92f),
+		FLinearColor(0.30f, 0.075f, 0.09f, 0.98f),
+		FLinearColor(0.16f, 0.035f, 0.045f, 1.0f),
+		FLinearColor(0.96f, 0.84f, 0.60f, 1.0f),
+		18);
+	AddAnchored(Root, BackButton, 0.0f, 0.0f, 0.0f, 0.0f, FMargin(50.0f, 42.0f, 210.0f, 56.0f));
+
+	UTextBlock* CoinText = Text(
+		Tree,
+		TEXT("Text_Coin"),
+		TEXT("보유 코인  0"),
+		20,
+		ETextJustify::Right);
+	CoinText->SetColorAndOpacity(FSlateColor(FLinearColor(0.96f, 0.78f, 0.35f, 1.0f)));
+	CoinText->SetShadowColorAndOpacity(FLinearColor::Black);
+	CoinText->SetShadowOffset(FVector2D(1.0f, 2.0f));
+	AddAnchored(Root, CoinText, 1.0f, 0.0f, 1.0f, 0.0f, FMargin(-370.0f, 50.0f, 320.0f, 38.0f));
+
+	UTextBlock* SkinName = Text(
+		Tree,
+		TEXT("Text_SkinName"),
+		TEXT("ROBOT"),
+		48,
+		ETextJustify::Center);
+	SkinName->SetFont(FSlateFontInfo(ShowDownDisplayFont(), 48));
+	SkinName->SetShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.95f));
+	SkinName->SetShadowOffset(FVector2D(2.0f, 3.0f));
+	AddAnchored(Root, SkinName, 0.5f, 0.0f, 0.5f, 0.0f, FMargin(-360.0f, 38.0f, 720.0f, 65.0f));
+
+	UTextBlock* RarityText = Text(
+		Tree,
+		TEXT("Text_Rarity"),
+		TEXT("COMMON"),
+		18,
+		ETextJustify::Center);
+	RarityText->SetColorAndOpacity(FSlateColor(FLinearColor(0.82f, 0.84f, 0.86f, 1.0f)));
+	AddAnchored(Root, RarityText, 0.5f, 0.0f, 0.5f, 0.0f, FMargin(-220.0f, 106.0f, 440.0f, 30.0f));
+
+	UBorder* RarityAccent = Tree->ConstructWidget<UBorder>(
+		UBorder::StaticClass(),
+		TEXT("Border_RarityAccent"));
+	RarityAccent->SetBrushColor(FLinearColor(0.82f, 0.84f, 0.86f, 1.0f));
+	AddAnchored(Root, RarityAccent, 0.5f, 0.0f, 0.5f, 0.0f, FMargin(-235.0f, 139.0f, 470.0f, 4.0f));
+
+	UTextBlock* DescriptionText = Text(
+		Tree,
+		TEXT("Text_Description"),
+		TEXT("스킨 정보를 불러오는 중입니다."),
+		16,
+		ETextJustify::Center);
+	DescriptionText->SetColorAndOpacity(FSlateColor(FLinearColor(0.76f, 0.76f, 0.78f, 1.0f)));
+	DescriptionText->SetAutoWrapText(true);
+	AddAnchored(Root, DescriptionText, 0.5f, 0.0f, 0.5f, 0.0f, FMargin(-400.0f, 154.0f, 800.0f, 46.0f));
+
+	UTextBlock* PriceText = Text(
+		Tree,
+		TEXT("Text_Price"),
+		TEXT("가격 불러오는 중"),
+		24,
+		ETextJustify::Center);
+	PriceText->SetColorAndOpacity(FSlateColor(FLinearColor(0.97f, 0.81f, 0.43f, 1.0f)));
+	PriceText->SetShadowColorAndOpacity(FLinearColor::Black);
+	PriceText->SetShadowOffset(FVector2D(1.0f, 2.0f));
+	AddAnchored(Root, PriceText, 0.5f, 1.0f, 0.5f, 1.0f, FMargin(-280.0f, -220.0f, 560.0f, 44.0f));
+
+	UButton* PreviousButton = ShopButton(
+		Tree,
+		TEXT("Button_Previous"),
+		TEXT("Text_PreviousLabel"),
+		TEXT("<  이전"),
+		FLinearColor(0.045f, 0.025f, 0.032f, 0.94f),
+		FLinearColor(0.28f, 0.065f, 0.08f, 1.0f),
+		FLinearColor(0.14f, 0.03f, 0.04f, 1.0f),
+		FLinearColor(0.96f, 0.84f, 0.60f, 1.0f),
+		20);
+	AddAnchored(Root, PreviousButton, 0.0f, 1.0f, 0.0f, 1.0f, FMargin(78.0f, -154.0f, 270.0f, 72.0f));
+
+	UButton* PrimaryActionButton = ShopButton(
+		Tree,
+		TEXT("Button_PrimaryAction"),
+		TEXT("Text_PrimaryAction"),
+		TEXT("불러오는 중"),
+		FLinearColor(0.72f, 0.45f, 0.10f, 1.0f),
+		FLinearColor(0.96f, 0.70f, 0.22f, 1.0f),
+		FLinearColor(0.53f, 0.28f, 0.055f, 1.0f),
+		FLinearColor(0.055f, 0.025f, 0.018f, 1.0f),
+		24);
+	AddAnchored(Root, PrimaryActionButton, 0.5f, 1.0f, 0.5f, 1.0f, FMargin(-225.0f, -162.0f, 450.0f, 82.0f));
+
+	UButton* NextButton = ShopButton(
+		Tree,
+		TEXT("Button_Next"),
+		TEXT("Text_NextLabel"),
+		TEXT("다음  >"),
+		FLinearColor(0.045f, 0.025f, 0.032f, 0.94f),
+		FLinearColor(0.28f, 0.065f, 0.08f, 1.0f),
+		FLinearColor(0.14f, 0.03f, 0.04f, 1.0f),
+		FLinearColor(0.96f, 0.84f, 0.60f, 1.0f),
+		20);
+	AddAnchored(Root, NextButton, 1.0f, 1.0f, 1.0f, 1.0f, FMargin(-348.0f, -154.0f, 270.0f, 72.0f));
+
+	UTextBlock* StatusText = Text(
+		Tree,
+		TEXT("Text_Status"),
+		TEXT(""),
+		14,
+		ETextJustify::Center);
+	StatusText->SetAutoWrapText(true);
+	AddAnchored(Root, StatusText, 0.5f, 1.0f, 0.5f, 1.0f, FMargin(-420.0f, -67.0f, 840.0f, 42.0f));
+
+	return Save(BP);
+}
+
+bool ValidateShopWidgetBlueprint(UWidgetBlueprint* BP)
+{
+	if (!BP || !BP->WidgetTree || !BP->WidgetTree->RootWidget)
+	{
+		UE_LOG(LogShowDownUiBuild, Error, TEXT("WBP_Shop has no valid widget tree."));
+		return false;
+	}
+
+	bool bIsValid = true;
+	if (!BP->ParentClass || !BP->ParentClass->IsChildOf(UShowDownShopWidget::StaticClass()))
+	{
+		UE_LOG(
+			LogShowDownUiBuild,
+			Error,
+			TEXT("WBP_Shop must derive from UShowDownShopWidget; existing asset was not modified."));
+		bIsValid = false;
+	}
+
+	struct FRequiredWidget
+	{
+		const TCHAR* Name;
+		UClass* Type;
+	};
+
+	const FRequiredWidget RequiredWidgets[] =
+	{
+		{TEXT("Border_RarityAccent"), UBorder::StaticClass()},
+		{TEXT("Text_SkinName"), UTextBlock::StaticClass()},
+		{TEXT("Text_Rarity"), UTextBlock::StaticClass()},
+		{TEXT("Text_Description"), UTextBlock::StaticClass()},
+		{TEXT("Text_Price"), UTextBlock::StaticClass()},
+		{TEXT("Text_Coin"), UTextBlock::StaticClass()},
+		{TEXT("Text_Status"), UTextBlock::StaticClass()},
+		{TEXT("Text_PrimaryAction"), UTextBlock::StaticClass()},
+		{TEXT("Button_Previous"), UButton::StaticClass()},
+		{TEXT("Button_PrimaryAction"), UButton::StaticClass()},
+		{TEXT("Button_Next"), UButton::StaticClass()},
+		{TEXT("Button_Back"), UButton::StaticClass()}
+	};
+
+	for (const FRequiredWidget& RequiredWidget : RequiredWidgets)
+	{
+		UWidget* Widget = BP->WidgetTree->FindWidget(RequiredWidget.Name);
+		if (!Widget || !Widget->IsA(RequiredWidget.Type))
+		{
+			UE_LOG(
+				LogShowDownUiBuild,
+				Error,
+				TEXT("WBP_Shop binding '%s' is missing or has the wrong type (expected %s). Existing asset was not modified."),
+				RequiredWidget.Name,
+				*RequiredWidget.Type->GetName());
+			bIsValid = false;
+		}
+	}
+
+	if (BP->Status == BS_Error || !BP->GeneratedClass)
+	{
+		UE_LOG(LogShowDownUiBuild, Error, TEXT("WBP_Shop failed Blueprint compilation."));
+		bIsValid = false;
+	}
+
+	return bIsValid;
+}
+
+bool BuildOrValidateShopWidget(const bool bForceRebuild)
+{
+	const FString ObjectPath(ShopWidgetObjectPath);
+	const FString PackageName = FPackageName::ObjectPathToPackageName(ObjectPath);
+	UObject* ExistingObject = LoadObject<UObject>(nullptr, ShopWidgetObjectPath);
+	UWidgetBlueprint* ShopBlueprint = Cast<UWidgetBlueprint>(ExistingObject);
+	const bool bCreated = ExistingObject == nullptr;
+	if (!ExistingObject && FPackageName::DoesPackageExist(PackageName))
+	{
+		UE_LOG(
+			LogShowDownUiBuild,
+			Error,
+			TEXT("Package '%s' exists but %s could not be loaded. The package will not be recreated or overwritten; repair or remove it explicitly in the editor."),
+			*PackageName,
+			ShopWidgetObjectPath);
+		return false;
+	}
+
+	if (ExistingObject && !ShopBlueprint)
+	{
+		UE_LOG(
+			LogShowDownUiBuild,
+			Error,
+			TEXT("%s exists but is not a Widget Blueprint. It will not be overwritten."),
+			ShopWidgetObjectPath);
+		return false;
+	}
+
+	if (!ShopBlueprint)
+	{
+		const FString AssetName = FPackageName::ObjectPathToObjectName(ObjectPath);
+		UPackage* Package = CreatePackage(*PackageName);
+		ShopBlueprint = Cast<UWidgetBlueprint>(FKismetEditorUtilities::CreateBlueprint(
+			UShowDownShopWidget::StaticClass(),
+			Package,
+			FName(*AssetName),
+			BPTYPE_Normal,
+			UWidgetBlueprint::StaticClass(),
+			UWidgetBlueprintGeneratedClass::StaticClass()));
+
+		if (!ShopBlueprint)
+		{
+			UE_LOG(LogShowDownUiBuild, Error, TEXT("Failed to create %s."), ShopWidgetObjectPath);
+			return false;
+		}
+		FAssetRegistryModule::AssetCreated(ShopBlueprint);
+	}
+
+	if (!ShopBlueprint->ParentClass
+		|| !ShopBlueprint->ParentClass->IsChildOf(UShowDownShopWidget::StaticClass()))
+	{
+		UE_LOG(
+			LogShowDownUiBuild,
+			Error,
+			TEXT("%s has an incompatible parent class and will not be modified."),
+			ShopWidgetObjectPath);
+		return false;
+	}
+
+	if (bCreated || bForceRebuild)
+	{
+		if (bForceRebuild && !bCreated)
+		{
+			UE_LOG(
+				LogShowDownUiBuild,
+				Warning,
+				TEXT("-ForceRebuildShopAssets explicitly authorized rebuilding the existing WBP_Shop."));
+		}
+		if (!BuildShop(ShopBlueprint))
+		{
+			return false;
+		}
+	}
+	else
+	{
+		// Compiling is intentionally the only operation performed on an existing
+		// asset. In particular, do not call Reset, Modify, MarkPackageDirty, or
+		// SavePackage here: designers may already have replaced the generated UI.
+		FKismetEditorUtilities::CompileBlueprint(ShopBlueprint);
+		UE_LOG(
+			LogShowDownUiBuild,
+			Display,
+			TEXT("Existing WBP_Shop compiled and validated without being reset or saved."));
+	}
+
+	return ValidateShopWidgetBlueprint(ShopBlueprint);
+}
+
+bool ValidateCharacterSkinCatalog(const UShowDownCharacterSkinCatalog* Catalog)
+{
+	if (!Catalog || Catalog->Skins.IsEmpty())
+	{
+		UE_LOG(LogShowDownUiBuild, Error, TEXT("DA_CharacterSkinCatalog contains no skins."));
+		return false;
+	}
+
+	bool bIsValid = true;
+	TSet<FString> SeenSkinIds;
+	for (const FShowDownCharacterSkinDefinition& Definition : Catalog->Skins)
+	{
+		const FString CanonicalSkinId =
+			UShowDownCharacterSkinCatalog::CanonicalizeSkinId(Definition.SkinId);
+		if (CanonicalSkinId.IsEmpty())
+		{
+			UE_LOG(LogShowDownUiBuild, Error, TEXT("DA_CharacterSkinCatalog has an entry with an empty SkinId."));
+			bIsValid = false;
+			continue;
+		}
+		if (SeenSkinIds.Contains(CanonicalSkinId))
+		{
+			UE_LOG(
+				LogShowDownUiBuild,
+				Error,
+				TEXT("DA_CharacterSkinCatalog has duplicate canonical SkinId '%s'."),
+				*CanonicalSkinId);
+			bIsValid = false;
+			continue;
+		}
+		SeenSkinIds.Add(CanonicalSkinId);
+
+		if (Definition.SkeletalMesh.IsNull())
+		{
+			UE_LOG(
+				LogShowDownUiBuild,
+				Warning,
+				TEXT("Skin '%s' has no SkeletalMesh and will use the runtime fallback."),
+				*CanonicalSkinId);
+		}
+
+		auto ValidatePreviewProfile = [&CanonicalSkinId](
+			const TCHAR* ProfileName,
+			const FShowDownCharacterPreviewAnimationProfile& Profile)
+		{
+			if (Profile.AnimationMode == EShowDownShopPreviewAnimationMode::SingleAnimation
+				&& Profile.Animation.IsNull())
+			{
+				UE_LOG(
+					LogShowDownUiBuild,
+					Warning,
+					TEXT("Skin '%s' %s profile selects SingleAnimation without an asset; reference pose fallback will be used."),
+					*CanonicalSkinId,
+					ProfileName);
+			}
+			else if (Profile.AnimationMode == EShowDownShopPreviewAnimationMode::AnimationBlueprint
+				&& Profile.AnimClass.IsNull())
+			{
+				UE_LOG(
+					LogShowDownUiBuild,
+					Warning,
+					TEXT("Skin '%s' %s profile selects AnimationBlueprint without a class; reference pose fallback will be used."),
+					*CanonicalSkinId,
+					ProfileName);
+			}
+		};
+
+		ValidatePreviewProfile(TEXT("ShopPreview"), Definition.ShopPreview);
+		ValidatePreviewProfile(TEXT("MainMenuPreview"), Definition.MainMenuPreview);
+	}
+
+	return bIsValid;
+}
+
+bool SaveCharacterSkinCatalog(UShowDownCharacterSkinCatalog* Catalog)
+{
+	const FString PackageName = Catalog->GetOutermost()->GetName();
+	const FString Filename = FPackageName::LongPackageNameToFilename(
+		PackageName,
+		FPackageName::GetAssetPackageExtension());
+	const FString Directory = FPaths::GetPath(Filename);
+	if (!IFileManager::Get().MakeDirectory(*Directory, true)
+		&& !IFileManager::Get().DirectoryExists(*Directory))
+	{
+		UE_LOG(
+			LogShowDownUiBuild,
+			Error,
+			TEXT("Failed to create data asset directory '%s'."),
+			*Directory);
+		return false;
+	}
+
+	Catalog->MarkPackageDirty();
+	const bool bSaved = UPackage::SavePackage(
+		Catalog->GetOutermost(),
+		Catalog,
+		*Filename,
+		FSavePackageArgs());
+	if (!bSaved)
+	{
+		UE_LOG(
+			LogShowDownUiBuild,
+			Error,
+			TEXT("Failed to save %s."),
+			CharacterSkinCatalogObjectPath);
+	}
+	return bSaved;
+}
+
+bool BuildOrValidateCharacterSkinCatalog(const bool bForceRebuild)
+{
+	const FString ObjectPath(CharacterSkinCatalogObjectPath);
+	const FString PackageName = FPackageName::ObjectPathToPackageName(ObjectPath);
+	UObject* ExistingObject = LoadObject<UObject>(nullptr, CharacterSkinCatalogObjectPath);
+	UShowDownCharacterSkinCatalog* Catalog =
+		Cast<UShowDownCharacterSkinCatalog>(ExistingObject);
+	const bool bCreated = ExistingObject == nullptr;
+	if (!ExistingObject && FPackageName::DoesPackageExist(PackageName))
+	{
+		UE_LOG(
+			LogShowDownUiBuild,
+			Error,
+			TEXT("Package '%s' exists but %s could not be loaded. The package will not be recreated or overwritten; repair or remove it explicitly in the editor."),
+			*PackageName,
+			CharacterSkinCatalogObjectPath);
+		return false;
+	}
+
+	if (ExistingObject && !Catalog)
+	{
+		UE_LOG(
+			LogShowDownUiBuild,
+			Error,
+			TEXT("%s exists but is not a UShowDownCharacterSkinCatalog. It will not be overwritten."),
+			CharacterSkinCatalogObjectPath);
+		return false;
+	}
+
+	if (!Catalog)
+	{
+		const FString AssetName = FPackageName::ObjectPathToObjectName(ObjectPath);
+		UPackage* Package = CreatePackage(*PackageName);
+		Catalog = NewObject<UShowDownCharacterSkinCatalog>(
+			Package,
+			FName(*AssetName),
+			RF_Public | RF_Standalone | RF_Transactional);
+		if (!Catalog)
+		{
+			UE_LOG(
+				LogShowDownUiBuild,
+				Error,
+				TEXT("Failed to create %s."),
+				CharacterSkinCatalogObjectPath);
+			return false;
+		}
+		FAssetRegistryModule::AssetCreated(Catalog);
+	}
+
+	if (bCreated || bForceRebuild)
+	{
+		if (bForceRebuild && !bCreated)
+		{
+			UE_LOG(
+				LogShowDownUiBuild,
+				Warning,
+				TEXT("-ForceRebuildShopAssets explicitly authorized replacing the existing catalog entries."));
+		}
+
+		Catalog->Modify();
+		UShowDownCharacterSkinCatalog::GetOrderedSkinDefinitions(nullptr, Catalog->Skins);
+		if (!SaveCharacterSkinCatalog(Catalog))
+		{
+			return false;
+		}
+	}
+	else
+	{
+		UE_LOG(
+			LogShowDownUiBuild,
+			Display,
+			TEXT("Existing DA_CharacterSkinCatalog validated without being modified or saved."));
+	}
+
+	return ValidateCharacterSkinCatalog(Catalog);
+}
+
+bool BuildShopAssets(const bool bForceRebuild)
+{
+	// Run both operations even if one fails so a single commandlet invocation
+	// reports every actionable validation error.
+	const bool bCatalogValid = BuildOrValidateCharacterSkinCatalog(bForceRebuild);
+	const bool bWidgetValid = BuildOrValidateShopWidget(bForceRebuild);
+	return bCatalogValid && bWidgetValid;
 }
 
 void PatchSettings(UWidgetBlueprint* BP)
@@ -649,6 +1231,24 @@ void BuildMultiResult(UWidgetBlueprint* BP)
 
 int32 UShowDownUiBuildCommandlet::Main(const FString& Params)
 {
+	const bool bShopOnly = FParse::Param(*Params, TEXT("ShopOnly"));
+	const bool bForceRebuildShopAssets =
+		FParse::Param(*Params, TEXT("ForceRebuildShopAssets"));
+
+	if (bForceRebuildShopAssets && !bShopOnly)
+	{
+		UE_LOG(
+			LogShowDownUiBuild,
+			Error,
+			TEXT("-ForceRebuildShopAssets is only accepted together with -ShopOnly."));
+		return 1;
+	}
+
+	if (bShopOnly)
+	{
+		return BuildShopAssets(bForceRebuildShopAssets) ? 0 : 1;
+	}
+
 	if (Params.Contains(TEXT("SettingsOnly"), ESearchCase::IgnoreCase))
 	{
 		PatchSettings(GetOrCreate(TEXT("/Game/UI/WBP_Settings.WBP_Settings"), UShowDownSettingsWidget::StaticClass()));

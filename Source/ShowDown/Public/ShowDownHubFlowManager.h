@@ -155,31 +155,18 @@ private:
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera")
 	ACameraActor* ShopCamera;
 
-	// Optional data asset for future character skins. Robot, hoodman, micu, and miku
-	// still resolve in code when this is left empty.
+	// Local presentation catalog shared by the shop UI and both placed preview actors.
+	// Robot, hoodman, micu, and miku still resolve in code when this is left empty.
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Shop Preview")
 	TObjectPtr<UShowDownCharacterSkinCatalog> CharacterSkinCatalog;
 
-	UPROPERTY(EditAnywhere, Category = "ShowDown|Shop Preview")
-	TSubclassOf<AShowDownShopPreviewActor> ShopPreviewActorClass;
+	/** Editor-placed actor showing the equipped skin on the main menu. */
+	UPROPERTY(EditInstanceOnly, Category = "ShowDown|Character Preview")
+	TObjectPtr<AShowDownShopPreviewActor> MainMenuPreviewActor;
 
-	UPROPERTY(
-		EditAnywhere,
-		Category = "ShowDown|Shop Preview",
-		meta = (ClampMin = "50.0", UIMin = "100.0", UIMax = "1000.0"))
-	float ShopPreviewDistance = 450.0f;
-
-	UPROPERTY(
-		EditAnywhere,
-		Category = "ShowDown|Shop Preview",
-		meta = (UIMin = "-300.0", UIMax = "300.0"))
-	float ShopPreviewHeight = -120.0f;
-
-	UPROPERTY(
-		EditAnywhere,
-		Category = "ShowDown|Shop Preview",
-		meta = (UIMin = "-180.0", UIMax = "180.0"))
-	float ShopPreviewYawOffset = 0.0f;
+	/** Editor-placed actor showing the currently selected shop skin. */
+	UPROPERTY(EditInstanceOnly, Category = "ShowDown|Character Preview")
+	TObjectPtr<AShowDownShopPreviewActor> ShopPreviewActor;
 
 	// Camera used by the multiplayer browser and lobby. Falls back to MainMenuCamera.
 	UPROPERTY(EditAnywhere, Category = "ShowDown|Camera", meta = (DisplayName = "Multiplayer Camera"))
@@ -262,9 +249,6 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UShowDownTransitionWidget> TransitionWidget;
 
-	UPROPERTY(Transient)
-	TObjectPtr<AShowDownShopPreviewActor> ShopPreviewActor;
-
 	EShowDownHubTransitionOperation TransitionOperation = EShowDownHubTransitionOperation::None;
 	TWeakObjectPtr<APlayerController> SinglePlayerBlendPlayerController;
 	TWeakObjectPtr<APlayerCameraManager> SinglePlayerBlendCameraManager;
@@ -298,11 +282,19 @@ private:
 	bool PlayViewTarget(AActor* ViewTarget, bool bCut = false);
 	void ClearGameplayCameraLook();
 	APlayerController* GetPrimaryPlayerController() const;
-	void SpawnShopPreviewActor();
-	void DestroyShopPreviewActor();
+	void UpdateCharacterPreviewsForWidget(UUserWidget* NextWidget);
+	void DeactivateCharacterPreviews();
+	void RefreshMainMenuCharacterPreview();
+	UShowDownCharacterSkinCatalog* ResolveCharacterSkinCatalog() const;
 
 	UFUNCTION()
 	void HandleShopPreviewSkinChanged(const FString& SkinId);
+
+	UFUNCTION()
+	void HandleHubCosmeticDataLoaded(bool bSuccess, const FString& Message);
+
+	UFUNCTION()
+	void HandleHubSkinEquipped(bool bSuccess, const FString& Message);
 
 	UFUNCTION()
 	void HandleLoginSucceeded();

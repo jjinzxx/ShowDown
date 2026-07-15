@@ -170,6 +170,31 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Supabase")
 	void LoadCosmeticData();
 
+	/** Loads cosmetics only when no complete snapshot is cached yet. */
+	UFUNCTION(BlueprintCallable, Category = "Supabase")
+	void EnsureCosmeticDataLoaded();
+
+	UFUNCTION(BlueprintPure, Category = "Supabase")
+	bool HasCosmeticDataSnapshot() const { return bHasCosmeticDataSnapshot; }
+
+	UFUNCTION(BlueprintPure, Category = "Supabase")
+	bool IsCosmeticDataLoadInFlight() const { return bCosmeticDataLoadInFlight; }
+
+	UFUNCTION(BlueprintPure, Category = "Supabase")
+	bool IsSkinPurchaseInFlight() const { return bSkinPurchaseInFlight; }
+
+	UFUNCTION(BlueprintPure, Category = "Supabase")
+	bool IsSkinEquipInFlight() const { return bSkinEquipInFlight; }
+
+	UFUNCTION(BlueprintPure, Category = "Supabase")
+	bool IsShopOperationInFlight() const
+	{
+		return bSkinPurchaseInFlight || bSkinEquipInFlight;
+	}
+
+	UFUNCTION(BlueprintPure, Category = "Supabase")
+	FString GetPendingShopSetId() const { return PendingShopSetId; }
+
 	// 현재 저장된 Supabase access_token을 반환합니다.
 	// 나중에 다른 인증 요청을 보낼 때 사용할 수 있습니다.
 	UFUNCTION(BlueprintCallable, Category = "Supabase")
@@ -263,8 +288,15 @@ private:
 	bool bAwardWinRewardInFlight = false;
 	bool bCosmeticDataLoadInFlight = false;
 	bool bCosmeticDataLoadFailed = false;
+	bool bHasCosmeticDataSnapshot = false;
+	bool bSkinPurchaseInFlight = false;
+	bool bSkinEquipInFlight = false;
+	uint64 LoginAttemptGeneration = 0;
+	uint64 AuthSessionGeneration = 0;
+	uint64 PlayerDataRequestGeneration = 0;
 	int32 PendingCosmeticDataRequests = 0;
 	TArray<FString> CosmeticDataLoadErrors;
+	FString PendingShopSetId;
 
 	// Supabase 프로젝트 기본 URL입니다.
 	FString SupabaseUrl = TEXT("https://xfyzrqsbdweckjgxefjr.supabase.co");
@@ -307,45 +339,54 @@ private:
 	// skin_set_items 테이블에서 불러온 세트별 실제 장착 스킨 목록입니다.
 	TMap<FString, TArray<FShowDownSkin>> SkinSetItemsBySetId;
 
+	// Cosmetic REST responses are staged here and committed atomically only
+	// after all five requests succeed. A failed refresh keeps the last good UI.
+	TArray<FShowDownSkin> PendingShopSkins;
+	TArray<FString> PendingOwnedSkinIds;
+	TArray<FString> PendingOwnedSkinSetIds;
+	TMap<FString, FString> PendingEquippedSkinIdsByType;
+	TMap<FString, TArray<FShowDownSkin>> PendingSkinSetItemsBySetId;
+
 	// Supabase Auth 로그인 요청의 응답을 처리합니다.
 	// access_token과 user.id를 파싱하고, 성공하면 LoadPlayerData를 호출합니다.
-	void HandleLoginResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+	void HandleLoginResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, uint64 LoginGeneration);
 
 	// login-with-id Edge Function 응답을 처리합니다.
 	// access_token과 user_id를 파싱하고, 성공하면 LoadPlayerData를 호출합니다.
-	void HandleLoginWithIdResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+	void HandleLoginWithIdResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, uint64 LoginGeneration);
 
 	// profiles 테이블 응답을 처리해서 Nickname 값을 저장합니다.
-	void HandleProfileResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+	void HandleProfileResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, uint64 RequestGeneration, uint64 PlayerDataGeneration);
 
 	// player_wallets 테이블 응답을 처리해서 Coin 값을 저장합니다.
-	void HandleWalletResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+	void HandleWalletResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, uint64 RequestGeneration, uint64 PlayerDataGeneration);
 
 	// player_ranks 테이블 응답을 처리해서 Score 값을 저장합니다.
-	void HandleRankResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+	void HandleRankResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, uint64 RequestGeneration, uint64 PlayerDataGeneration);
 
 	// get_leaderboard RPC 응답(배열)을 처리해서 Leaderboard에 저장합니다.
-	void HandleLeaderboardResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+	void HandleLeaderboardResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, uint64 RequestGeneration);
 
 	// skin_sets 테이블 응답을 처리해서 활성 상점 상품 목록을 저장합니다.
 	// 함수 이름은 기존 skins 구조에서 이어진 이름입니다.
-	void HandleSkinsResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+	void HandleSkinsResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, uint64 RequestGeneration);
 
 	// player_skins 테이블 응답을 처리해서 보유 스킨 id 목록을 저장합니다.
-	void HandlePlayerSkinsResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+	void HandlePlayerSkinsResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, uint64 RequestGeneration);
 
 	// player_skin_sets 테이블 응답을 처리해서 보유 상품 세트 id 목록을 저장합니다.
-	void HandlePlayerSkinSetsResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+	void HandlePlayerSkinSetsResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, uint64 RequestGeneration);
 
 	// skin_set_items 테이블 응답을 처리해서 상품 세트에 포함된 실제 스킨 목록을 저장합니다.
-	void HandleSkinSetItemsResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+	void HandleSkinSetItemsResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, uint64 RequestGeneration);
 
 	// player_equipment 테이블 응답을 처리해서 현재 장착 정보를 저장합니다.
-	void HandlePlayerEquipmentResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+	void HandlePlayerEquipmentResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, uint64 RequestGeneration);
 
 	// All five cosmetic REST calls form one snapshot. This keeps listeners from
 	// rebuilding the shop from a partially refreshed cache.
 	void CompleteCosmeticDataRequest(bool bSuccess, const FString& Message);
+	void BeginAuthenticatedSession();
 
 	// AccessToken이 필요한 Supabase REST 요청을 공통으로 만들어주는 helper 함수입니다.
 	// apikey, Authorization, Content-Type 헤더를 매번 반복해서 쓰지 않기 위해 분리했습니다.
@@ -356,14 +397,14 @@ private:
 	
 	// Supabase에 보낸 닉네임 변경 PATCH 요청의 응답을 처리합니다.
 	// 성공하면 응답에서 변경된 nickname을 읽어 내부 변수에 저장합니다.
-	void HandleUpdateNicknameResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+	void HandleUpdateNicknameResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, uint64 RequestGeneration);
 
 	// award_win_reward RPC 응답({reward, score})을 처리해서 갱신된 Score를 저장합니다.
-	void HandleAwardWinRewardResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+	void HandleAwardWinRewardResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, uint64 RequestGeneration);
 
 	// Supabase에 보낸 스킨 장착 PATCH 요청의 응답을 처리합니다.
-	void HandleEquipSkinResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+	void HandleEquipSkinResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, uint64 RequestGeneration);
 
 	// Supabase RPC purchase_skin_set 응답을 처리합니다.
-	void HandlePurchaseSkinSetResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+	void HandlePurchaseSkinSetResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, uint64 RequestGeneration);
 };
