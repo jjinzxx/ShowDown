@@ -64,6 +64,8 @@ public:
 	const UShowDownAudioConfig* GetAudioConfig() const { return AudioConfig; }
 
 private:
+	friend class FShowDownAudioConfigTest;
+
 	void HandlePostLoadMap(UWorld* LoadedWorld);
 	void HandleWorldInitializedActors(const FActorsInitializedParams& Params);
 	void EnsurePersistentLoops();
@@ -72,6 +74,9 @@ private:
 	bool CanPlayInWorld(const UWorld* World) const;
 	UWorld* ResolvePlaybackWorld() const;
 
+	static float CalculateMusicTargetVolume(float ConfigVolume, float UserVolume, float MixMultiplier);
+	float GetMusicTargetVolume() const;
+	float GetCrowdTargetVolume() const;
 	void SetCrowdMixVolume(float ConfigVolume, float FadeDuration);
 	void SetMusicMixMultiplier(float Multiplier, float FadeDuration);
 	void RestoreIdleMix(float FadeDuration);

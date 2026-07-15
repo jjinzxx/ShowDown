@@ -98,6 +98,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Timing")
 	float GetPresentationFinishDelay(bool bLiveRound) const;
 
+	/** True while this local gun instance is playing a server-scripted multiplayer shot. */
+	bool IsMultiplayerRoulettePresentation() const;
+
 	// Pure helpers kept public so the multiplayer gate and seat-relative camera
 	// math can be covered without creating a PIE world.
 	static bool ShouldUseGunShotCamera(bool bLiveRound, bool bTargetsLocalPlayer);
@@ -196,6 +199,9 @@ protected:
 
 	UFUNCTION()
 	void HandleGamePhaseChanged(EShowDownPhase NewPhase);
+
+	UFUNCTION()
+	void HandleTableCinematicCue(ESDTableCinematicCue Cue, uint8 PlayerSlotMask);
 
 	void ApplyAmmoStatusDisplaySettings();
 	void UpdateAmmoStatusAnchorLocation();
@@ -548,6 +554,8 @@ protected:
 	bool bDisableCollisionWhileUsing = true;
 
 private:
+	friend class FShowDownGunVisionSequenceTimingTest;
+
 	enum class EGunAnimState : uint8
 	{
 		Idle,
@@ -708,6 +716,7 @@ private:
 	bool bCinematicCameraShakeActive = false;
 	bool bTinnitusFadeOutStarted = false;
 	bool bHitSequenceBlackoutActive = false;
+	bool bMultiplayerRoulettePresentationActive = false;
 	UPROPERTY(Transient)
 	TObjectPtr<UAudioComponent> TinnitusAudioComponent;
 	TWeakObjectPtr<AShowDownGameStateBase> BoundShowDownGameState;

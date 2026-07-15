@@ -74,6 +74,7 @@ public:
 
 private:
 	friend class USDGunVisionGunBinding;
+	friend class FShowDownGunVisionSequenceTimingTest;
 
 	enum class ESequenceState : uint8
 	{
@@ -121,6 +122,7 @@ private:
 	void RefreshTurnSpotlightSoundState();
 	void ApplyPhasePresentationPolicy(EShowDownPhase Phase);
 	bool IsRoulettePhase() const;
+	bool IsRoulettePresentation(const ASDSelfShotGunActor* GunActor) const;
 	void ResetToIdle(bool bImmediate);
 
 	void HandleGunRaised(ASDSelfShotGunActor* GunActor);
@@ -155,7 +157,6 @@ private:
 	float SequenceElapsedTime = 0.0f;
 	float SequenceStageDuration = 0.0f;
 	float ShotResolveDelay = 0.0f;
-	float PostShotBrightHoldElapsedTime = 0.0f;
 	float DesiredDarknessStrength = 0.0f;
 	uint8 ActiveTargetSpotlightMask = 0;
 	EShowDownSide LastTurnSpotlightSide = EShowDownSide::Player;

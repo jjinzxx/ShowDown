@@ -27,7 +27,6 @@ namespace
 	constexpr float EmptyPeakHoldDuration = 0.05f;
 	constexpr float EmptyReliefDuration = 0.22f;
 	constexpr float PresentationFinishDuration = 0.35f;
-	constexpr float PostShotBrightHoldDuration = 5.0f;
 	const FName TableSpotlightActorTag(TEXT("ShowDownTableSpotlight"));
 	const FName LegacyTableSpotlightActorName(TEXT("SpotLight6"));
 	const FName ZeroDarknessSpotlightActorTag(TEXT("ShowDownZeroDarknessSpotlight"));
@@ -241,24 +240,6 @@ void USDGunVisionSequenceSubsystem::Tick(float DeltaTime)
 	Super::Tick(DeltaTime);
 	SynchronizePendingVisionDirectors();
 	AdvanceIntroSequence(DeltaTime);
-	if (bPostShotBrightHoldActive)
-	{
-		PostShotBrightHoldElapsedTime += FMath::Max(0.0f, DeltaTime);
-		if (PostShotBrightHoldElapsedTime >= PostShotBrightHoldDuration)
-		{
-			bPostShotBrightHoldActive = false;
-			PostShotBrightHoldElapsedTime = 0.0f;
-			if (SetZeroDarknessSpotlightEnabled(false))
-			{
-				PlaySpotlightTransitionSound();
-			}
-			BlendDarkness(
-				BaseDarknessStrength,
-				PresentationFinishDuration,
-				ESDVisionBlendEase::EaseOut,
-				2.0f);
-		}
-	}
 
 	SequenceElapsedTime += FMath::Max(0.0f, DeltaTime);
 	switch (SequenceState)
@@ -512,6 +493,7 @@ void USDGunVisionSequenceSubsystem::QueueMatchEntryPresentation()
 	ResetToIdle(true);
 	bMatchPresentationActivated = true;
 	bInitialDealPresentationActive = false;
+	bPostShotBrightHoldActive = false;
 	IntroSequenceState = EIntroSequenceState::Idle;
 	IntroSequenceElapsedTime = 0.0f;
 	SetDarknessImmediate(0.0f);
@@ -524,6 +506,7 @@ void USDGunVisionSequenceSubsystem::ResetMatchPresentationForHub()
 	IntroSequenceElapsedTime = 0.0f;
 	bMatchPresentationActivated = false;
 	bInitialDealPresentationActive = false;
+	bPostShotBrightHoldActive = false;
 	ResetToIdle(true);
 	SetVisionRangeImmediateToTable();
 	SetTableSpotlightEnabled(false);
@@ -533,6 +516,7 @@ void USDGunVisionSequenceSubsystem::ResetMatchPresentationForHub()
 void USDGunVisionSequenceSubsystem::StartMatchIntro()
 {
 	bMatchPresentationActivated = true;
+	bPostShotBrightHoldActive = false;
 	SequenceState = ESequenceState::Idle;
 	IntroSequenceState = EIntroSequenceState::Idle;
 	IntroSequenceElapsedTime = 0.0f;
@@ -914,6 +898,23 @@ bool USDGunVisionSequenceSubsystem::IsRoulettePhase() const
 	return GameState && GameState->CurrentPhase == EShowDownPhase::Roulette;
 }
 
+bool USDGunVisionSequenceSubsystem::IsRoulettePresentation(
+	const ASDSelfShotGunActor* GunActor) const
+{
+	// The reliable multiplayer presentation RPC can be processed before the
+	// separately replicated phase property on a delayed client. The gun's local
+	// scripted-shot context is authoritative for these presentation callbacks.
+	if (IsValid(GunActor) && GunActor->IsMultiplayerRoulettePresentation())
+	{
+		return true;
+	}
+
+	// Networked shots must retain the explicit presentation context. A reliable
+	// Reset can arrive before phase replication and invalidate a delayed local shot.
+	const UWorld* World = GetWorld();
+	return (!World || World->GetNetMode() == NM_Standalone) && IsRoulettePhase();
+}
+
 void USDGunVisionSequenceSubsystem::ResetToIdle(bool bImmediate)
 {
 	SequenceState = ESequenceState::Idle;
@@ -941,7 +942,7 @@ void USDGunVisionSequenceSubsystem::ResetToIdle(bool bImmediate)
 
 void USDGunVisionSequenceSubsystem::HandleGunRaised(ASDSelfShotGunActor* GunActor)
 {
-	if (!IsRoulettePhase())
+	if (!IsRoulettePresentation(GunActor))
 	{
 		ResetToIdle(true);
 		return;
@@ -954,7 +955,6 @@ void USDGunVisionSequenceSubsystem::HandleGunRaised(ASDSelfShotGunActor* GunActo
 
 	bMatchPresentationActivated = true;
 	bPostShotBrightHoldActive = false;
-	PostShotBrightHoldElapsedTime = 0.0f;
 	if (SetZeroDarknessSpotlightEnabled(false))
 	{
 		PlaySpotlightTransitionSound();
@@ -983,7 +983,7 @@ void USDGunVisionSequenceSubsystem::HandleGunRaised(ASDSelfShotGunActor* GunActo
 
 void USDGunVisionSequenceSubsystem::HandleGunFired(ASDSelfShotGunActor* GunActor)
 {
-	if (!IsRoulettePhase())
+	if (!IsRoulettePresentation(GunActor))
 	{
 		ResetToIdle(true);
 		return;
@@ -996,11 +996,13 @@ void USDGunVisionSequenceSubsystem::HandleGunFired(ASDSelfShotGunActor* GunActor
 
 	bMatchPresentationActivated = true;
 	ActiveGun = GunActor;
+	// FireGun emits this delegate on the real shot/result frame. That event owns
+	// the bright post-shot hold so pulling the trigger cannot reveal the scene
+	// before the gun actually fires.
 	SequenceState = ESequenceState::Idle;
 	SequenceElapsedTime = 0.0f;
 	SequenceStageDuration = 0.0f;
 	bPostShotBrightHoldActive = true;
-	PostShotBrightHoldElapsedTime = 0.0f;
 	SetDarknessImmediate(0.0f);
 	if (SetZeroDarknessSpotlightEnabled(true))
 	{
@@ -1010,7 +1012,7 @@ void USDGunVisionSequenceSubsystem::HandleGunFired(ASDSelfShotGunActor* GunActor
 
 void USDGunVisionSequenceSubsystem::HandleGunEmptyFired(ASDSelfShotGunActor* GunActor)
 {
-	if (!IsRoulettePhase())
+	if (!IsRoulettePresentation(GunActor))
 	{
 		ResetToIdle(true);
 		return;
@@ -1027,7 +1029,6 @@ void USDGunVisionSequenceSubsystem::HandleGunEmptyFired(ASDSelfShotGunActor* Gun
 	SequenceElapsedTime = 0.0f;
 	SequenceStageDuration = 0.0f;
 	bPostShotBrightHoldActive = true;
-	PostShotBrightHoldElapsedTime = 0.0f;
 	SetDarknessImmediate(0.0f);
 	if (SetZeroDarknessSpotlightEnabled(true))
 	{
@@ -1076,6 +1077,12 @@ void USDGunVisionSequenceSubsystem::HandleGunUnavailable(ASDSelfShotGunActor* Gu
 
 void USDGunVisionSequenceSubsystem::HandlePhaseChanged(EShowDownPhase NewPhase)
 {
+	if (bPostShotBrightHoldActive && NewPhase != EShowDownPhase::Roulette)
+	{
+		// Phase replication is the server-authoritative next-game boundary. Do
+		// not let a per-client timer restore Darkness ahead of that boundary.
+		bPostShotBrightHoldActive = false;
+	}
 	RefreshTurnSpotlightSoundState();
 	ApplyPhasePresentationPolicy(NewPhase);
 }
@@ -1114,7 +1121,6 @@ void USDGunVisionSequenceSubsystem::HandleTableCinematicCue(
 		bMatchPresentationActivated = true;
 		bInitialDealPresentationActive = false;
 		bPostShotBrightHoldActive = false;
-		PostShotBrightHoldElapsedTime = 0.0f;
 		IntroSequenceState = EIntroSequenceState::Idle;
 		IntroSequenceElapsedTime = 0.0f;
 		BlendVisionRangeToTable(0.45f, ESDVisionBlendEase::EaseOut);
@@ -1190,8 +1196,8 @@ void USDGunVisionSequenceSubsystem::HandleTableCinematicCue(
 			bool bSpotlightChanged = (ActiveTargetSpotlightMask & PlayerSlotMask) != 0;
 			ActiveTargetSpotlightMask &= ~PlayerSlotMask;
 			bSpotlightChanged |= SetTableSpotlightEnabled(false);
-			bSpotlightChanged |= SetZeroDarknessSpotlightEnabled(true);
-			SetDarknessImmediate(0.0f);
+			// Trigger travel only clears the target cue. Darkness and the bright
+			// spotlight switch together from the real fired/empty-fired callback.
 			if (bSpotlightChanged)
 			{
 				PlaySpotlightTransitionSound();
@@ -1203,7 +1209,6 @@ void USDGunVisionSequenceSubsystem::HandleTableCinematicCue(
 		bMatchPresentationActivated = true;
 		bInitialDealPresentationActive = true;
 		bPostShotBrightHoldActive = false;
-		PostShotBrightHoldElapsedTime = 0.0f;
 		IntroSequenceState = EIntroSequenceState::Idle;
 		IntroSequenceElapsedTime = 0.0f;
 		SetVisionRangeImmediateToTable();
@@ -1243,7 +1248,6 @@ void USDGunVisionSequenceSubsystem::HandleTableCinematicCue(
 	default:
 		bInitialDealPresentationActive = false;
 		bPostShotBrightHoldActive = false;
-		PostShotBrightHoldElapsedTime = 0.0f;
 		IntroSequenceState = EIntroSequenceState::Idle;
 		IntroSequenceElapsedTime = 0.0f;
 		BlendVisionRangeToTable(0.6f, ESDVisionBlendEase::EaseOut);

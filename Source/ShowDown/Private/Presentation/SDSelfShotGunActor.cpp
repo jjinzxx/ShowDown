@@ -366,6 +366,9 @@ void ASDSelfShotGunActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		ShowDownGameState->OnPhaseChanged.RemoveDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleGamePhaseChanged);
+		ShowDownGameState->OnTableCinematicCue.RemoveDynamic(
+			this,
+			&ASDSelfShotGunActor::HandleTableCinematicCue);
 		ShowDownGameState->OnMultiplayerRoulettePresentation.RemoveDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
@@ -680,6 +683,11 @@ float ASDSelfShotGunActor::GetPresentationFinishDelay(bool bLiveRound) const
 	return FinishDelay;
 }
 
+bool ASDSelfShotGunActor::IsMultiplayerRoulettePresentation() const
+{
+	return bMultiplayerRoulettePresentationActive;
+}
+
 bool ASDSelfShotGunActor::ShouldUseGunShotCamera(bool bLiveRound, bool bTargetsLocalPlayer)
 {
 	return bLiveRound && bTargetsLocalPlayer;
@@ -775,7 +783,27 @@ void ASDSelfShotGunActor::OnRep_TableStatus()
 void ASDSelfShotGunActor::HandleGamePhaseChanged(EShowDownPhase NewPhase)
 {
 	StatusPhase = NewPhase;
+	if (NewPhase != EShowDownPhase::Roulette)
+	{
+		// A delayed client can have a later shot queued behind its current local
+		// presentation. Never carry that transient RPC work into another phase.
+		bMultiplayerRoulettePresentationActive = false;
+		PendingMultiplayerRoulettePresentations.Reset();
+	}
 	ApplyAmmoStatusDisplaySettings();
+}
+
+void ASDSelfShotGunActor::HandleTableCinematicCue(
+	const ESDTableCinematicCue Cue,
+	uint8 PlayerSlotMask)
+{
+	if (Cue == ESDTableCinematicCue::Reset)
+	{
+		// Reset is a reliable presentation boundary and can arrive before the
+		// separately replicated phase. Clear delayed client work immediately.
+		bMultiplayerRoulettePresentationActive = false;
+		PendingMultiplayerRoulettePresentations.Reset();
+	}
 }
 
 void ASDSelfShotGunActor::ApplyAmmoStatusDisplaySettings()
@@ -1908,6 +1936,7 @@ void ASDSelfShotGunActor::BroadcastPresentationFinishedIfIdle()
 	if (bPresentationFinishPending)
 	{
 		bPresentationFinishPending = false;
+		bMultiplayerRoulettePresentationActive = false;
 		OnGunPresentationFinished.Broadcast();
 		if (UShowDownAudioSubsystem* AudioSubsystem = FindShowDownAudioSubsystem(this))
 		{
@@ -2298,6 +2327,9 @@ void ASDSelfShotGunActor::HandleGameStateSet(AGameStateBase* GameState)
 		PreviousGameState->OnPhaseChanged.RemoveDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleGamePhaseChanged);
+		PreviousGameState->OnTableCinematicCue.RemoveDynamic(
+			this,
+			&ASDSelfShotGunActor::HandleTableCinematicCue);
 		PreviousGameState->OnMultiplayerRoulettePresentation.RemoveDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
@@ -2309,6 +2341,9 @@ void ASDSelfShotGunActor::HandleGameStateSet(AGameStateBase* GameState)
 		ShowDownGameState->OnPhaseChanged.AddUniqueDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleGamePhaseChanged);
+		ShowDownGameState->OnTableCinematicCue.AddUniqueDynamic(
+			this,
+			&ASDSelfShotGunActor::HandleTableCinematicCue);
 		ShowDownGameState->OnMultiplayerRoulettePresentation.AddUniqueDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
@@ -2371,6 +2406,7 @@ void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(EShowDownPlayerSlo
 	bHasForcedShotRotationOffset = false;
 	bCurrentShotTargetsLocalPlayer = ShouldTreatSlotAsLocalPlayer(TargetSlot);
 	CurrentShotTargetSlot = TargetSlot;
+	bMultiplayerRoulettePresentationActive = true;
 	UE_LOG(
 		LogTemp,
 		Log,

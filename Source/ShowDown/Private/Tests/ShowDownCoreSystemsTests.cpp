@@ -2,11 +2,13 @@
 
 #include "Animation/AnimationAsset.h"
 #include "Audio/ShowDownAudioConfig.h"
+#include "Audio/ShowDownAudioSubsystem.h"
 #include "BettingSystem.h"
 #include "CardSystem.h"
 #include "CollectorAISystem.h"
 #include "Misc/AutomationTest.h"
 #include "Presentation/SDCardRevealLayout.h"
+#include "Presentation/SDGunVisionSequenceSubsystem.h"
 #include "Presentation/SDSelfShotGunActor.h"
 #include "Presentation/SDVisionDirector.h"
 #include "RoundResolver.h"
@@ -15,6 +17,7 @@
 #include "ShowDownCharacter.h"
 #include "ShowDownCharacterSkinCatalog.h"
 #include "ShowDownGameModeBase.h"
+#include "ShowDownGameStateBase.h"
 #include "ShowDownTypes.h"
 #include "Sound/SoundWave.h"
 #include "UObject/UnrealType.h"
@@ -981,6 +984,100 @@ bool FShowDownVisionDirectorBlendTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownGunVisionSequenceTimingTest,
+	"ShowDown.Core.GunVisionSequenceTiming",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownGunVisionSequenceTimingTest::RunTest(const FString& Parameters)
+{
+	USDGunVisionSequenceSubsystem* SequenceSubsystem = NewObject<USDGunVisionSequenceSubsystem>();
+	AShowDownGameStateBase* GameState = NewObject<AShowDownGameStateBase>();
+	ASDSelfShotGunActor* GunActor = NewObject<ASDSelfShotGunActor>();
+	TestNotNull(TEXT("Gun vision sequence subsystem can be created"), SequenceSubsystem);
+	TestNotNull(TEXT("Gun vision sequence test game state can be created"), GameState);
+	TestNotNull(TEXT("Gun vision sequence test gun can be created"), GunActor);
+	if (!SequenceSubsystem || !GameState || !GunActor)
+	{
+		return false;
+	}
+
+	GameState->CurrentPhase = EShowDownPhase::Roulette;
+	SequenceSubsystem->BoundGameState = GameState;
+	SequenceSubsystem->DesiredDarknessStrength = 1.0f;
+	SequenceSubsystem->bZeroDarknessSpotlightEnabled = false;
+
+	SequenceSubsystem->HandleTableCinematicCue(
+		ESDTableCinematicCue::TriggerPullStarted,
+		ShowDownTableCinematics::PlayerSlotToMask(EShowDownPlayerSlot::Player1));
+	TestEqual(
+		TEXT("Starting trigger travel does not change darkness"),
+		SequenceSubsystem->DesiredDarknessStrength,
+		1.0f);
+	TestFalse(
+		TEXT("Starting trigger travel does not enable the bright spotlight"),
+		SequenceSubsystem->bZeroDarknessSpotlightEnabled);
+
+	SequenceSubsystem->HandleGunFired(GunActor);
+	TestEqual(
+		TEXT("The real live-fire event changes darkness to zero"),
+		SequenceSubsystem->DesiredDarknessStrength,
+		0.0f);
+	TestTrue(
+		TEXT("The real live-fire event starts the post-shot hold"),
+		SequenceSubsystem->bPostShotBrightHoldActive);
+	TestTrue(
+		TEXT("The real live-fire event enables the bright spotlight"),
+		SequenceSubsystem->bZeroDarknessSpotlightEnabled);
+
+	SequenceSubsystem->HandleGunPresentationFinished(GunActor);
+	TestEqual(
+		TEXT("Darkness stays at zero after the local presentation finishes"),
+		SequenceSubsystem->DesiredDarknessStrength,
+		0.0f);
+	TestTrue(
+		TEXT("The post-shot hold waits for an authoritative progression event"),
+		SequenceSubsystem->bPostShotBrightHoldActive);
+
+	SequenceSubsystem->HandleTableCinematicCue(ESDTableCinematicCue::Reset, 0);
+	TestFalse(
+		TEXT("The replicated reset releases the post-shot hold"),
+		SequenceSubsystem->bPostShotBrightHoldActive);
+	TestEqual(
+		TEXT("The replicated reset restores the next-game darkness target"),
+		SequenceSubsystem->DesiredDarknessStrength,
+		1.0f);
+
+	GameState->CurrentPhase = EShowDownPhase::Betting;
+	GunActor->bMultiplayerRoulettePresentationActive = true;
+	SequenceSubsystem->DesiredDarknessStrength = 1.0f;
+	SequenceSubsystem->HandleGunRaised(GunActor);
+	SequenceSubsystem->HandleGunFired(GunActor);
+	TestEqual(
+		TEXT("A multiplayer presentation does not wait for phase replication to brighten"),
+		SequenceSubsystem->DesiredDarknessStrength,
+		0.0f);
+
+	GunActor->PendingMultiplayerRoulettePresentations.Add(
+		{ EShowDownPlayerSlot::Player3, false });
+	GunActor->HandleTableCinematicCue(ESDTableCinematicCue::Reset, 0);
+	TestFalse(
+		TEXT("A reliable reset invalidates the active multiplayer gun presentation"),
+		GunActor->bMultiplayerRoulettePresentationActive);
+	TestTrue(
+		TEXT("A reliable reset clears delayed client gun presentations immediately"),
+		GunActor->PendingMultiplayerRoulettePresentations.IsEmpty());
+
+	GunActor->bMultiplayerRoulettePresentationActive = true;
+	GunActor->PendingMultiplayerRoulettePresentations.Add(
+		{ EShowDownPlayerSlot::Player3, false });
+	GunActor->HandleGamePhaseChanged(EShowDownPhase::RoundEnd);
+	TestTrue(
+		TEXT("Leaving roulette clears delayed client gun presentations"),
+		GunActor->PendingMultiplayerRoulettePresentations.IsEmpty());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FShowDownAudioConfigTest,
 	"ShowDown.Core.AudioConfig",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -1037,6 +1134,21 @@ bool FShowDownAudioConfigTest::RunTest(const FString& Parameters)
 	TestTrue(
 		TEXT("Background music has an audible configured volume"),
 		AudioConfig->BackgroundMusicVolume > 0.0f);
+
+	TestEqual(
+		TEXT("Full user music volume resolves to the authored BGM target"),
+		UShowDownAudioSubsystem::CalculateMusicTargetVolume(
+			AudioConfig->BackgroundMusicVolume,
+			1.0f,
+			1.0f),
+		AudioConfig->BackgroundMusicVolume);
+	TestEqual(
+		TEXT("Muted user music resolves to a zero restart target"),
+		UShowDownAudioSubsystem::CalculateMusicTargetVolume(
+			AudioConfig->BackgroundMusicVolume,
+			0.0f,
+			1.0f),
+		0.0f);
 	TestTrue(
 		TEXT("The idle crowd bed has an audible configured volume"),
 		AudioConfig->CrowdIdleVolume > 0.0f);

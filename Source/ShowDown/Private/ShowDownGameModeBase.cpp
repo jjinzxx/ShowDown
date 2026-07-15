@@ -8720,16 +8720,20 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 
 	auto BroadcastResult = [this, WeakTargetPlayer, TargetSlot, TargetName, ClampedBulletCount, bHit, LiveRoundsAfterShot, ChambersAfterShot]()
 	{
-		ASDPlayerState* ResolvedTargetPlayer = WeakTargetPlayer.Get();
-		if (!ResolvedTargetPlayer || !MultiplayerPlayers.Contains(ResolvedTargetPlayer))
-		{
-			return;
-		}
+		// The gun callback is the authoritative shot frame even if the target
+		// disconnects in the same network window. Keep the progression gate tied
+		// to that frame before checking whether player state still exists.
 		if (GetWorld())
 		{
 			MultiplayerRoundProgressBlockedUntilSeconds = FMath::Max(
 				MultiplayerRoundProgressBlockedUntilSeconds,
 				GetWorld()->GetTimeSeconds() + FMath::Max(0.0f, RoundCinematicPostShotProgressHoldSeconds));
+		}
+
+		ASDPlayerState* ResolvedTargetPlayer = WeakTargetPlayer.Get();
+		if (!ResolvedTargetPlayer || !MultiplayerPlayers.Contains(ResolvedTargetPlayer))
+		{
+			return;
 		}
 
 		const int32 PreviousLives = ResolvedTargetPlayer->Lives;
