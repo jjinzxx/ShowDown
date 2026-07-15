@@ -75,8 +75,6 @@ void UShowDownSettingsWidget::NativeConstruct()
 		PendingWindowMode = Settings->GetFullscreenMode();
 		bPendingVSync = Settings->IsVSyncEnabled();
 		PendingResolution = Settings->GetScreenResolution();
-		PendingPostProcess = Settings->ScalabilityQuality.PostProcessQuality;
-		PendingEffects = Settings->ScalabilityQuality.EffectsQuality;
 	}
 	GConfig->GetString(UserSettingsSection, TEXT("CharacterName"), PendingCharacterName, GGameUserSettingsIni);
 	GConfig->GetFloat(UserSettingsSection, TEXT("MouseSensitivity"), PendingMouseSensitivity, GGameUserSettingsIni);
@@ -103,8 +101,6 @@ void UShowDownSettingsWidget::NativeConstruct()
 	if (Button_WindowMode) Button_WindowMode->OnClicked.AddUniqueDynamic(this, &UShowDownSettingsWidget::HandleWindowModeClicked);
 	if (Button_VSync) Button_VSync->OnClicked.AddUniqueDynamic(this, &UShowDownSettingsWidget::HandleVSyncClicked);
 	if (Button_Resolution) Button_Resolution->OnClicked.AddUniqueDynamic(this, &UShowDownSettingsWidget::HandleResolutionClicked);
-	if (Button_PostProcess) Button_PostProcess->OnClicked.AddUniqueDynamic(this, &UShowDownSettingsWidget::HandlePostProcessClicked);
-	if (Button_Effects) Button_Effects->OnClicked.AddUniqueDynamic(this, &UShowDownSettingsWidget::HandleEffectsClicked);
 	if (Slider_MouseSensitivity) Slider_MouseSensitivity->OnValueChanged.AddUniqueDynamic(this, &UShowDownSettingsWidget::HandleMouseSensitivityChanged);
 	if (Slider_Brightness) Slider_Brightness->OnValueChanged.AddUniqueDynamic(this, &UShowDownSettingsWidget::HandleBrightnessChanged);
 	if (Slider_MasterVolume) Slider_MasterVolume->OnValueChanged.AddUniqueDynamic(this, &UShowDownSettingsWidget::HandleMasterVolumeChanged);
@@ -144,8 +140,6 @@ void UShowDownSettingsWidget::NativeDestruct()
 	if (Button_WindowMode) Button_WindowMode->OnClicked.RemoveDynamic(this, &UShowDownSettingsWidget::HandleWindowModeClicked);
 	if (Button_VSync) Button_VSync->OnClicked.RemoveDynamic(this, &UShowDownSettingsWidget::HandleVSyncClicked);
 	if (Button_Resolution) Button_Resolution->OnClicked.RemoveDynamic(this, &UShowDownSettingsWidget::HandleResolutionClicked);
-	if (Button_PostProcess) Button_PostProcess->OnClicked.RemoveDynamic(this, &UShowDownSettingsWidget::HandlePostProcessClicked);
-	if (Button_Effects) Button_Effects->OnClicked.RemoveDynamic(this, &UShowDownSettingsWidget::HandleEffectsClicked);
 	if (Slider_MouseSensitivity) Slider_MouseSensitivity->OnValueChanged.RemoveDynamic(this, &UShowDownSettingsWidget::HandleMouseSensitivityChanged);
 	if (Slider_Brightness) Slider_Brightness->OnValueChanged.RemoveDynamic(this, &UShowDownSettingsWidget::HandleBrightnessChanged);
 	if (Slider_MasterVolume) Slider_MasterVolume->OnValueChanged.RemoveDynamic(this, &UShowDownSettingsWidget::HandleMasterVolumeChanged);
@@ -222,7 +216,7 @@ UButton* UShowDownSettingsWidget::CreateButton(const FString& Label, UTextBlock*
 
 void UShowDownSettingsWidget::RefreshLabels()
 {
-	static const TCHAR* OverallQualityNames[] = { TEXT("낮음"), TEXT("중간"), TEXT("높음"), TEXT("최상") };
+	static const TCHAR* OverallQualityNames[] = { TEXT("하"), TEXT("중"), TEXT("상"), TEXT("최상") };
 	const FText QualityLabel = FText::FromString(OverallQualityNames[FMath::Clamp(PendingQuality, 0, 3)]);
 	const TCHAR* Mode = PendingWindowMode == EWindowMode::Fullscreen
 		? TEXT("전체 화면")
@@ -231,18 +225,13 @@ void UShowDownSettingsWidget::RefreshLabels()
 			: TEXT("테두리 없는 창");
 	const FText WindowModeLabel = FText::FromString(Mode);
 	const FText VSyncLabel = FText::FromString(bPendingVSync ? TEXT("켜짐") : TEXT("꺼짐"));
-	static const TCHAR* QualityNames[] = { TEXT("하"), TEXT("중"), TEXT("상"), TEXT("최상") };
 	const FText ResolutionLabel = FText::FromString(FString::Printf(TEXT("%dx%d @60Hz"), PendingResolution.X, PendingResolution.Y));
 	const FText BrightnessLabel = FText::FromString(FString::Printf(TEXT("%.1f"), PendingBrightness));
-	const FText PostProcessLabel = FText::FromString(QualityNames[FMath::Clamp(PendingPostProcess,0,3)]);
-	const FText EffectsLabel = FText::FromString(QualityNames[FMath::Clamp(PendingEffects,0,3)]);
 	if (Text_Quality) Text_Quality->SetText(QualityLabel);
 	if (Text_WindowMode) Text_WindowMode->SetText(WindowModeLabel);
 	if (Text_VSync) Text_VSync->SetText(VSyncLabel);
 	if (Text_Resolution) Text_Resolution->SetText(ResolutionLabel);
 	if (Text_Brightness) Text_Brightness->SetText(BrightnessLabel);
-	if (Text_PostProcess) Text_PostProcess->SetText(PostProcessLabel);
-	if (Text_Effects) Text_Effects->SetText(EffectsLabel);
 	if (Text_MouseSensitivity) Text_MouseSensitivity->SetText(FText::FromString(FString::Printf(TEXT("%.1f"), PendingMouseSensitivity)));
 	if (Text_MasterVolume) Text_MasterVolume->SetText(FText::AsNumber(FMath::RoundToInt(PendingMasterVolume*100.0f)));
 	if (Text_MusicVolume) Text_MusicVolume->SetText(FText::AsNumber(FMath::RoundToInt(PendingMusicVolume*100.0f)));
@@ -253,8 +242,6 @@ void UShowDownSettingsWidget::RefreshLabels()
 	if (Button_VSync) if (UTextBlock* Label = Cast<UTextBlock>(Button_VSync->GetContent())) Label->SetText(VSyncLabel);
 	if (UTextBlock* Label=ButtonLabel(Button_Resolution)) Label->SetText(ResolutionLabel);
 	if (UTextBlock* Label=ButtonLabel(Button_Brightness)) Label->SetText(BrightnessLabel);
-	if (UTextBlock* Label=ButtonLabel(Button_PostProcess)) Label->SetText(PostProcessLabel);
-	if (UTextBlock* Label=ButtonLabel(Button_Effects)) Label->SetText(EffectsLabel);
 }
 
 void UShowDownSettingsWidget::RefreshNicknameEditor()
@@ -313,8 +300,6 @@ void UShowDownSettingsWidget::HandleBrightnessChanged(float Value)
 	PendingBrightness = BrightnessFromSlider(Value);
 	RefreshLabels();
 }
-void UShowDownSettingsWidget::HandlePostProcessClicked() { PendingPostProcess=(PendingPostProcess+1)%4; RefreshLabels(); }
-void UShowDownSettingsWidget::HandleEffectsClicked() { PendingEffects=(PendingEffects+1)%4; RefreshLabels(); }
 void UShowDownSettingsWidget::HandleMouseSensitivityChanged(float Value) { PendingMouseSensitivity=SensitivityFromSlider(Value); RefreshLabels(); }
 void UShowDownSettingsWidget::HandleMasterVolumeChanged(float Value) { PendingMasterVolume=Value; RefreshLabels(); if(UWorld* World=GetWorld()){FAudioDeviceHandle Device=World->GetAudioDevice(); if(Device.IsValid()) Device->SetTransientPrimaryVolume(Value);} }
 void UShowDownSettingsWidget::HandleMusicVolumeChanged(float Value) { PendingMusicVolume=Value; RefreshLabels(); if(UShowDownAudioSubsystem* AudioSubsystem=AudioSubsystemFor(this)) AudioSubsystem->SetUserMusicVolume(Value); }
@@ -328,8 +313,6 @@ void UShowDownSettingsWidget::HandleApplyClicked()
 		Settings->SetFullscreenMode(PendingWindowMode);
 		Settings->SetVSyncEnabled(bPendingVSync);
 		Settings->SetScreenResolution(PendingResolution);
-		Settings->ScalabilityQuality.SetPostProcessQuality(PendingPostProcess);
-		Settings->ScalabilityQuality.SetEffectsQuality(PendingEffects);
 		Settings->ApplySettings(false);
 		Settings->SaveSettings();
 		PendingCharacterName = EditableTextBox_CharacterName ? EditableTextBox_CharacterName->GetText().ToString().TrimStartAndEnd() : PendingCharacterName;

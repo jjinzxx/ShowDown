@@ -208,6 +208,90 @@ void Save(UWidgetBlueprint* BP)
 	UPackage::SavePackage(BP->GetOutermost(), BP, *FPackageName::LongPackageNameToFilename(BP->GetOutermost()->GetName(), FPackageName::GetAssetPackageExtension()), FSavePackageArgs());
 }
 
+void SaveExisting(UWidgetBlueprint* BP)
+{
+	FKismetEditorUtilities::CompileBlueprint(BP);
+	BP->MarkPackageDirty();
+	UPackage::SavePackage(
+		BP->GetOutermost(),
+		BP,
+		*FPackageName::LongPackageNameToFilename(BP->GetOutermost()->GetName(), FPackageName::GetAssetPackageExtension()),
+		FSavePackageArgs());
+}
+
+void PatchSettings(UWidgetBlueprint* BP)
+{
+	BP->Modify();
+	UWidgetTree* T = BP->WidgetTree;
+	if (!T)
+	{
+		return;
+	}
+
+	UButton* ApplyButton = Cast<UButton>(T->FindWidget(TEXT("Button_Apply")));
+	UButton* QualityButton = Cast<UButton>(T->FindWidget(TEXT("Button_Quality")));
+	UButton* PostProcessButton = Cast<UButton>(T->FindWidget(TEXT("Button_PostProcess")));
+	UButton* EffectsButton = Cast<UButton>(T->FindWidget(TEXT("Button_Effects")));
+	UTextBlock* QualityTitle = Cast<UTextBlock>(T->FindWidget(TEXT("Button_PostProcess_LabelTitle")));
+	UWidget* EffectsTitle = T->FindWidget(TEXT("Button_Effects_LabelTitle"));
+	UCanvasPanel* GraphicsPanel = Cast<UCanvasPanel>(T->FindWidget(TEXT("Panel_Graphics")));
+
+	FVector2D QualityPosition(70.0f, 513.0f);
+	FVector2D QualitySize(420.0f, 46.0f);
+	if (UCanvasPanelSlot* PostProcessSlot = PostProcessButton ? Cast<UCanvasPanelSlot>(PostProcessButton->Slot) : nullptr)
+	{
+		QualityPosition = PostProcessSlot->GetPosition();
+		QualitySize = PostProcessSlot->GetSize();
+	}
+
+	if (PostProcessButton)
+	{
+		PostProcessButton->SetVisibility(ESlateVisibility::Collapsed);
+	}
+	if (EffectsButton)
+	{
+		EffectsButton->SetVisibility(ESlateVisibility::Collapsed);
+	}
+	if (EffectsTitle)
+	{
+		EffectsTitle->SetVisibility(ESlateVisibility::Collapsed);
+	}
+
+	if (QualityTitle)
+	{
+		QualityTitle->SetText(FText::FromString(TEXT("그래픽 품질")));
+	}
+	if (QualityButton && GraphicsPanel)
+	{
+		QualityButton->RemoveFromParent();
+		QualityButton->SetVisibility(ESlateVisibility::Visible);
+		if (ApplyButton)
+		{
+			QualityButton->SetStyle(ApplyButton->GetStyle());
+		}
+		if (UTextBlock* Label = Cast<UTextBlock>(QualityButton->GetContent()))
+		{
+			Label->SetText(FText::FromString(TEXT("최상")));
+		}
+		UCanvasPanelSlot* QualitySlot = GraphicsPanel->AddChildToCanvas(QualityButton);
+		QualitySlot->SetPosition(QualityPosition);
+		QualitySlot->SetSize(QualitySize);
+	}
+
+	if (ApplyButton)
+	{
+		for (const TCHAR* ButtonName : {TEXT("Button_WindowMode"), TEXT("Button_Resolution"), TEXT("Button_Quality"), TEXT("Button_ChangeNickname")})
+		{
+			if (UButton* InteractiveButton = Cast<UButton>(T->FindWidget(ButtonName)))
+			{
+				InteractiveButton->SetStyle(ApplyButton->GetStyle());
+			}
+		}
+	}
+
+	SaveExisting(BP);
+}
+
 void BuildLogin(UWidgetBlueprint* BP)
 {
 	Reset(BP); UWidgetTree* T=BP->WidgetTree; UCanvasPanel* R=T->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(),TEXT("RootCanvas")); T->RootWidget=R;
@@ -437,7 +521,7 @@ void BuildSettings(UWidgetBlueprint* BP)
 	};
 	auto AddValueButton = [&](UCanvasPanel* Parent, const TCHAR* Name, const TCHAR* Value, float Y)
 	{
-		UButton* ValueButton = BarButton(T, Name, Value, FLinearColor(0.08f, 0.08f, 0.08f, 0.94f));
+		UButton* ValueButton = BarButton(T, Name, Value);
 		AddCanvas(Parent, ValueButton, 70.0f, Y, 420.0f, 46.0f);
 		return ValueButton;
 	};
@@ -484,10 +568,8 @@ void BuildSettings(UWidgetBlueprint* BP)
 	Brightness->SetSliderHandleColor(FLinearColor::White);
 	AddCanvas(Graphics, Brightness, 70.0f, 413.0f, 360.0f, 30.0f);
 	AddCanvas(Graphics, Text(T, TEXT("Text_Brightness"), TEXT("1.0"), 16, ETextJustify::Right), 445.0f, 410.0f, 70.0f, 34.0f);
-	AddCanvas(Graphics, Text(T, TEXT("Button_PostProcess_LabelTitle"), TEXT("포스트 이펙트"), 18), 70.0f, 475.0f, 420.0f, 34.0f);
-	AddValueButton(Graphics, TEXT("Button_PostProcess"), TEXT("하"), 513.0f);
-	AddCanvas(Graphics, Text(T, TEXT("Button_Effects_LabelTitle"), TEXT("특수효과 품질"), 18), 70.0f, 580.0f, 420.0f, 34.0f);
-	AddValueButton(Graphics, TEXT("Button_Effects"), TEXT("상"), 618.0f);
+	AddCanvas(Graphics, Text(T, TEXT("Button_Quality_LabelTitle"), TEXT("그래픽 품질"), 18), 70.0f, 475.0f, 420.0f, 34.0f);
+	AddValueButton(Graphics, TEXT("Button_Quality"), TEXT("최상"), 513.0f);
 
 	UCanvasPanel* Sound = T->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("Panel_Sound"));
 	AddCanvas(R, Sound, 650.0f, 100.0f, 1185.0f, 880.0f);
@@ -512,10 +594,9 @@ void BuildSettings(UWidgetBlueprint* BP)
 	AddCanvas(Sound, MicOutput, 525.0f, 664.0f, 360.0f, 30.0f);
 	AddCanvas(Sound, Text(T, TEXT("Text_MicOutputVolume"), TEXT("100"), 16, ETextJustify::Right), 900.0f, 661.0f, 70.0f, 34.0f);
 
-	UButton* LegacyQuality = Button(T, TEXT("Button_Quality"), TEXT("")); LegacyQuality->SetVisibility(ESlateVisibility::Collapsed); AddCanvas(R, LegacyQuality, 0.0f, 0.0f, 1.0f, 1.0f);
 	UButton* LegacyVSync = Button(T, TEXT("Button_VSync"), TEXT("")); LegacyVSync->SetVisibility(ESlateVisibility::Collapsed); AddCanvas(R, LegacyVSync, 0.0f, 0.0f, 1.0f, 1.0f);
 	UButton* LegacyBrightness = Button(T, TEXT("Button_Brightness"), TEXT("")); LegacyBrightness->SetVisibility(ESlateVisibility::Collapsed); AddCanvas(R, LegacyBrightness, 0.0f, 0.0f, 1.0f, 1.0f);
-	for (const TCHAR* StateName : {TEXT("Text_Quality"), TEXT("Text_WindowMode"), TEXT("Text_VSync"), TEXT("Text_Resolution"), TEXT("Text_PostProcess"), TEXT("Text_Effects")})
+	for (const TCHAR* StateName : {TEXT("Text_Quality"), TEXT("Text_WindowMode"), TEXT("Text_VSync"), TEXT("Text_Resolution")})
 	{
 		UTextBlock* State = Text(T, StateName, TEXT(""), 1);
 		State->SetVisibility(ESlateVisibility::Collapsed);
@@ -568,6 +649,12 @@ void BuildMultiResult(UWidgetBlueprint* BP)
 
 int32 UShowDownUiBuildCommandlet::Main(const FString& Params)
 {
+	if (Params.Contains(TEXT("SettingsOnly"), ESearchCase::IgnoreCase))
+	{
+		PatchSettings(GetOrCreate(TEXT("/Game/UI/WBP_Settings.WBP_Settings"), UShowDownSettingsWidget::StaticClass()));
+		return 0;
+	}
+
 	if (Params.Contains(TEXT("MainMenuOnly"), ESearchCase::IgnoreCase))
 	{
 		BuildMain(GetOrCreate(TEXT("/Game/UI/WBP_MainMenu.WBP_MainMenu"),UShowDownMainMenuWidget::StaticClass()));
@@ -582,7 +669,7 @@ int32 UShowDownUiBuildCommandlet::Main(const FString& Params)
 	BuildMain(GetOrCreate(TEXT("/Game/UI/WBP_MainMenu.WBP_MainMenu"),UShowDownMainMenuWidget::StaticClass()));
 	BuildMultiplayer(GetOrCreate(TEXT("/Game/UI/WBP_Multiplayer.WBP_Multiplayer"),UShowDownMultiplayerWidget::StaticClass()));
 	BuildLobby(GetOrCreate(TEXT("/Game/UI/WBP_Lobby.WBP_Lobby"),UShowDownLobbyWidget::StaticClass()));
-	BuildSettings(GetOrCreate(TEXT("/Game/UI/WBP_Settings.WBP_Settings"),UShowDownSettingsWidget::StaticClass()));
+	PatchSettings(GetOrCreate(TEXT("/Game/UI/WBP_Settings.WBP_Settings"), UShowDownSettingsWidget::StaticClass()));
 	if (!bRequestedScreensOnly)
 	{
 		BuildRank(GetOrCreate(TEXT("/Game/UI/WBP_Rank.WBP_Rank"),UShowDownRankWidget::StaticClass()));

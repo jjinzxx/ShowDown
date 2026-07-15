@@ -36,8 +36,6 @@ private:
 	UPROPERTY(meta=(BindWidget)) UTextBlock* Text_Status = nullptr;
 	UPROPERTY(meta=(BindWidget)) UTextBlock* Text_Resolution = nullptr;
 	UPROPERTY(meta=(BindWidget)) UTextBlock* Text_Brightness = nullptr;
-	UPROPERTY(meta=(BindWidget)) UTextBlock* Text_PostProcess = nullptr;
-	UPROPERTY(meta=(BindWidget)) UTextBlock* Text_Effects = nullptr;
 	UPROPERTY(meta=(BindWidget)) UTextBlock* Text_MouseSensitivity = nullptr;
 	UPROPERTY(meta=(BindWidget)) UTextBlock* Text_MasterVolume = nullptr;
 	UPROPERTY(meta=(BindWidget)) UTextBlock* Text_MusicVolume = nullptr;
@@ -48,8 +46,6 @@ private:
 	UPROPERTY(meta=(BindWidget)) UButton* Button_VSync = nullptr;
 	UPROPERTY(meta=(BindWidget)) UButton* Button_Resolution = nullptr;
 	UPROPERTY(meta=(BindWidget)) UButton* Button_Brightness = nullptr;
-	UPROPERTY(meta=(BindWidget)) UButton* Button_PostProcess = nullptr;
-	UPROPERTY(meta=(BindWidget)) UButton* Button_Effects = nullptr;
 	UPROPERTY(meta=(BindWidget)) UButton* Button_Apply = nullptr;
 	UPROPERTY(meta=(BindWidget)) UButton* Button_Back = nullptr;
 	UPROPERTY(meta=(BindWidget)) UButton* Button_Quit = nullptr;
@@ -75,8 +71,6 @@ private:
 	bool bPendingVSync = true;
 	FIntPoint PendingResolution = FIntPoint(1920, 1080);
 	float PendingBrightness = 1.0f;
-	int32 PendingPostProcess = 0;
-	int32 PendingEffects = 2;
 	float PendingMouseSensitivity = 1.0f;
 	float PendingMasterVolume = 1.0f;
 	float PendingMusicVolume = 1.0f;
@@ -97,8 +91,6 @@ private:
 	UFUNCTION() void HandleVSyncClicked();
 	UFUNCTION() void HandleResolutionClicked();
 	UFUNCTION() void HandleBrightnessChanged(float Value);
-	UFUNCTION() void HandlePostProcessClicked();
-	UFUNCTION() void HandleEffectsClicked();
 	UFUNCTION() void HandleMouseSensitivityChanged(float Value);
 	UFUNCTION() void HandleMasterVolumeChanged(float Value);
 	UFUNCTION() void HandleMusicVolumeChanged(float Value);
