@@ -11,6 +11,11 @@
 *.fbx  filter=lfs diff=lfs merge=lfs -text
 
 #
+Binaries/ThirdParty/Whisper/** filter=lfs diff=lfs merge=lfs -text
+Content/LocalModels/Whisper/** filter=lfs diff=lfs merge=lfs -text
+Binaries/ThirdParty/eSpeakNG/** filter=lfs diff=lfs merge=lfs -text
+
+#
 *.cpp text
 *.h   text
 *.cs  text linguist-vendored

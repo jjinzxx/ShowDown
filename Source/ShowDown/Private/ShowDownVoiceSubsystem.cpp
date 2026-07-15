@@ -5,12 +5,14 @@
 #include "Dom/JsonValue.h"
 #include "Engine/World.h"
 #include "HAL/FileManager.h"
+#include "HAL/PlatformProcess.h"
 #include "HttpModule.h"
 #include "Interfaces/IHttpResponse.h"
 #include "JsonObjectConverter.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/FileHelper.h"
+#include "Misc/Guid.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
 #include "Serialization/JsonReader.h"
@@ -179,11 +181,82 @@ namespace
 		AppendUtf8(Body, Value);
 		AppendUtf8(Body, TEXT("\r\n"));
 	}
+
+	FString ResolveLocalVoicePath(const FString& Path)
+	{
+		const FString TrimmedPath = Path.TrimStartAndEnd();
+		if (TrimmedPath.IsEmpty() || !FPaths::IsRelative(TrimmedPath))
+		{
+			return TrimmedPath;
+		}
+
+		return FPaths::ConvertRelativePathToFull(FPaths::ProjectDir(), TrimmedPath);
+	}
+
+	FString ExtractWhisperCliText(const FString& Output)
+	{
+		TArray<FString> Lines;
+		Output.ParseIntoArrayLines(Lines);
+
+		FString Result;
+		for (const FString& Line : Lines)
+		{
+			FString Left;
+			FString Right;
+			if (!Line.Split(TEXT("]"), &Left, &Right))
+			{
+				continue;
+			}
+
+			if (!Left.Contains(TEXT("-->")))
+			{
+				continue;
+			}
+
+			const FString Text = Right.TrimStartAndEnd();
+			if (Text.IsEmpty())
+			{
+				continue;
+			}
+
+			if (!Result.IsEmpty())
+			{
+				Result += TEXT(" ");
+			}
+			Result += Text;
+		}
+
+		return Result.TrimStartAndEnd();
+	}
 }
 
 bool UShowDownVoiceSubsystem::IsConfigured() const
 {
-	return bEnableOpenAIVoice && !ResolveApiKey().IsEmpty();
+	return CanUseTranscriptionBackend() || CanUseSpeechBackend();
+}
+
+bool UShowDownVoiceSubsystem::CanUseTranscriptionBackend() const
+{
+	switch (TranscriptionBackend)
+	{
+	case EShowDownTranscriptionBackend::LocalWhisper:
+		return true;
+	case EShowDownTranscriptionBackend::OpenAI:
+	default:
+		return bEnableOpenAIVoice && !ResolveApiKey().IsEmpty();
+	}
+}
+
+bool UShowDownVoiceSubsystem::CanUseSpeechBackend() const
+{
+	switch (SpeechBackend)
+	{
+	case EShowDownSpeechBackend::LocalESpeakNG:
+		return true;
+	case EShowDownSpeechBackend::OpenAI:
+	default:
+		return bEnableOpenAIVoice && !ResolveApiKey().IsEmpty();
+	}
 }
 
 int32 UShowDownVoiceSubsystem::GetCapturedSampleCount() const
@@ -203,9 +276,11 @@ float UShowDownVoiceSubsystem::GetCurrentRecordingSeconds() const
 FString UShowDownVoiceSubsystem::GetVoiceDebugSummary() const
 {
 	return FString::Printf(
-		TEXT("Voice enabled=%s configured=%s mode=%d recording=%s stt=%s tts=%s pending_tts=%s recorded=%.2fs samples=%d STT=%s TTS=%s voice=%s speed=%.2f pitch=%.2f last_text=\"%s\" last_error=\"%s\" last_recording_bytes=%d last_tts_bytes=%d"),
+		TEXT("Voice enabled=%s configured=%s transcription_backend=%d speech_backend=%d mode=%d recording=%s stt=%s tts=%s pending_tts=%s recorded=%.2fs samples=%d STT=%s TTS=%s voice=%s speed=%.2f pitch=%.2f last_text=\"%s\" last_error=\"%s\" last_recording_bytes=%d last_tts_bytes=%d"),
 		bEnableOpenAIVoice ? TEXT("true") : TEXT("false"),
 		IsConfigured() ? TEXT("true") : TEXT("false"),
+		static_cast<int32>(TranscriptionBackend),
+		static_cast<int32>(SpeechBackend),
 		static_cast<int32>(VoiceInputMode),
 		IsRecording() ? TEXT("true") : TEXT("false"),
 		IsTranscriptionInFlight() ? TEXT("true") : TEXT("false"),
@@ -268,10 +343,10 @@ bool UShowDownVoiceSubsystem::BeginPushToTalk(FShowDownVoiceTextCallback Callbac
 		return false;
 	}
 
-	if (!IsConfigured())
+	if (!CanUseTranscriptionBackend())
 	{
-		LastVoiceError = TEXT("OpenAI voice API key is missing.");
-		BroadcastVoiceStatus(false, TEXT("음성 API 키 없음."));
+		LastVoiceError = TEXT("Voice transcription backend is not configured.");
+		BroadcastVoiceStatus(false, TEXT("음성 인식 설정 없음."));
 		return false;
 	}
 
@@ -377,9 +452,9 @@ bool UShowDownVoiceSubsystem::SaveLastRecordingWav(FString& OutFilePath)
 
 bool UShowDownVoiceSubsystem::TranscribeWavFileForDebug(const FString& FilePath, FShowDownVoiceTextCallback Callback)
 {
-	if (!IsConfigured())
+	if (!CanUseTranscriptionBackend())
 	{
-		LastVoiceError = TEXT("OpenAI voice API key is missing.");
+		LastVoiceError = TEXT("Voice transcription backend is not configured.");
 		return false;
 	}
 
@@ -443,7 +518,7 @@ void UShowDownVoiceSubsystem::CancelPushToTalk()
 void UShowDownVoiceSubsystem::SpeakCollectorLine(const FString& Text)
 {
 	const FString TrimmedText = Text.TrimStartAndEnd();
-	if (TrimmedText.IsEmpty() || !IsConfigured())
+	if (TrimmedText.IsEmpty() || !CanUseSpeechBackend())
 	{
 		return;
 	}
@@ -776,6 +851,21 @@ void UShowDownVoiceSubsystem::HandleCapturedAudio(const void* AudioData, int32 N
 
 void UShowDownVoiceSubsystem::RequestTranscription(TArray<uint8>&& WavData)
 {
+	if (TranscriptionBackend == EShowDownTranscriptionBackend::LocalWhisper)
+	{
+		RequestLocalTranscription(MoveTemp(WavData));
+		return;
+	}
+
+	if (!CanUseTranscriptionBackend())
+	{
+		LastVoiceError = TEXT("OpenAI voice API key is missing.");
+		BroadcastVoiceStatus(false, TEXT("음성 API 키 없음."));
+		PendingTranscriptionCallback.ExecuteIfBound(false, FString());
+		PendingTranscriptionCallback.Unbind();
+		return;
+	}
+
 	bTranscriptionInFlight = true;
 
 	const FString Boundary = FString::Printf(TEXT("----ShowDownVoiceBoundary%d"), FMath::Rand());
@@ -854,8 +944,109 @@ void UShowDownVoiceSubsystem::RequestTranscription(TArray<uint8>&& WavData)
 	}
 }
 
+void UShowDownVoiceSubsystem::RequestLocalTranscription(TArray<uint8>&& WavData)
+{
+	const FString ResolvedExecutablePath = ResolveLocalVoicePath(LocalSTTExecutablePath);
+	const FString ResolvedModelPath = ResolveLocalVoicePath(LocalSTTModelPath);
+	if (ResolvedExecutablePath.IsEmpty() || !FPaths::FileExists(ResolvedExecutablePath))
+	{
+		LastVoiceError = FString::Printf(TEXT("Local STT executable is missing: %s"), *ResolvedExecutablePath);
+		UE_LOG(LogTemp, Warning, TEXT("%s"), *LastVoiceError);
+		BroadcastVoiceStatus(false, TEXT("로컬 STT 실행 파일 없음."));
+		PendingTranscriptionCallback.ExecuteIfBound(false, FString());
+		PendingTranscriptionCallback.Unbind();
+		return;
+	}
+
+	if (ResolvedModelPath.IsEmpty() || !FPaths::FileExists(ResolvedModelPath))
+	{
+		LastVoiceError = FString::Printf(TEXT("Local STT model is missing: %s"), *ResolvedModelPath);
+		UE_LOG(LogTemp, Warning, TEXT("%s"), *LastVoiceError);
+		BroadcastVoiceStatus(false, TEXT("로컬 STT 모델 없음."));
+		PendingTranscriptionCallback.ExecuteIfBound(false, FString());
+		PendingTranscriptionCallback.Unbind();
+		return;
+	}
+
+	const FString STTDirectory = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("LocalVoice"), TEXT("STT"));
+	if (!IFileManager::Get().MakeDirectory(*STTDirectory, true))
+	{
+		LastVoiceError = FString::Printf(TEXT("Failed to create local STT directory: %s"), *STTDirectory);
+		UE_LOG(LogTemp, Warning, TEXT("%s"), *LastVoiceError);
+		BroadcastVoiceStatus(false, TEXT("로컬 STT 폴더 생성 실패."));
+		PendingTranscriptionCallback.ExecuteIfBound(false, FString());
+		PendingTranscriptionCallback.Unbind();
+		return;
+	}
+
+	const FString WavFilePath = FPaths::Combine(STTDirectory, FString::Printf(TEXT("showdown_stt_%s.wav"), *FGuid::NewGuid().ToString(EGuidFormats::Digits)));
+	if (!FFileHelper::SaveArrayToFile(WavData, *WavFilePath))
+	{
+		LastVoiceError = FString::Printf(TEXT("Failed to save local STT WAV: %s"), *WavFilePath);
+		UE_LOG(LogTemp, Warning, TEXT("%s"), *LastVoiceError);
+		BroadcastVoiceStatus(false, TEXT("로컬 STT 녹음 저장 실패."));
+		PendingTranscriptionCallback.ExecuteIfBound(false, FString());
+		PendingTranscriptionCallback.Unbind();
+		return;
+	}
+
+	bTranscriptionInFlight = true;
+	BroadcastVoiceStatus(true, TEXT("로컬 음성 인식 중..."));
+
+	const FString LanguageArg = TranscriptionLanguage.TrimStartAndEnd().IsEmpty()
+		? FString()
+		: FString::Printf(TEXT(" -l \"%s\""), *TranscriptionLanguage.TrimStartAndEnd());
+	const FString Args = FString::Printf(TEXT("-m \"%s\" -f \"%s\"%s"), *ResolvedModelPath, *WavFilePath, *LanguageArg);
+
+	int32 ReturnCode = -1;
+	FString StdOut;
+	FString StdErr;
+	const bool bExecuted = FPlatformProcess::ExecProcess(*ResolvedExecutablePath, *Args, &ReturnCode, &StdOut, &StdErr);
+	bTranscriptionInFlight = false;
+
+	const FString CombinedOutput = StdOut + TEXT("\n") + StdErr;
+	const FString TranscribedText = ExtractWhisperCliText(CombinedOutput);
+	const bool bSuccess = bExecuted && ReturnCode == 0 && !TranscribedText.IsEmpty();
+	if (!bSuccess)
+	{
+		LastVoiceError = FString::Printf(
+			TEXT("Local STT failed. executed=%s code=%d output=%s"),
+			bExecuted ? TEXT("true") : TEXT("false"),
+			ReturnCode,
+			*CombinedOutput.Left(256));
+		UE_LOG(LogTemp, Warning, TEXT("%s"), *LastVoiceError);
+		BroadcastVoiceStatus(false, TEXT("로컬 STT 실패."));
+		PendingTranscriptionCallback.ExecuteIfBound(false, FString());
+		PendingTranscriptionCallback.Unbind();
+		return;
+	}
+
+	LastTranscribedText = TranscribedText;
+	LastVoiceError.Empty();
+	UE_LOG(LogTemp, Log, TEXT("Local voice transcription: %s"), *TranscribedText);
+	PendingTranscriptionCallback.ExecuteIfBound(true, TranscribedText);
+	PendingTranscriptionCallback.Unbind();
+}
+
 void UShowDownVoiceSubsystem::RequestSpeech(const FString& Text)
 {
+	if (!CanUseSpeechBackend())
+	{
+		LastVoiceError = SpeechBackend == EShowDownSpeechBackend::OpenAI
+			? TEXT("OpenAI voice API key is missing.")
+			: TEXT("Local TTS is not configured.");
+		bSpeechInFlight = false;
+		PendingSpeechText.Empty();
+		bHasPendingSpeech = false;
+		return;
+	}
+
+	if (SpeechBackend == EShowDownSpeechBackend::LocalESpeakNG)
+	{
+		RequestLocalSpeech(Text);
+		return;
+	}
+
 	bSpeechInFlight = true;
 	UE_LOG(LogTemp, Log, TEXT("Requesting collector TTS: %s"), *Text);
 
@@ -936,6 +1127,99 @@ void UShowDownVoiceSubsystem::RequestSpeech(const FString& Text)
 		LastVoiceError = TEXT("Could not start TTS request.");
 		RequestPendingSpeech();
 	}
+}
+
+void UShowDownVoiceSubsystem::RequestLocalSpeech(const FString& Text)
+{
+	const FString ResolvedExecutablePath = ResolveLocalVoicePath(LocalTTSExecutablePath);
+	const FString ResolvedDataPath = ResolveLocalVoicePath(LocalTTSDataPath);
+	if (ResolvedExecutablePath.IsEmpty() || !FPaths::FileExists(ResolvedExecutablePath))
+	{
+		LastVoiceError = FString::Printf(TEXT("Local TTS executable is missing: %s"), *ResolvedExecutablePath);
+		UE_LOG(LogTemp, Warning, TEXT("%s"), *LastVoiceError);
+		bSpeechInFlight = false;
+		RequestPendingSpeech();
+		return;
+	}
+
+	if (!ResolvedDataPath.IsEmpty() && !IFileManager::Get().DirectoryExists(*ResolvedDataPath))
+	{
+		LastVoiceError = FString::Printf(TEXT("Local TTS data directory is missing: %s"), *ResolvedDataPath);
+		UE_LOG(LogTemp, Warning, TEXT("%s"), *LastVoiceError);
+		bSpeechInFlight = false;
+		RequestPendingSpeech();
+		return;
+	}
+
+	const FString TTSDirectory = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("LocalVoice"), TEXT("TTS"));
+	if (!IFileManager::Get().MakeDirectory(*TTSDirectory, true))
+	{
+		LastVoiceError = FString::Printf(TEXT("Failed to create local TTS directory: %s"), *TTSDirectory);
+		UE_LOG(LogTemp, Warning, TEXT("%s"), *LastVoiceError);
+		bSpeechInFlight = false;
+		RequestPendingSpeech();
+		return;
+	}
+
+	const FString RequestId = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	const FString TextFilePath = FPaths::Combine(TTSDirectory, FString::Printf(TEXT("showdown_tts_%s.txt"), *RequestId));
+	const FString WavFilePath = FPaths::Combine(TTSDirectory, FString::Printf(TEXT("showdown_tts_%s.wav"), *RequestId));
+	if (!FFileHelper::SaveStringToFile(Text, *TextFilePath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+	{
+		LastVoiceError = FString::Printf(TEXT("Failed to save local TTS text: %s"), *TextFilePath);
+		UE_LOG(LogTemp, Warning, TEXT("%s"), *LastVoiceError);
+		bSpeechInFlight = false;
+		RequestPendingSpeech();
+		return;
+	}
+
+	bSpeechInFlight = true;
+	UE_LOG(LogTemp, Log, TEXT("Requesting local eSpeak NG TTS: %s"), *Text);
+
+	const FString VoiceArg = LocalTTSVoice.TrimStartAndEnd().IsEmpty()
+		? TEXT("ko")
+		: LocalTTSVoice.TrimStartAndEnd();
+	const int32 SpeechSpeed = FMath::Clamp(FMath::RoundToInt(175.0f * FMath::Clamp(TTSPlaybackSpeed, 0.5f, 2.0f)), 80, 450);
+	const int32 SpeechPitch = FMath::Clamp(FMath::RoundToInt(50.0f * FMath::Clamp(TTSPlaybackPitch, 0.5f, 2.0f)), 0, 99);
+	const FString DataPathArg = ResolvedDataPath.IsEmpty()
+		? FString()
+		: FString::Printf(TEXT("--path=\"%s\" "), *ResolvedDataPath);
+	const FString Args = FString::Printf(
+		TEXT("%s-v \"%s\" -s %d -p %d -a 180 -w \"%s\" -f \"%s\""),
+		*DataPathArg,
+		*VoiceArg,
+		SpeechSpeed,
+		SpeechPitch,
+		*WavFilePath,
+		*TextFilePath);
+
+	int32 ReturnCode = -1;
+	FString StdOut;
+	FString StdErr;
+	const bool bExecuted = FPlatformProcess::ExecProcess(*ResolvedExecutablePath, *Args, &ReturnCode, &StdOut, &StdErr);
+	bSpeechInFlight = false;
+
+	TArray<uint8> WavData;
+	const bool bLoadedWav = FFileHelper::LoadFileToArray(WavData, *WavFilePath) && WavData.Num() >= 44;
+	if (!bExecuted || ReturnCode != 0 || !bLoadedWav)
+	{
+		const FString CombinedOutput = StdOut + TEXT("\n") + StdErr;
+		LastVoiceError = FString::Printf(
+			TEXT("Local TTS failed. executed=%s code=%d wav_bytes=%d output=%s"),
+			bExecuted ? TEXT("true") : TEXT("false"),
+			ReturnCode,
+			WavData.Num(),
+			*CombinedOutput.Left(256));
+		UE_LOG(LogTemp, Warning, TEXT("%s"), *LastVoiceError);
+		RequestPendingSpeech();
+		return;
+	}
+
+	LastSpeechByteCount = WavData.Num();
+	LastVoiceError.Empty();
+	UE_LOG(LogTemp, Log, TEXT("Local eSpeak NG speech received %d bytes."), LastSpeechByteCount);
+	PlaySpeechWav(WavData);
+	RequestPendingSpeech();
 }
 
 void UShowDownVoiceSubsystem::RequestPendingSpeech()
