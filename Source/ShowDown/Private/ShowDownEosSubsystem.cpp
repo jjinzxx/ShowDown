@@ -91,6 +91,7 @@ void UShowDownEosSubsystem::Deinitialize()
 	bLobbyStartPollInFlight = false;
 	bInMultiplayerLobby = false;
 	bLobbyHost = false;
+	bHostedGameRosterLocked = false;
 
 	Super::Deinitialize();
 }
@@ -388,6 +389,7 @@ void UShowDownEosSubsystem::FailManagedTravel(const FString& Message)
 	StopLobbyStartPolling();
 	bInMultiplayerLobby = false;
 	bLobbyHost = false;
+	bHostedGameRosterLocked = false;
 	PendingSessionFlow = ESessionFlow::None;
 	PendingJoinCode.Empty();
 	LobbyCode.Empty();
@@ -616,6 +618,7 @@ void UShowDownEosSubsystem::HostLobbyWithVisibility(FName LobbyMapName, FName Ga
 	PendingHostMapName = LobbyMapName.IsNone() ? FName(TEXT("L_MultiplayerLobby")) : LobbyMapName;
 	PendingGameMapName = GameMapName.IsNone() ? FName(TEXT("L_MultiplayerGame")) : GameMapName;
 	bPendingLobbyIsPublic = bPublicRoom;
+	bHostedGameRosterLocked = false;
 	LobbyCode = MakeRoomCode();
 	USupabaseSubsystem* SupabaseSubsystem = GetGameInstance()
 		? GetGameInstance()->GetSubsystem<USupabaseSubsystem>()
@@ -902,6 +905,11 @@ void UShowDownEosSubsystem::StartHostedGame()
 		OnSessionResult.Broadcast(false, TEXT("Only the room host can start the game."));
 		return;
 	}
+	if (bHostedGameRosterLocked)
+	{
+		OnSessionResult.Broadcast(false, TEXT("게임 시작을 이미 진행 중입니다."));
+		return;
+	}
 
 	UWorld* World = GetWorld();
 	if (!World)
@@ -940,6 +948,10 @@ void UShowDownEosSubsystem::StartHostedGame()
 		return;
 	}
 
+	// Existing lobby controllers are carried through seamless travel. From this
+	// point onward every new PostLogin is outside the participant roster.
+	bHostedGameRosterLocked = true;
+
 	UE_LOG(
 		LogTemp,
 		Log,
@@ -976,7 +988,9 @@ void UShowDownEosSubsystem::StartHostedGame()
 	);
 
 	FOnlineSessionSettings UpdatedSettings = NamedSession->SessionSettings;
-	UpdatedSettings.bAllowJoinInProgress = true;
+	UpdatedSettings.NumPublicConnections = ExpectedLobbyPlayerCount;
+	UpdatedSettings.bAllowJoinInProgress = false;
+	UpdatedSettings.bAllowJoinViaPresence = false;
 	UpdatedSettings.Set(SETTING_MAPNAME, PendingGameMapName.ToString(), EOnlineDataAdvertisementType::ViaOnlineService);
 	UpdatedSettings.Set(ShowDownGameStartedKey, true, EOnlineDataAdvertisementType::ViaOnlineService);
 	UpdatedSettings.Set(ShowDownGameMapKey, PendingGameMapName.ToString(), EOnlineDataAdvertisementType::ViaOnlineService);
@@ -998,36 +1012,19 @@ void UShowDownEosSubsystem::StartHostedGame()
 
 void UShowDownEosSubsystem::AbortHostedGameStart(const FString& Reason)
 {
-	if (!bLobbyHost)
+	if (!bHostedGameRosterLocked && !bLobbyHost)
 	{
 		return;
 	}
-
-	bInMultiplayerLobby = true;
-	PendingSessionFlow = ESessionFlow::None;
-	ExpectedLobbyPlayerCount = ShowDownMaxLobbyPlayers;
-
-	const IOnlineSessionPtr SessionInterface = GetSessionInterface();
-	if (SessionInterface.IsValid())
-	{
-		if (FNamedOnlineSession* NamedSession = SessionInterface->GetNamedSession(ShowDownSessionName))
-		{
-			FOnlineSessionSettings LobbySettings = NamedSession->SessionSettings;
-			LobbySettings.Set(SETTING_MAPNAME, PendingHostMapName.ToString(), EOnlineDataAdvertisementType::ViaOnlineService);
-			LobbySettings.Set(ShowDownGameStartedKey, false, EOnlineDataAdvertisementType::ViaOnlineService);
-			LobbySettings.Set(ShowDownExpectedPlayerCountKey, ShowDownMaxLobbyPlayers, EOnlineDataAdvertisementType::ViaOnlineService);
-			if (!SessionInterface->UpdateSession(ShowDownSessionName, LobbySettings, true))
-			{
-				UE_LOG(LogTemp, Warning, TEXT("Could not restore EOS lobby advertisement after game-start timeout."));
-			}
-		}
-	}
-
+	// The clients have already left lobby state by this point. Re-advertising the
+	// room without returning every client to that state strands the host in the
+	// gameplay map. Close the failed room and make all peers return cleanly.
 	OnSessionResult.Broadcast(
 		false,
 		Reason.IsEmpty()
-			? TEXT("참가자 연결이 지연되어 게임 시작을 취소했습니다. 다시 시도해주세요.")
+			? TEXT("참가자 연결을 확인하지 못해 방을 종료합니다.")
 			: Reason);
+	LeaveLobby(FName(TEXT("L_ShowdownMain")));
 }
 
 void UShowDownEosSubsystem::LeaveLobby(FName HubMapName)
@@ -1246,6 +1243,7 @@ void UShowDownEosSubsystem::HandleCreateSessionComplete(FName SessionName, bool 
 	PendingSessionFlow = ESessionFlow::None;
 	bInMultiplayerLobby = false;
 	bLobbyHost = false;
+	bHostedGameRosterLocked = false;
 	LobbyCode.Empty();
 	OnSessionResult.Broadcast(false, TEXT("World is unavailable for lobby travel."));
 }
@@ -1681,6 +1679,7 @@ void UShowDownEosSubsystem::CompleteLobbyLeave(bool bSessionDestroyed)
 	StopLobbyStartPolling();
 	bInMultiplayerLobby = false;
 	bLobbyHost = false;
+	bHostedGameRosterLocked = false;
 	LobbyCode.Empty();
 	PendingJoinCode.Empty();
 	PendingSessionFlow = ESessionFlow::None;

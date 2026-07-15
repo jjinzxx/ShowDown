@@ -147,6 +147,7 @@ public:
 	FString GetLobbyRoomName() const { return LobbyRoomName; }
 
 	int32 GetExpectedLobbyPlayerCount() const { return ExpectedLobbyPlayerCount; }
+	bool IsHostedGameRosterLocked() const { return bHostedGameRosterLocked; }
 
 	bool EnsureVoiceChatReady();
 	bool BeginVoiceTransmission();
@@ -204,6 +205,9 @@ private:
 	bool bInMultiplayerLobby = false;
 	bool bLobbyHost = false;
 	bool bPendingLobbyIsPublic = true;
+	// The host freezes the participant set when Start is pressed. Existing
+	// controllers survive seamless travel; every later PostLogin is a late join.
+	bool bHostedGameRosterLocked = false;
 	IVoiceChatUser* VoiceChatUser = nullptr;
 	FDelegateHandle VoiceTalkingUpdatedDelegateHandle;
 	bool bLocalVoiceTalking = false;

@@ -297,14 +297,19 @@ void AShowDownPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason
 			this,
 			&AShowDownPlayerController::HandleSpeechPlaybackStateChanged);
 	}
-	if (UShowDownEosSubsystem* EosSubsystem = GetGameInstance()
-		? GetGameInstance()->GetSubsystem<UShowDownEosSubsystem>()
-		: nullptr)
+	// Remote controllers on a listen server share the host GameInstance. Their
+	// EndPlay must not stop the host's local voice transmission.
+	if (IsLocalController())
 	{
-		EosSubsystem->EndVoiceTransmission();
-		EosSubsystem->OnLocalVoiceTalkingChanged.RemoveDynamic(
-			this,
-			&AShowDownPlayerController::HandleLocalVoiceTalkingChanged);
+		if (UShowDownEosSubsystem* EosSubsystem = GetGameInstance()
+			? GetGameInstance()->GetSubsystem<UShowDownEosSubsystem>()
+			: nullptr)
+		{
+			EosSubsystem->EndVoiceTransmission();
+			EosSubsystem->OnLocalVoiceTalkingChanged.RemoveDynamic(
+				this,
+				&AShowDownPlayerController::HandleLocalVoiceTalkingChanged);
+		}
 	}
 	VoiceBoundGameState.Reset();
 	bVoiceChatEventsBound = false;

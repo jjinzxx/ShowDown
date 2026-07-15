@@ -573,7 +573,7 @@ private:
 	// The player who lost the previous round leads the next multiplayer round.
 	// A draw keeps the current lead; an eliminated loser falls back to the next survivor.
 	UPROPERTY()
-	TObjectPtr<ASDPlayerState> MultiplayerNextFirstPlayer = nullptr;
+	EShowDownPlayerSlot MultiplayerNextFirstSlot = EShowDownPlayerSlot::None;
 
 	UPROPERTY()
 	TArray<TObjectPtr<ASDMultiplayerSeatAnchor>> MultiplayerSeatAnchors;
@@ -880,15 +880,20 @@ private:
 	void TryStartMultiplayerMatch();
 	void StartMultiplayerMatch(const TArray<ASDPlayerState*>& Players);
 	TArray<ASDPlayerState*> GetConnectedShowDownPlayers() const;
+	bool EvaluateMultiplayerRestartVotes(const TArray<ASDPlayerState*>& EligiblePlayers);
 	ASDPlayerState* GetPlayerStateForController(AController* Controller) const;
 	void EnsureMultiplayerSeatAnchors();
 	void EnsureMultiplayerPawns();
 	FTransform GetMultiplayerPawnSpawnTransform(AController* Controller, int32 PlayerIndex);
 	ASDPlayerState* FindNextAliveMultiplayerPlayer(ASDPlayerState* AfterPlayer) const;
 	ASDPlayerState* FindNextActiveMultiplayerPlayerAfterSlot(EShowDownPlayerSlot AfterSlot) const;
+	ASDPlayerState* ResolveNextMultiplayerRoundLeader(
+		EShowDownPlayerSlot PreferredLeaderSlot,
+		EShowDownPlayerSlot CurrentLeaderSlot) const;
 	ASDPlayerState* GetMultiplayerOpponent(ASDPlayerState* Player) const;
 	void DealMultiplayerHands();
 	void ClearMultiplayerHands();
+	void RetireEliminatedMultiplayerHands();
 	void ClearMultiplayerForeheadCards();
 	void ClearLooseMultiplayerCards();
 	void StartMultiplayerDuel(ASDPlayerState* FirstPlayer, ASDPlayerState* SecondPlayer);
@@ -916,7 +921,6 @@ private:
 	void FinishMultiplayerRoundByReveal();
 	void ContinueMultiplayerRoundAfterReveal(
 		TArray<ASDPlayerState*> RevealedPlayers,
-		TArray<ASDPlayerState*> Winners,
 		bool bLoserSpotlightShown = false);
 	int32 ResolveMultiplayerFoldLoadCount(const ASDPlayerState* FoldedPlayer) const;
 	void PrepareMultiplayerFoldCylinder(int32 LoadCount);

@@ -14,6 +14,7 @@
 #include "RoundResolver.h"
 #include "RouletteSystem.h"
 #include "SDMultiplayerRoundFlow.h"
+#include "SDPlayerState.h"
 #include "ShowDownCharacter.h"
 #include "ShowDownCharacterSkinCatalog.h"
 #include "ShowDownGameModeBase.h"
@@ -143,17 +144,92 @@ bool FShowDownMultiplayerRoundFlowTest::RunTest(const FString& Parameters)
 		ESDMultiplayerPostBetDecision::RevealCards);
 
 	TestEqual(
-		TEXT("Settled-card hold follows the reveal presentation"),
-		CalculateRevealToRouletteDelay(2.25f, 1.5f, true),
-		3.75f);
+		TEXT("A longer reveal presentation extends the cinematic beat"),
+		CalculateRevealCompletionDelay(2.25f, 1.5f),
+		2.25f);
 	TestEqual(
-		TEXT("No revealed card does not add an artificial hold"),
-		CalculateRevealToRouletteDelay(0.0f, 1.5f, false),
-		0.0f);
+		TEXT("The configured cinematic beat remains the minimum"),
+		CalculateRevealCompletionDelay(0.5f, 1.5f),
+		1.5f);
 	TestEqual(
 		TEXT("Negative timing input is clamped"),
-		CalculateRevealToRouletteDelay(-1.0f, -2.0f, true),
+		CalculateRevealCompletionDelay(-1.0f, -2.0f),
 		0.0f);
+	TestEqual(
+		TEXT("The default four-second beat outlasts a short reveal"),
+		CalculateRevealCompletionDelay(2.25f, 4.0f),
+		4.0f);
+	TestEqual(
+		TEXT("A long reveal cannot be cut off by the default beat"),
+		CalculateRevealCompletionDelay(5.5f, 4.0f),
+		5.5f);
+
+	const TArray<EShowDownPlayerSlot> AllAliveSlots = {
+		EShowDownPlayerSlot::Player1,
+		EShowDownPlayerSlot::Player2,
+		EShowDownPlayerSlot::Player3,
+		EShowDownPlayerSlot::Player4
+	};
+	const TArray<EShowDownPlayerSlot> AliveAfterPlayer4 = {
+		EShowDownPlayerSlot::Player1,
+		EShowDownPlayerSlot::Player2,
+		EShowDownPlayerSlot::Player3
+	};
+	const TArray<EShowDownPlayerSlot> AliveWithoutPlayer2 = {
+		EShowDownPlayerSlot::Player1,
+		EShowDownPlayerSlot::Player3,
+		EShowDownPlayerSlot::Player4
+	};
+	TestEqual(
+		TEXT("A draw keeps the current round leader"),
+		ResolveNextRoundLeaderSlot(
+			EShowDownPlayerSlot::None,
+			EShowDownPlayerSlot::Player3,
+			AllAliveSlots),
+		EShowDownPlayerSlot::Player3);
+	TestEqual(
+		TEXT("A surviving preferred loser leads the next round"),
+		ResolveNextRoundLeaderSlot(
+			EShowDownPlayerSlot::Player2,
+			EShowDownPlayerSlot::Player3,
+			AllAliveSlots),
+		EShowDownPlayerSlot::Player2);
+	TestEqual(
+		TEXT("An eliminated preferred leader advances after its table seat"),
+		ResolveNextRoundLeaderSlot(
+			EShowDownPlayerSlot::Player4,
+			EShowDownPlayerSlot::Player3,
+			AliveAfterPlayer4),
+		EShowDownPlayerSlot::Player1);
+	TestEqual(
+		TEXT("A disconnected leader advances in physical table order"),
+		ResolveNextRoundLeaderSlot(
+			EShowDownPlayerSlot::Player2,
+			EShowDownPlayerSlot::None,
+			AliveWithoutPlayer2),
+		EShowDownPlayerSlot::Player4);
+
+	TestEqual(
+		TEXT("A solo player cannot restart a multiplayer match"),
+		ResolveRestartDecision(1, 1),
+		ESDMultiplayerRestartDecision::NotEnoughPlayers);
+	TestEqual(
+		TEXT("A partial restart vote waits for the remaining players"),
+		ResolveRestartDecision(3, 2),
+		ESDMultiplayerRestartDecision::WaitingForVotes);
+	TestEqual(
+		TEXT("Every eligible player voting restarts the match"),
+		ResolveRestartDecision(2, 2),
+		ESDMultiplayerRestartDecision::RestartMatch);
+	TestFalse(
+		TEXT("An open lobby accepts a new controller"),
+		ShouldRejectNewPlayerJoin(false, false));
+	TestTrue(
+		TEXT("The hosted-game transition rejects a late join"),
+		ShouldRejectNewPlayerJoin(false, true));
+	TestTrue(
+		TEXT("A running match rejects a late join"),
+		ShouldRejectNewPlayerJoin(true, false));
 	return true;
 }
 
@@ -980,6 +1056,45 @@ bool FShowDownVisionDirectorBlendTest::RunTest(const FString& Parameters)
 	VisionDirector->BlendToDarknessStrength(0.4f, 1.0f, ESDVisionBlendEase::Linear, 2.0f);
 	TestTrue(TEXT("Starting direct darkness preserves the independent range transition"),
 		VisionDirector->IsVisionRangeBlending());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownPlayerLifecycleTest,
+	"ShowDown.Core.PlayerLifecycle",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownPlayerLifecycleTest::RunTest(const FString& Parameters)
+{
+	ASDPlayerState* PreviousState = NewObject<ASDPlayerState>();
+	ASDPlayerState* CopiedState = NewObject<ASDPlayerState>();
+	ASDPlayerState* RestoredState = NewObject<ASDPlayerState>();
+	TestNotNull(TEXT("Previous player state can be created"), PreviousState);
+	TestNotNull(TEXT("Copied player state can be created"), CopiedState);
+	TestNotNull(TEXT("Restored player state can be created"), RestoredState);
+	if (!PreviousState || !CopiedState || !RestoredState)
+	{
+		return false;
+	}
+
+	PreviousState->ShowDownSlot = EShowDownPlayerSlot::Player3;
+	PreviousState->bReady = true;
+	PreviousState->bHostPlayer = true;
+	PreviousState->CopyProperties(CopiedState);
+	TestEqual(
+		TEXT("Seamless travel copies the authoritative seat"),
+		CopiedState->ShowDownSlot,
+		EShowDownPlayerSlot::Player3);
+	TestTrue(TEXT("Seamless travel copies ready state"), CopiedState->bReady);
+	TestTrue(TEXT("Seamless travel copies host state"), CopiedState->bHostPlayer);
+
+	RestoredState->OverrideWith(CopiedState);
+	TestEqual(
+		TEXT("Reconnect restore keeps the authoritative seat"),
+		RestoredState->ShowDownSlot,
+		EShowDownPlayerSlot::Player3);
+	TestTrue(TEXT("Reconnect restore keeps ready state"), RestoredState->bReady);
+	TestTrue(TEXT("Reconnect restore keeps host state"), RestoredState->bHostPlayer);
 	return true;
 }
 
