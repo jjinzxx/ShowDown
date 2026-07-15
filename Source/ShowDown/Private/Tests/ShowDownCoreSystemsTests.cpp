@@ -148,23 +148,23 @@ bool FShowDownMultiplayerRoundFlowTest::RunTest(const FString& Parameters)
 
 	TestEqual(
 		TEXT("A longer reveal presentation extends the cinematic beat"),
-		CalculateRevealCompletionDelay(2.25f, 1.5f),
+		ResolveRevealCompletionDelay(2.25f, 1.5f),
 		2.25f);
 	TestEqual(
-		TEXT("The configured cinematic beat remains the minimum"),
-		CalculateRevealCompletionDelay(0.5f, 1.5f),
-		1.5f);
+		TEXT("A valid reveal presentation owns the completion timing"),
+		ResolveRevealCompletionDelay(0.5f, 1.5f),
+		0.5f);
 	TestEqual(
-		TEXT("Negative timing input is clamped"),
-		CalculateRevealCompletionDelay(-1.0f, -2.0f),
+		TEXT("Negative fallback timing input is clamped"),
+		ResolveRevealCompletionDelay(-1.0f, -2.0f),
 		0.0f);
 	TestEqual(
-		TEXT("The default four-second beat outlasts a short reveal"),
-		CalculateRevealCompletionDelay(2.25f, 4.0f),
-		4.0f);
+		TEXT("The fallback beat is used when no reveal presentation runs"),
+		ResolveRevealCompletionDelay(0.0f, 2.1f),
+		2.1f);
 	TestEqual(
-		TEXT("A long reveal cannot be cut off by the default beat"),
-		CalculateRevealCompletionDelay(5.5f, 4.0f),
+		TEXT("A long reveal presentation keeps its full duration"),
+		ResolveRevealCompletionDelay(5.5f, 2.1f),
 		5.5f);
 
 	const TArray<EShowDownPlayerSlot> AllAliveSlots = {
@@ -1004,13 +1004,17 @@ bool FShowDownRoundCinematicDefaultsTest::RunTest(const FString& Parameters)
 		}
 	};
 
-	TestFloatDefault(TEXT("RoundCinematicFinalBetToBlackoutSeconds"), 4.0f);
-	TestFloatDefault(TEXT("RoundCinematicBlackoutToTableSpotlightSeconds"), 2.0f);
-	TestFloatDefault(TEXT("RoundCinematicTableSpotlightToRevealSeconds"), 1.0f);
-	TestFloatDefault(TEXT("RoundCinematicRevealToLoserSpotlightSeconds"), 3.0f);
-	TestFloatDefault(TEXT("RoundCinematicLoserSpotlightHoldSeconds"), 3.0f);
-	TestFloatDefault(TEXT("CollectorCardSelectionDelaySeconds"), 3.0f);
-	TestFloatDefault(TEXT("RoundCinematicPostShotProgressHoldSeconds"), 5.0f);
+	TestFloatDefault(TEXT("MultiplayerBetActionIntervalSeconds"), 0.6f);
+	TestFloatDefault(TEXT("CardRevealHoldSeconds"), 0.6f);
+	TestFloatDefault(TEXT("RoundCinematicBetFocusHoldSeconds"), 1.4f);
+	TestFloatDefault(TEXT("RoundCinematicFinalBetToBlackoutSeconds"), 2.8f);
+	TestFloatDefault(TEXT("RoundCinematicCollectorTurnLeadInSeconds"), 1.4f);
+	TestFloatDefault(TEXT("RoundCinematicBlackoutToTableSpotlightSeconds"), 1.4f);
+	TestFloatDefault(TEXT("RoundCinematicTableSpotlightToRevealSeconds"), 0.7f);
+	TestFloatDefault(TEXT("RoundCinematicRevealToLoserSpotlightSeconds"), 2.1f);
+	TestFloatDefault(TEXT("RoundCinematicLoserSpotlightHoldSeconds"), 1.5f);
+	TestFloatDefault(TEXT("CollectorCardSelectionDelaySeconds"), 2.1f);
+	TestFloatDefault(TEXT("RoundCinematicPostShotProgressHoldSeconds"), 3.5f);
 	return true;
 }
 

@@ -14,13 +14,14 @@ ESDMultiplayerPostBetDecision ShowDownMultiplayerRoundFlow::ResolvePostBetDecisi
 		: ESDMultiplayerPostBetDecision::ContinueBetting;
 }
 
-float ShowDownMultiplayerRoundFlow::CalculateRevealCompletionDelay(
+float ShowDownMultiplayerRoundFlow::ResolveRevealCompletionDelay(
 	float RevealPresentationSeconds,
-	float MinimumCinematicSeconds)
+	float FallbackCinematicSeconds)
 {
-	return FMath::Max(
-		FMath::Max(0.0f, RevealPresentationSeconds),
-		FMath::Max(0.0f, MinimumCinematicSeconds));
+	const float SafePresentationSeconds = FMath::Max(0.0f, RevealPresentationSeconds);
+	return SafePresentationSeconds > KINDA_SMALL_NUMBER
+		? SafePresentationSeconds
+		: FMath::Max(0.0f, FallbackCinematicSeconds);
 }
 
 int32 ShowDownMultiplayerRoundFlow::GetMultiplayerTurnOrderIndex(EShowDownPlayerSlot Slot)

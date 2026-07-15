@@ -70,6 +70,7 @@ void UShowDownAudioSubsystem::Deinitialize()
 	}
 
 	ClearPresentationTimers();
+	StopLoserSpotlightWarning();
 	StopSpotlightTransitionSound();
 	StopPersistentLoops();
 	PlaybackWorld.Reset();
@@ -238,10 +239,44 @@ void UShowDownAudioSubsystem::NotifyLoserSpotlightShown()
 		return;
 	}
 
-	UGameplayStatics::PlaySound2D(
-		World,
-		AudioConfig->LoserSpotlightWarningSound,
-		FMath::Max(0.0f, AudioConfig->LoserSpotlightWarningVolume) * UserEffectVolume);
+	if (IsValid(LoserSpotlightWarningComponent)
+		&& LoserSpotlightWarningComponent->GetWorld() != World)
+	{
+		StopLoserSpotlightWarning();
+	}
+
+	if (!IsValid(LoserSpotlightWarningComponent))
+	{
+		LoserSpotlightWarningComponent = UGameplayStatics::CreateSound2D(
+			World,
+			AudioConfig->LoserSpotlightWarningSound,
+			1.0f,
+			1.0f,
+			0.0f,
+			nullptr,
+			false,
+			false);
+	}
+
+	if (!LoserSpotlightWarningComponent)
+	{
+		return;
+	}
+
+	LoserSpotlightWarningComponent->Stop();
+	LoserSpotlightWarningComponent->SetSound(AudioConfig->LoserSpotlightWarningSound);
+	ApplyLoserSpotlightWarningVolume();
+	LoserSpotlightWarningComponent->Play(0.0f);
+}
+
+void UShowDownAudioSubsystem::StopLoserSpotlightWarning()
+{
+	if (IsValid(LoserSpotlightWarningComponent))
+	{
+		LoserSpotlightWarningComponent->Stop();
+		LoserSpotlightWarningComponent->DestroyComponent();
+	}
+	LoserSpotlightWarningComponent = nullptr;
 }
 
 void UShowDownAudioSubsystem::NotifyPhaseChanged(EShowDownPhase NewPhase)
@@ -253,6 +288,7 @@ void UShowDownAudioSubsystem::NotifyPhaseChanged(EShowDownPhase NewPhase)
 	}
 
 	ClearPresentationTimers();
+	StopLoserSpotlightWarning();
 	RestoreIdleMix(AudioConfig->MixRestoreDuration);
 }
 
@@ -277,6 +313,7 @@ void UShowDownAudioSubsystem::SetUserEffectVolume(float Volume)
 	SetCrowdMixVolume(CurrentCrowdConfigVolume, 0.0f);
 	ApplyButtonClickVolume();
 	ApplySpotlightTransitionVolume();
+	ApplyLoserSpotlightWarningVolume();
 }
 
 void UShowDownAudioSubsystem::RefreshUserVolumes()
@@ -611,6 +648,15 @@ void UShowDownAudioSubsystem::ApplySpotlightTransitionVolume()
 	{
 		SpotlightTransitionComponent->SetVolumeMultiplier(
 			FMath::Max(0.0f, AudioConfig->SpotlightTransitionVolume) * UserEffectVolume);
+	}
+}
+
+void UShowDownAudioSubsystem::ApplyLoserSpotlightWarningVolume()
+{
+	if (LoserSpotlightWarningComponent && AudioConfig)
+	{
+		LoserSpotlightWarningComponent->SetVolumeMultiplier(
+			FMath::Max(0.0f, AudioConfig->LoserSpotlightWarningVolume) * UserEffectVolume);
 	}
 }
 

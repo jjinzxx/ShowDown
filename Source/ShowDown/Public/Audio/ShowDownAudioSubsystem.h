@@ -48,6 +48,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Audio|Presentation")
 	void NotifyLoserSpotlightShown();
 
+	/** Stops the warning cue on the exact trigger-pull completion frame. */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Audio|Presentation")
+	void StopLoserSpotlightWarning();
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Audio|Presentation")
 	void NotifyPhaseChanged(EShowDownPhase NewPhase);
 
@@ -88,6 +92,7 @@ private:
 	void ClearPresentationTimers();
 	void ApplyButtonClickVolume();
 	void ApplySpotlightTransitionVolume();
+	void ApplyLoserSpotlightWarningVolume();
 	void StopSpotlightTransitionSound();
 
 	UFUNCTION()
@@ -113,6 +118,9 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UAudioComponent> SpotlightTransitionComponent;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UAudioComponent> LoserSpotlightWarningComponent;
 
 	TWeakObjectPtr<UWorld> PlaybackWorld;
 	FDelegateHandle PostLoadMapDelegateHandle;

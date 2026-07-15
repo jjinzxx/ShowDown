@@ -24,10 +24,10 @@ namespace ShowDownMultiplayerRoundFlow
 		int32 ActivePlayerCount,
 		bool bAllActivePlayersDoneBetting);
 
-	/** Keeps the cinematic beat while never cutting off the actual card motion. */
-	SHOWDOWN_API float CalculateRevealCompletionDelay(
+	/** Uses the complete card presentation when available, otherwise falls back to a fixed cinematic beat. */
+	SHOWDOWN_API float ResolveRevealCompletionDelay(
 		float RevealPresentationSeconds,
-		float MinimumCinematicSeconds);
+		float FallbackCinematicSeconds);
 
 	/** Shared table order used by selection, betting, and next-round leadership. */
 	SHOWDOWN_API int32 GetMultiplayerTurnOrderIndex(EShowDownPlayerSlot Slot);

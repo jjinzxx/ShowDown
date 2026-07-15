@@ -5083,11 +5083,14 @@ void AShowDownGameModeBase::BeginSingleRoundReveal()
 	UE_LOG(LogTemp, Log, TEXT("Reveal cards. Player: %d, Collector: %d"), PlayerCardRank, CollectorCardRank);
 	UE_LOG(LogTemp, Log, TEXT("Reveal resolved. Waiting for presentation or auto-advance fallback."));
 
-	PlaySinglePlayerCardRevealPresentation();
+	const float RevealPresentationSeconds = PlaySinglePlayerCardRevealPresentation();
 	bHasPendingRoundReveal = false;
 	bHasPendingFoldReveal = false;
 	PendingRoundResult = Result;
-	ScheduleSingleRoundCinematicAction(RoundCinematicRevealToLoserSpotlightSeconds, [this, Result]()
+	const float RevealCompletionDelay = ShowDownMultiplayerRoundFlow::ResolveRevealCompletionDelay(
+		RevealPresentationSeconds,
+		RoundCinematicRevealToLoserSpotlightSeconds);
+	ScheduleSingleRoundCinematicAction(RevealCompletionDelay, [this, Result]()
 	{
 		ContinueRoundAfterReveal(Result);
 	});
@@ -5287,12 +5290,15 @@ void AShowDownGameModeBase::BeginSingleFoldReveal(EShowDownSide FoldedSide, int3
 		LoadCount);
 	UE_LOG(LogTemp, Log, TEXT("Fold reveal resolved. Waiting for presentation or auto-advance fallback."));
 
-	PlaySinglePlayerCardRevealPresentation();
+	const float RevealPresentationSeconds = PlaySinglePlayerCardRevealPresentation();
 	bHasPendingRoundReveal = false;
 	bHasPendingFoldReveal = false;
 	PendingFoldedSide = FoldedSide;
 	PendingFoldLoadCount = LoadCount;
-	ScheduleSingleRoundCinematicAction(RoundCinematicRevealToLoserSpotlightSeconds, [this, FoldedSide, LoadCount]()
+	const float RevealCompletionDelay = ShowDownMultiplayerRoundFlow::ResolveRevealCompletionDelay(
+		RevealPresentationSeconds,
+		RoundCinematicRevealToLoserSpotlightSeconds);
+	ScheduleSingleRoundCinematicAction(RevealCompletionDelay, [this, FoldedSide, LoadCount]()
 	{
 		ContinueFoldAfterReveal(FoldedSide, LoadCount);
 	});
@@ -7927,8 +7933,8 @@ void AShowDownGameModeBase::QueueNextMultiplayerBetTurn(
 	}
 	RefreshBetBulletPresentation();
 
-	(void)DelaySeconds;
-	ScheduleMultiplayerRoundAction(RoundCinematicBetFocusHoldSeconds, [this, ActingSlot]()
+	const float BetTransitionDelay = FMath::Max(0.0f, DelaySeconds);
+	ScheduleMultiplayerRoundAction(BetTransitionDelay, [this, ActingSlot, BetTransitionDelay]()
 	{
 		BroadcastTableCinematicCue(ESDTableCinematicCue::BetFocusEnded, 0);
 		const int32 TableBet = BettingSystem ? BettingSystem->GetCurrentBet() : 0;
@@ -7943,8 +7949,16 @@ void AShowDownGameModeBase::QueueNextMultiplayerBetTurn(
 		}
 		if (Decision == ESDMultiplayerPostBetDecision::RevealCards)
 		{
-			QueueMultiplayerRevealAfterBetting(RoundCinematicBetFocusHoldSeconds);
+			QueueMultiplayerRevealAfterBetting(BetTransitionDelay);
 			return;
+		}
+
+		// A normal turn handoff should not leave several long action montages
+		// competing for attention. Final actions keep playing into the authored
+		// reveal focus and are naturally hidden by the following blackout.
+		if (AShowDownCharacter* ActingCharacter = FindActiveCharacterForPlayerSlot(GetWorld(), ActingSlot))
+		{
+			ActingCharacter->ResetCharacterAnimState();
 		}
 
 		ASDPlayerState* NextPlayer = FindNextActiveMultiplayerPlayerAfterSlot(ActingSlot);
@@ -8102,7 +8116,7 @@ void AShowDownGameModeBase::BeginMultiplayerFoldReveal(
 		FoldRevealCards.Add(FoldedPlayer->ForeheadCard);
 	}
 	const float RevealPresentationSeconds = PlayCardRevealPresentation(FoldRevealCards);
-	const float RevealCompletionDelay = ShowDownMultiplayerRoundFlow::CalculateRevealCompletionDelay(
+	const float RevealCompletionDelay = ShowDownMultiplayerRoundFlow::ResolveRevealCompletionDelay(
 		RevealPresentationSeconds,
 		RoundCinematicRevealToLoserSpotlightSeconds);
 	const TWeakObjectPtr<ASDPlayerState> WeakFoldedPlayer(FoldedPlayer);
@@ -8196,8 +8210,8 @@ void AShowDownGameModeBase::CompleteMultiplayerFoldResolution(
 	}
 	if (Decision == ESDMultiplayerPostBetDecision::RevealCards)
 	{
-		// The fold already held its committed action for the full four seconds.
-		// Do not add another targetless four-second focus before showdown.
+		// The fold already held its committed action for the configured focus duration.
+		// Do not add another targetless focus before showdown.
 		QueueMultiplayerRevealAfterBetting(RoundCinematicFinalBetToBlackoutSeconds);
 		return;
 	}
@@ -8489,7 +8503,7 @@ void AShowDownGameModeBase::FinishMultiplayerRoundByReveal()
 	}
 	RefreshBetBulletPresentation();
 	const float RevealPresentationSeconds = PlayMultiplayerCardRevealPresentation(RevealedPlayers);
-	const float RevealCompletionDelay = ShowDownMultiplayerRoundFlow::CalculateRevealCompletionDelay(
+	const float RevealCompletionDelay = ShowDownMultiplayerRoundFlow::ResolveRevealCompletionDelay(
 		RevealPresentationSeconds,
 		RoundCinematicRevealToLoserSpotlightSeconds);
 	TArray<TWeakObjectPtr<ASDPlayerState>> WeakRevealedPlayers;
@@ -8597,7 +8611,7 @@ void AShowDownGameModeBase::ContinueMultiplayerRoundAfterReveal(
 
 		if (bLoserSpotlightShown)
 		{
-			// The winner or a loser may disconnect during the three-second red-light
+			// The winner or a loser may disconnect during the configured red-light
 			// hold. Re-publish the recomputed mask so a newly promoted winner is not
 			// left red and a departed seat bit does not survive until round reset.
 			BroadcastTableCinematicCue(

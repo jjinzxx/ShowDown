@@ -354,7 +354,7 @@ public:
 	float CardRevealStepSeconds = 0.24f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0"))
-	float CardRevealHoldSeconds = 0.8f;
+	float CardRevealHoldSeconds = 0.6f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (DisplayName = "Single Forward Distance"))
 	float CardRevealForwardDistance = 42.0f;
@@ -382,45 +382,33 @@ public:
 	FRotator CardRevealRotationOffset = FRotator(-90.0f, 0.0f, 0.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Multiplayer Flow", meta = (ClampMin = "0.0", DisplayName = "Pause Between Bet Actions"))
-	float MultiplayerBetActionIntervalSeconds = 0.8f;
+	float MultiplayerBetActionIntervalSeconds = 0.6f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Multiplayer Flow", meta = (ClampMin = "0.0", DisplayName = "All Bets Complete To Reveal"))
-	float MultiplayerPreRevealDelaySeconds = 2.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Multiplayer Flow", meta = (ClampMin = "0.0", DisplayName = "Settled Reveal To Loser Spotlight"))
-	float MultiplayerRevealToLoserSpotlightSeconds = 1.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Multiplayer Flow", meta = (ClampMin = "0.0", DisplayName = "Loser Spotlight To Gun Movement"))
-	float MultiplayerLoserSpotlightHoldSeconds = 2.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Multiplayer Flow", meta = (ClampMin = "0.0", DisplayName = "Pause After Each Shot"))
-	float MultiplayerPostShotPauseSeconds = 0.5f;
-
-	// These names are intentionally new so legacy Blueprint CDO overrides cannot
-	// silently restore the old, shorter presentation timings.
+	// Single-player and multiplayer share these authored cinematic beats so the
+	// same reveal, spotlight and post-shot timing contract drives both flows.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Bet Focus Hold"))
-	float RoundCinematicBetFocusHoldSeconds = 2.0f;
+	float RoundCinematicBetFocusHoldSeconds = 1.4f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Final Bet To Blackout"))
-	float RoundCinematicFinalBetToBlackoutSeconds = 4.0f;
+	float RoundCinematicFinalBetToBlackoutSeconds = 2.8f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Collector Turn Lead In"))
-	float RoundCinematicCollectorTurnLeadInSeconds = 2.0f;
+	float RoundCinematicCollectorTurnLeadInSeconds = 1.4f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Blackout To Table Spotlight"))
-	float RoundCinematicBlackoutToTableSpotlightSeconds = 2.0f;
+	float RoundCinematicBlackoutToTableSpotlightSeconds = 1.4f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Table Spotlight To Reveal"))
-	float RoundCinematicTableSpotlightToRevealSeconds = 1.0f;
+	float RoundCinematicTableSpotlightToRevealSeconds = 0.7f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Reveal To Loser Spotlight"))
-	float RoundCinematicRevealToLoserSpotlightSeconds = 3.0f;
+	float RoundCinematicRevealToLoserSpotlightSeconds = 2.1f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Loser Spotlight Hold"))
-	float RoundCinematicLoserSpotlightHoldSeconds = 3.0f;
+	float RoundCinematicLoserSpotlightHoldSeconds = 1.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Post Shot Progress Hold"))
-	float RoundCinematicPostShotProgressHoldSeconds = 5.0f;
+	float RoundCinematicPostShotProgressHoldSeconds = 3.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (DisplayName = "Use Initial Card Deal Presentation"))
 	bool bUseInitialCardDealPresentation = true;
@@ -450,7 +438,7 @@ public:
 	float InitialDealBeatDelay = 0.80f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Selection", meta = (ClampMin = "0.0", DisplayName = "Collector Card Selection Delay"))
-	float CollectorCardSelectionDelaySeconds = 3.0f;
+	float CollectorCardSelectionDelaySeconds = 2.1f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "5.0", DisplayName = "Showcase Hold Duration"))
 	float InitialDealShowcaseHoldDuration = 1.50f;

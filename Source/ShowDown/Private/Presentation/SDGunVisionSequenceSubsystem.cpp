@@ -1223,6 +1223,17 @@ void USDGunVisionSequenceSubsystem::HandleTableCinematicCue(
 		// and SpotLight7 on that same frame.
 		ActiveTargetSpotlightMask = 0;
 		SetTableSpotlightEnabled(false);
+		if (const UWorld* World = GetWorld())
+		{
+			if (UGameInstance* GameInstance = World->GetGameInstance())
+			{
+				if (UShowDownAudioSubsystem* AudioSubsystem =
+					GameInstance->GetSubsystem<UShowDownAudioSubsystem>())
+				{
+					AudioSubsystem->StopLoserSpotlightWarning();
+				}
+			}
+		}
 		break;
 
 	case ESDTableCinematicCue::InitialDealStarted:
