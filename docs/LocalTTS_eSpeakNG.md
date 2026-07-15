@@ -27,3 +27,7 @@ LocalTTSVoice=ko
 - Keep the whole `espeak-ng-data` folder next to `espeak-ng.exe`.
 - Files under `Binaries/ThirdParty/eSpeakNG/` are allowed by `.gitignore` and tracked by Git LFS.
 - License files copied from the eSpeak NG 1.52.0 repository are in `docs/third_party/eSpeakNG/`.
+
+## Packaging
+
+Packaged builds need the local voice executables, DLLs, model, and data files staged next to the game. `Config/DefaultGame.ini` stages `Binaries/ThirdParty` and `Content/LocalModels` as Non-UFS files, and `Source/ShowDown/ShowDown.Build.cs` registers the same local voice files as runtime dependencies.
