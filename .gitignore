@@ -80,11 +80,11 @@ Source/ShowDown/Private/SDLLMSecrets.h
 !Build/*/PakBlacklist*.txt
 
 # Local voice runtime distributed through Git LFS
-!Binaries/
-Binaries/*
-!Binaries/ThirdParty/
-Binaries/ThirdParty/*
-!Binaries/ThirdParty/Whisper/
-!Binaries/ThirdParty/Whisper/**
-!Binaries/ThirdParty/eSpeakNG/
-!Binaries/ThirdParty/eSpeakNG/**
+!/Binaries/
+/Binaries/*
+!/Binaries/ThirdParty/
+/Binaries/ThirdParty/*
+!/Binaries/ThirdParty/Whisper/
+!/Binaries/ThirdParty/Whisper/**
+!/Binaries/ThirdParty/eSpeakNG/
+!/Binaries/ThirdParty/eSpeakNG/**
