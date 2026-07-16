@@ -32,6 +32,15 @@ namespace
 	constexpr float MaximumMuzzleFlashIntensity = 8000.0f;
 	constexpr float MaximumMuzzleFlashAttenuationRadius = 350.0f;
 	constexpr float MinimumCinematicCameraHoldTime = 1.8f;
+	constexpr int32 RevolverBulletSlotCount = 6;
+
+	bool IsRaiseBulletLoadTerminalPhase(EShowDownPhase Phase)
+	{
+		return Phase == EShowDownPhase::Reveal
+			|| Phase == EShowDownPhase::Roulette
+			|| Phase == EShowDownPhase::RoundEnd
+			|| Phase == EShowDownPhase::GameOver;
+	}
 
 	APlayerController* FindLocalPlayerController(const UObject* WorldContextObject)
 	{
@@ -141,6 +150,10 @@ ASDSelfShotGunActor::ASDSelfShotGunActor()
 	PrimaryActorTick.bStartWithTickEnabled = false;
 	bReplicates = true;
 	bAlwaysRelevant = true;
+	// The opening card showcase owns the gun's first reveal. Hide the map-placed
+	// actor at construction time so it cannot flash on screen before BeginPlay or
+	// before the replicated showcase state reaches multiplayer clients.
+	SetActorHiddenInGame(true);
 
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
@@ -203,6 +216,25 @@ ASDSelfShotGunActor::ASDSelfShotGunActor()
 	BulletMesh06 = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BulletMesh06"));
 	BulletMesh06->SetupAttachment(ChamberPivot);
 	BulletMesh06->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> BettingBulletMeshFinder(
+		TEXT("/Game/Fab/Revolver/bulletBetting.bulletBetting"));
+	for (int32 BulletIndex = 0; BulletIndex < RevolverBulletSlotCount; ++BulletIndex)
+	{
+		UStaticMeshComponent* BettingBulletMesh = CreateDefaultSubobject<UStaticMeshComponent>(
+			*FString::Printf(TEXT("BettingBulletMesh%02d"), BulletIndex + 1));
+		BettingBulletMesh->SetupAttachment(ChamberPivot);
+		BettingBulletMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		BettingBulletMesh->SetCanEverAffectNavigation(false);
+		BettingBulletMesh->SetCastShadow(false);
+		BettingBulletMesh->SetVisibility(false, true);
+		BettingBulletMesh->SetHiddenInGame(true, true);
+		if (BettingBulletMeshFinder.Succeeded())
+		{
+			BettingBulletMesh->SetStaticMesh(BettingBulletMeshFinder.Object);
+		}
+		BettingBulletMeshes.Add(BettingBulletMesh);
+	}
 
 	TriggerPivot = CreateDefaultSubobject<USceneComponent>(TEXT("TriggerPivot"));
 	TriggerPivot->SetupAttachment(SceneRoot);
@@ -306,6 +338,7 @@ void ASDSelfShotGunActor::BeginPlay()
 {
 	Super::BeginPlay();
 	ApplyAmmoStatusDisplaySettings();
+	CacheBulletRestRelativeTransforms();
 	OnRep_TableStatus();
 
 	RestActorTransform = GetActorTransform();
@@ -396,6 +429,8 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 	UpdateTinnitusSound(DeltaSeconds);
 	UpdateSelfShotCinematicCamera(DeltaSeconds);
 	UpdateCinematicCameraSteppedShake(DeltaSeconds);
+	TryStartPendingRaiseBulletLoadPresentation();
+	UpdateRaiseBulletLoadAnimation(DeltaSeconds);
 
 	if (AnimState == EGunAnimState::Idle)
 	{
@@ -650,9 +685,11 @@ float ASDSelfShotGunActor::GetPresentationFinishDelay(bool bLiveRound) const
 			+ FMath::Max(0.0f, ReturnTime);
 
 	float FinishDelay = ResolveDelay + GunMotionAfterResolve;
-	if (bLiveRound && bUseSelfShotCinematicCamera)
+	// Every local target shot owns a third-person camera, including an empty
+	// chamber. Reserve the camera hold for both outcomes so round progression
+	// cannot cancel an empty/fold shot before its view returns.
 	{
-		const float CameraExitDuration = bUseEliminationTableOverview
+		const float CameraExitDuration = bLiveRound && bUseEliminationTableOverview
 			? FMath::Max(
 				FMath::Max(0.0f, CinematicCameraBlendOutTime),
 				FMath::Max(0.0f, EliminationOverviewMoveTime))
@@ -688,9 +725,9 @@ bool ASDSelfShotGunActor::IsMultiplayerRoulettePresentation() const
 	return bMultiplayerRoulettePresentationActive;
 }
 
-bool ASDSelfShotGunActor::ShouldUseGunShotCamera(bool bLiveRound, bool bTargetsLocalPlayer)
+bool ASDSelfShotGunActor::ShouldUseGunShotCamera(bool bTargetsLocalPlayer)
 {
-	return bLiveRound && bTargetsLocalPlayer;
+	return bTargetsLocalPlayer;
 }
 
 bool ASDSelfShotGunActor::ShouldUseEliminationTableOverview(
@@ -698,7 +735,7 @@ bool ASDSelfShotGunActor::ShouldUseEliminationTableOverview(
 	bool bTargetsLocalPlayer,
 	int32 RemainingLives)
 {
-	return ShouldUseGunShotCamera(bLiveRound, bTargetsLocalPlayer) && RemainingLives <= 0;
+	return bLiveRound && bTargetsLocalPlayer && RemainingLives <= 0;
 }
 
 bool ASDSelfShotGunActor::IsGunShotTargetLocalPlayer(
@@ -725,6 +762,45 @@ FTransform ASDSelfShotGunActor::BuildSeatRelativeGunShotCameraTransform(
 	Result.SetRotation((TargetCharacterTransform.GetRotation() * RelativeRotation).GetNormalized());
 	Result.SetScale3D(PlayerOneCameraTransform.GetScale3D());
 	return Result;
+}
+
+FTransform ASDSelfShotGunActor::BuildFallbackGunShotCameraTransform(
+	const FVector& TableCenter,
+	const FTransform& TargetCharacterTransform,
+	float BackDistance,
+	float SideDistance,
+	float Height,
+	float LookAtHeight)
+{
+	const FVector SeatLocation = TargetCharacterTransform.GetLocation();
+	FVector DirectionToTable = TableCenter - SeatLocation;
+	DirectionToTable.Z = 0.0f;
+	if (!DirectionToTable.Normalize())
+	{
+		DirectionToTable = TargetCharacterTransform.GetUnitAxis(EAxis::X).GetSafeNormal2D();
+	}
+	if (DirectionToTable.IsNearlyZero())
+	{
+		DirectionToTable = FVector::ForwardVector;
+	}
+
+	FVector ScreenRight = FVector::CrossProduct(FVector::UpVector, DirectionToTable).GetSafeNormal();
+	if (ScreenRight.IsNearlyZero())
+	{
+		ScreenRight = FVector::RightVector;
+	}
+
+	const FVector CameraLocation = SeatLocation
+		- DirectionToTable * FMath::Max(0.0f, BackDistance)
+		+ ScreenRight * SideDistance
+		+ FVector::UpVector * Height;
+	const FVector LookAtLocation = SeatLocation
+		+ DirectionToTable * 30.0f
+		+ FVector::UpVector * LookAtHeight;
+	return FTransform(
+		(LookAtLocation - CameraLocation).Rotation(),
+		CameraLocation,
+		FVector::OneVector);
 }
 
 FTransform ASDSelfShotGunActor::BuildEliminationTableOverviewTransform(
@@ -756,6 +832,53 @@ FTransform ASDSelfShotGunActor::BuildEliminationTableOverviewTransform(
 		FVector::OneVector);
 }
 
+int32 ASDSelfShotGunActor::ResolveRaiseBulletLoadStartCount(
+	int32 PreviousBet,
+	int32 NewBet,
+	bool bReloadAllBullets)
+{
+	const int32 ClampedNewBet = FMath::Clamp(NewBet, 0, RevolverBulletSlotCount);
+	return bReloadAllBullets
+		? 0
+		: FMath::Clamp(PreviousBet, 0, ClampedNewBet);
+}
+
+float ASDSelfShotGunActor::CalculateRaiseBulletLoadSequenceDuration(
+	int32 BulletCount,
+	float BulletDuration,
+	float StaggerDelay)
+{
+	const int32 ClampedBulletCount = FMath::Clamp(BulletCount, 0, RevolverBulletSlotCount);
+	if (ClampedBulletCount <= 0)
+	{
+		return 0.0f;
+	}
+
+	return FMath::Max(0.0f, BulletDuration)
+		+ static_cast<float>(ClampedBulletCount - 1) * FMath::Max(0.0f, StaggerDelay);
+}
+
+float ASDSelfShotGunActor::GetRaiseBulletLoadPresentationDuration(
+	int32 PreviousBet,
+	int32 NewBet) const
+{
+	const int32 ClampedPreviousBet = FMath::Clamp(PreviousBet, 0, RevolverBulletSlotCount);
+	const int32 ClampedNewBet = FMath::Clamp(NewBet, 0, RevolverBulletSlotCount);
+	if (!bEnableRaiseBulletLoadAnimation || ClampedNewBet <= ClampedPreviousBet)
+	{
+		return 0.0f;
+	}
+
+	const int32 StartCount = ResolveRaiseBulletLoadStartCount(
+		ClampedPreviousBet,
+		ClampedNewBet,
+		bReloadAllBulletsOnRaise);
+	return CalculateRaiseBulletLoadSequenceDuration(
+		ClampedNewBet - StartCount,
+		RaiseBulletLoadDuration,
+		RaiseBulletLoadStaggerDelay);
+}
+
 void ASDSelfShotGunActor::SetTableStatus(
 	int32 LiveRounds,
 	int32 RemainingChambers,
@@ -775,35 +898,83 @@ void ASDSelfShotGunActor::SetTableStatus(
 	ForceNetUpdate();
 }
 
+float ASDSelfShotGunActor::PlayRaiseBulletLoadPresentation(
+	int32 PreviousBet,
+	int32 NewBet,
+	EShowDownPlayerSlot SourceSlot)
+{
+	if (!HasAuthority())
+	{
+		return 0.0f;
+	}
+
+	const int32 ClampedPreviousBet = FMath::Clamp(PreviousBet, 0, RevolverBulletSlotCount);
+	const int32 ClampedNewBet = FMath::Clamp(NewBet, 0, RevolverBulletSlotCount);
+	if (ClampedNewBet <= ClampedPreviousBet)
+	{
+		return 0.0f;
+	}
+
+	const AShowDownGameStateBase* ShowDownGameState = BoundShowDownGameState.Get();
+	if (!ShowDownGameState)
+	{
+		const UWorld* World = GetWorld();
+		ShowDownGameState = World ? World->GetGameState<AShowDownGameStateBase>() : nullptr;
+	}
+	const int32 PresentationRound = ShowDownGameState
+		? FMath::Max(0, ShowDownGameState->CurrentRound)
+		: 0;
+	MulticastPlayRaiseBulletLoadPresentation(
+		ClampedPreviousBet,
+		ClampedNewBet,
+		PresentationRound,
+		SourceSlot);
+	return GetRaiseBulletLoadPresentationDuration(ClampedPreviousBet, ClampedNewBet);
+}
+
+void ASDSelfShotGunActor::MulticastPlayRaiseBulletLoadPresentation_Implementation(
+	int32 PreviousBet,
+	int32 NewBet,
+	int32 PresentationRound,
+	EShowDownPlayerSlot SourceSlot)
+{
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	ReceiveRaiseBulletLoadPresentation(PreviousBet, NewBet, PresentationRound, SourceSlot);
+}
+
 void ASDSelfShotGunActor::OnRep_TableStatus()
 {
+	SynchronizeBulletPresentationFromStatus();
 	ApplyAmmoStatusDisplaySettings();
 }
 
 void ASDSelfShotGunActor::HandleGamePhaseChanged(EShowDownPhase NewPhase)
 {
 	StatusPhase = NewPhase;
-	if (NewPhase != EShowDownPhase::Roulette)
+	if (NewPhase != EShowDownPhase::Betting && bRaiseBulletLoadActive)
 	{
-		// A delayed client can have a later shot queued behind its current local
-		// presentation. Never carry that transient RPC work into another phase.
-		bMultiplayerRoulettePresentationActive = false;
-		PendingMultiplayerRoulettePresentations.Reset();
+		SetBulletPresentationImmediate(StatusLiveRounds);
 	}
+	TryStartPendingRaiseBulletLoadPresentation();
+	// Phase replication can overtake the gun actor channel. Pending work starts
+	// only in betting and is discarded once its round has already progressed.
 	ApplyAmmoStatusDisplaySettings();
+	RefreshRuntimeTickState();
 }
 
 void ASDSelfShotGunActor::HandleTableCinematicCue(
 	const ESDTableCinematicCue Cue,
 	uint8 PlayerSlotMask)
 {
-	if (Cue == ESDTableCinematicCue::Reset)
-	{
-		// Reset is a reliable presentation boundary and can arrive before the
-		// separately replicated phase. Clear delayed client work immediately.
-		bMultiplayerRoulettePresentationActive = false;
-		PendingMultiplayerRoulettePresentations.Reset();
-	}
+	// Reset and result are separate reliable multicasts. Reset is allowed to
+	// arrive while this peer is still presenting, so it must not discard the
+	// active or queued gun shots.
+	(void)Cue;
+	(void)PlayerSlotMask;
 }
 
 void ASDSelfShotGunActor::ApplyAmmoStatusDisplaySettings()
@@ -822,7 +993,9 @@ void ASDSelfShotGunActor::ApplyAmmoStatusDisplaySettings()
 		const bool bShouldShowAmmoStatus =
 			!bOpeningCardShowcaseStowed
 			&& !bOpeningCardDropActive
-			&& (StatusPhase == EShowDownPhase::Betting || StatusPhase == EShowDownPhase::Roulette);
+			&& (StatusPhase == EShowDownPhase::Betting
+				|| StatusPhase == EShowDownPhase::Reveal
+				|| StatusPhase == EShowDownPhase::Roulette);
 		AmmoStatusWidgetComponent->SetDrawSize(FVector2D(
 			FMath::Max(32.0f, AmmoStatusDrawSize.X),
 			FMath::Max(32.0f, AmmoStatusDrawSize.Y)));
@@ -831,7 +1004,10 @@ void ASDSelfShotGunActor::ApplyAmmoStatusDisplaySettings()
 			Cast<UShowDownAmmoStatusWidget>(AmmoStatusWidgetComponent->GetUserWidgetObject()))
 		{
 			AmmoWidget->SetAmmoStatus(
-				FText::FromString(FString::Printf(TEXT("%d/%d"), StatusLiveRounds, StatusRemainingChambers)),
+				FText::FromString(FString::Printf(
+					TEXT("%d/%d"),
+					DisplayedBulletCount,
+					StatusRemainingChambers)),
 				AmmoStatusFontSize,
 				AmmoStatusTextColor,
 				AmmoStatusBackgroundColor);
@@ -939,11 +1115,13 @@ bool ASDSelfShotGunActor::TryResolveCharacterPresentationShot(
 		return false;
 	}
 
-	OutSourceLocation = RevolverAnchor->GetComponentLocation();
+	const FTransform RevolverPresentationTransform =
+		TargetCharacter->GetRevolverPresentationTransform();
+	OutSourceLocation = RevolverPresentationTransform.GetLocation();
 
 	if (!TargetCharacter->ShouldAutoAimRevolverPresentationAtTarget())
 	{
-		FVector AimDirection = RevolverAnchor->GetForwardVector().GetSafeNormal();
+		FVector AimDirection = RevolverPresentationTransform.GetUnitAxis(EAxis::X).GetSafeNormal();
 		if (AimDirection.IsNearlyZero())
 		{
 			AimDirection = TargetCharacter->GetActorForwardVector().GetSafeNormal();
@@ -957,7 +1135,7 @@ bool ASDSelfShotGunActor::TryResolveCharacterPresentationShot(
 		if (OutRotationOffset)
 		{
 			FRotator ManualRotationOffset =
-				RevolverAnchor->GetComponentRotation()
+				RevolverPresentationTransform.Rotator()
 				- AimDirection.Rotation()
 				- TargetShotRotationOffset;
 			ManualRotationOffset.Normalize();
@@ -973,15 +1151,7 @@ bool ASDSelfShotGunActor::TryResolveCharacterPresentationShot(
 		*OutRotationOffset = RevolverAnchor->GetRelativeRotation();
 	}
 
-	const USkeletalMeshComponent* CharacterMesh = TargetCharacter->GetMesh();
-	const FName AimAttachName = TargetCharacter->ResolvePlayerCameraAttachName();
-	if (CharacterMesh
-		&& AimAttachName != NAME_None
-		&& (CharacterMesh->DoesSocketExist(AimAttachName)
-			|| CharacterMesh->GetBoneIndex(AimAttachName) != INDEX_NONE))
-	{
-		OutAimLocation = CharacterMesh->GetSocketLocation(AimAttachName);
-	}
+	TargetCharacter->TryGetRevolverPresentationAimLocation(OutAimLocation);
 
 	if ((OutAimLocation - OutSourceLocation).IsNearlyZero())
 	{
@@ -1027,7 +1197,7 @@ void ASDSelfShotGunActor::StartGunUse()
 	// Forced multiplayer results are known before the first raising tick. Move
 	// the victim to the third-person shot on the same frame the gun starts,
 	// instead of waiting through the authored (BP-overridden) raise duration.
-	TryStartKnownLiveLocalShotCamera();
+	TryStartLocalTargetShotCamera();
 
 	OnGunRaised.Broadcast();
 	if (UShowDownAudioSubsystem* AudioSubsystem = FindShowDownAudioSubsystem(this))
@@ -1053,6 +1223,13 @@ void ASDSelfShotGunActor::Interact_Implementation(AActor* Interactor)
 void ASDSelfShotGunActor::FireGun()
 {
 	const bool bLiveShot = ResolveCurrentShotIsLive();
+	if (CurrentShotTargetSlot != EShowDownPlayerSlot::None)
+	{
+		// Seat assignment and the seat camera can finish replicating during the
+		// raise animation. Re-evaluate on the actual fire frame before choosing the
+		// local victim camera.
+		bCurrentShotTargetsLocalPlayer = ShouldTreatSlotAsLocalPlayer(CurrentShotTargetSlot);
+	}
 	// This is the exact local frame where the trigger reaches full travel. Each
 	// peer runs the authored gun presentation locally, so publish a local-only
 	// cue instead of adding another replicated timer that could drift from it.
@@ -1066,13 +1243,13 @@ void ASDSelfShotGunActor::FireGun()
 	}
 	StateElapsedTime = 0.0f;
 	MechanismResetElapsedTime = 0.0f;
-	if (ShouldUseGunShotCamera(bLiveShot, bCurrentShotTargetsLocalPlayer)
+	if (ShouldUseGunShotCamera(bCurrentShotTargetsLocalPlayer)
 		&& !bSelfShotCinematicCameraActive
 		&& !bSelfShotCinematicCameraStartPending)
 	{
 		StartSelfShotCinematicCamera();
 	}
-	else if (!bLiveShot || !bCurrentShotTargetsLocalPlayer)
+	else if (!bCurrentShotTargetsLocalPlayer)
 	{
 		CancelSelfShotCinematicCamera();
 	}
@@ -1292,8 +1469,7 @@ void ASDSelfShotGunActor::StartSelfShotCinematicCamera()
 	CinematicCameraBlendOutElapsedTime = 0.0f;
 	EliminationOverviewElapsedTime = 0.0f;
 
-	if (!bUseSelfShotCinematicCamera
-		|| !bCurrentShotTargetsLocalPlayer
+	if (!bCurrentShotTargetsLocalPlayer
 		|| !PrepareLocalGunShotCamera())
 	{
 		return;
@@ -1303,17 +1479,18 @@ void ASDSelfShotGunActor::StartSelfShotCinematicCamera()
 	ActivateSelfShotCinematicCamera();
 }
 
-void ASDSelfShotGunActor::TryStartKnownLiveLocalShotCamera()
+void ASDSelfShotGunActor::TryStartLocalTargetShotCamera()
 {
 	if (bSelfShotCinematicCameraActive || bSelfShotCinematicCameraStartPending)
 	{
 		return;
 	}
 
-	const bool bKnownLiveRound = ShotResultMode == ESDSelfShotRoundMode::AlwaysLive
-		|| (ShotResultMode == ESDSelfShotRoundMode::ChamberPattern
-			&& IsChamberLive(CurrentChamberIndex));
-	if (ShouldUseGunShotCamera(bKnownLiveRound, bCurrentShotTargetsLocalPlayer))
+	if (CurrentShotTargetSlot != EShowDownPlayerSlot::None)
+	{
+		bCurrentShotTargetsLocalPlayer = ShouldTreatSlotAsLocalPlayer(CurrentShotTargetSlot);
+	}
+	if (ShouldUseGunShotCamera(bCurrentShotTargetsLocalPlayer))
 	{
 		StartSelfShotCinematicCamera();
 	}
@@ -1534,28 +1711,16 @@ bool ASDSelfShotGunActor::PrepareLocalGunShotCamera()
 	HideCameraVisualization(CameraTemplate);
 	AShowDownCharacter* ReferenceCharacter = FindGunShotCameraReferenceCharacter();
 	AShowDownCharacter* TargetCharacter = ResolveCurrentGunShotCameraTarget();
-	if (!IsValid(CameraTemplate) || !IsValid(ReferenceCharacter) || !IsValid(TargetCharacter))
+	if (!IsValid(TargetCharacter))
 	{
 		UE_LOG(
 			LogTemp,
 			Warning,
-			TEXT("Skipping local gun-shot camera: Template=%s ReferenceP1=%s Target=%s Slot=%d"),
+			TEXT("Skipping local gun-shot camera because the target is missing. Template=%s ReferenceP1=%s Slot=%d"),
 			*GetNameSafe(CameraTemplate),
 			*GetNameSafe(ReferenceCharacter),
-			*GetNameSafe(TargetCharacter),
 			static_cast<int32>(CurrentShotTargetSlot));
 		return false;
-	}
-
-	FTransform CameraReferenceTransform = CameraTemplate->GetActorTransform();
-	if (CameraTemplate == SelfShotCinematicCamera.Get())
-	{
-		if (!bHasGunShotCameraReferenceTransform)
-		{
-			GunShotCameraReferenceTransform = CameraReferenceTransform;
-			bHasGunShotCameraReferenceTransform = true;
-		}
-		CameraReferenceTransform = GunShotCameraReferenceTransform;
 	}
 
 	ACameraActor* LocalCamera = GetOrCreateLocalGunShotCamera();
@@ -1564,26 +1729,61 @@ bool ASDSelfShotGunActor::PrepareLocalGunShotCamera()
 		return false;
 	}
 
-	if (UCameraComponent* SourceCameraComponent = CameraTemplate->GetCameraComponent())
+	if (IsValid(CameraTemplate))
 	{
-		if (UCameraComponent* LocalCameraComponent = LocalCamera->GetCameraComponent())
+		if (UCameraComponent* SourceCameraComponent = CameraTemplate->GetCameraComponent())
 		{
-			FMinimalViewInfo ViewInfo;
-			SourceCameraComponent->GetCameraView(0.0f, ViewInfo);
-			LocalCameraComponent->SetProjectionMode(ViewInfo.ProjectionMode);
-			LocalCameraComponent->SetFieldOfView(ViewInfo.FOV);
-			LocalCameraComponent->SetOrthoWidth(ViewInfo.OrthoWidth);
-			LocalCameraComponent->SetAspectRatio(ViewInfo.AspectRatio);
-			LocalCameraComponent->SetConstraintAspectRatio(SourceCameraComponent->bConstrainAspectRatio);
-			LocalCameraComponent->PostProcessSettings = ViewInfo.PostProcessSettings;
-			LocalCameraComponent->PostProcessBlendWeight = ViewInfo.PostProcessBlendWeight;
+			if (UCameraComponent* LocalCameraComponent = LocalCamera->GetCameraComponent())
+			{
+				FMinimalViewInfo ViewInfo;
+				SourceCameraComponent->GetCameraView(0.0f, ViewInfo);
+				LocalCameraComponent->SetProjectionMode(ViewInfo.ProjectionMode);
+				LocalCameraComponent->SetFieldOfView(ViewInfo.FOV);
+				LocalCameraComponent->SetOrthoWidth(ViewInfo.OrthoWidth);
+				LocalCameraComponent->SetAspectRatio(ViewInfo.AspectRatio);
+				LocalCameraComponent->SetConstraintAspectRatio(SourceCameraComponent->bConstrainAspectRatio);
+				LocalCameraComponent->PostProcessSettings = ViewInfo.PostProcessSettings;
+				LocalCameraComponent->PostProcessBlendWeight = ViewInfo.PostProcessBlendWeight;
+			}
 		}
 	}
 
-	LocalCamera->SetActorTransform(BuildSeatRelativeGunShotCameraTransform(
-		CameraReferenceTransform,
-		ReferenceCharacter->GetActorTransform(),
-		TargetCharacter->GetActorTransform()));
+	if (IsValid(CameraTemplate) && IsValid(ReferenceCharacter))
+	{
+		FTransform CameraReferenceTransform = CameraTemplate->GetActorTransform();
+		if (CameraTemplate == SelfShotCinematicCamera.Get())
+		{
+			if (!bHasGunShotCameraReferenceTransform)
+			{
+				GunShotCameraReferenceTransform = CameraReferenceTransform;
+				bHasGunShotCameraReferenceTransform = true;
+			}
+			CameraReferenceTransform = GunShotCameraReferenceTransform;
+		}
+
+		LocalCamera->SetActorTransform(BuildSeatRelativeGunShotCameraTransform(
+			CameraReferenceTransform,
+			ReferenceCharacter->GetActorTransform(),
+			TargetCharacter->GetActorTransform()));
+	}
+	else
+	{
+		LocalCamera->SetActorTransform(BuildFallbackGunShotCameraTransform(
+			GetActorLocation(),
+			TargetCharacter->GetActorTransform(),
+			FallbackGunShotCameraBackDistance,
+			FallbackGunShotCameraSideDistance,
+			FallbackGunShotCameraHeight,
+			FallbackGunShotCameraLookAtHeight));
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("Using fallback local third-person gun-shot camera. Template=%s ReferenceP1=%s Target=%s Slot=%d"),
+			*GetNameSafe(CameraTemplate),
+			*GetNameSafe(ReferenceCharacter),
+			*GetNameSafe(TargetCharacter),
+			static_cast<int32>(CurrentShotTargetSlot));
+	}
 	ActiveSelfShotCinematicCamera = LocalCamera;
 	return true;
 }
@@ -2031,6 +2231,486 @@ void ASDSelfShotGunActor::StopTinnitusSound()
 	bTinnitusFadeOutStarted = false;
 }
 
+void ASDSelfShotGunActor::CacheBulletRestRelativeTransforms()
+{
+	if (BulletRestRelativeTransforms.Num() == RevolverBulletSlotCount)
+	{
+		return;
+	}
+
+	BulletRestRelativeTransforms.SetNum(RevolverBulletSlotCount);
+	for (int32 BulletIndex = 0; BulletIndex < RevolverBulletSlotCount; ++BulletIndex)
+	{
+		if (const UStaticMeshComponent* BulletMesh = GetBulletMeshComponent(BulletIndex))
+		{
+			BulletRestRelativeTransforms[BulletIndex] = BulletMesh->GetRelativeTransform();
+		}
+		else
+		{
+			BulletRestRelativeTransforms[BulletIndex] = FTransform::Identity;
+		}
+	}
+}
+
+UStaticMeshComponent* ASDSelfShotGunActor::GetBulletMeshComponent(int32 BulletIndex) const
+{
+	switch (BulletIndex)
+	{
+	case 0:
+		return BulletMesh01;
+	case 1:
+		return BulletMesh02;
+	case 2:
+		return BulletMesh03;
+	case 3:
+		return BulletMesh04;
+	case 4:
+		return BulletMesh05;
+	case 5:
+		return BulletMesh06;
+	default:
+		return nullptr;
+	}
+}
+
+UStaticMeshComponent* ASDSelfShotGunActor::GetBettingBulletMeshComponent(int32 BulletIndex) const
+{
+	return BettingBulletMeshes.IsValidIndex(BulletIndex)
+		? BettingBulletMeshes[BulletIndex]
+		: nullptr;
+}
+
+void ASDSelfShotGunActor::SynchronizeBulletPresentationFromStatus()
+{
+	CacheBulletRestRelativeTransforms();
+	const int32 TargetBulletCount = FMath::Clamp(StatusLiveRounds, 0, RevolverBulletSlotCount);
+	if (bRaiseBulletLoadActive && StatusPhase == EShowDownPhase::Betting)
+	{
+		// A raise RPC is reliable while status replication is state based. During
+		// betting, an older coalesced count must not cancel a newer cascade.
+		return;
+	}
+
+	SetBulletPresentationImmediate(TargetBulletCount);
+	TryStartPendingRaiseBulletLoadPresentation();
+	RefreshRuntimeTickState();
+}
+
+void ASDSelfShotGunActor::SetBulletPresentationImmediate(int32 BulletCount)
+{
+	CacheBulletRestRelativeTransforms();
+	const int32 ClampedBulletCount = FMath::Clamp(BulletCount, 0, RevolverBulletSlotCount);
+	for (int32 BulletIndex = 0; BulletIndex < RevolverBulletSlotCount; ++BulletIndex)
+	{
+		// The old slot meshes are retained only as authored transform markers.
+		// All visible rounds use the dedicated bulletBetting asset.
+		if (UStaticMeshComponent* LegacyBulletMesh = GetBulletMeshComponent(BulletIndex))
+		{
+			LegacyBulletMesh->SetVisibility(false, true);
+			LegacyBulletMesh->SetHiddenInGame(true, true);
+		}
+
+		UStaticMeshComponent* BettingBulletMesh = GetBettingBulletMeshComponent(BulletIndex);
+		if (!BettingBulletMesh || !BulletRestRelativeTransforms.IsValidIndex(BulletIndex))
+		{
+			continue;
+		}
+
+		const FTransform& SlotTransform = BulletRestRelativeTransforms[BulletIndex];
+		BettingBulletMesh->SetRelativeLocationAndRotation(
+			SlotTransform.GetLocation(),
+			SlotTransform.GetRotation());
+		BettingBulletMesh->SetRelativeScale3D(FVector(FMath::Max(0.001f, RaiseBulletBettingScale)));
+		const bool bVisible = BulletIndex < ClampedBulletCount;
+		BettingBulletMesh->SetVisibility(bVisible, true);
+		BettingBulletMesh->SetHiddenInGame(!bVisible, true);
+	}
+
+	DisplayedBulletCount = ClampedBulletCount;
+	RaiseBulletLoadPreviousCount = ClampedBulletCount;
+	RaiseBulletLoadStartCount = ClampedBulletCount;
+	RaiseBulletLoadTargetCount = ClampedBulletCount;
+	RaiseBulletLoadElapsedTime = 0.0f;
+	bRaiseBulletLoadActive = false;
+	ActiveRaiseBulletSourceSlot = EShowDownPlayerSlot::None;
+}
+
+FVector ASDSelfShotGunActor::ResolveRaiseBulletSourceWorldLocation(
+	EShowDownPlayerSlot SourceSlot,
+	int32 StartCount) const
+{
+	const AShowDownCharacter* SourceCharacter = Cast<AShowDownCharacter>(
+		FindMultiplayerShotTarget(SourceSlot));
+	if (!SourceCharacter && (SourceSlot == EShowDownPlayerSlot::Player1
+		|| SourceSlot == EShowDownPlayerSlot::Player2))
+	{
+		// Single player assigns the AI opponent to the Opponent role with no network
+		// slot. Preserve Player1/Player2 as the wire format and fall back to roles.
+		const EShowDownCharacterRole ExpectedRole = SourceSlot == EShowDownPlayerSlot::Player1
+			? EShowDownCharacterRole::Player
+			: EShowDownCharacterRole::Opponent;
+		if (UWorld* World = GetWorld())
+		{
+			for (TActorIterator<AShowDownCharacter> It(World); It; ++It)
+			{
+				const AShowDownCharacter* Candidate = *It;
+				if (IsValid(Candidate)
+					&& Candidate->IsCharacterSceneActive()
+					&& Candidate->GetCharacterRole() == ExpectedRole)
+				{
+					SourceCharacter = Candidate;
+					break;
+				}
+			}
+		}
+	}
+
+	if (SourceCharacter)
+	{
+		if (const USkeletalMeshComponent* CharacterMesh = SourceCharacter->GetMesh())
+		{
+			static const FName HandCandidates[] = {
+				TEXT("RightHand"),
+				TEXT("hand_r"),
+				TEXT("mixamorig:RightHand"),
+				TEXT("R_Hand")
+			};
+
+			FName ResolvedHandName = RaiseBulletSourceHandName;
+			if (ResolvedHandName == NAME_None
+				|| (CharacterMesh->GetBoneIndex(ResolvedHandName) == INDEX_NONE
+					&& !CharacterMesh->DoesSocketExist(ResolvedHandName)))
+			{
+				ResolvedHandName = NAME_None;
+				for (const FName Candidate : HandCandidates)
+				{
+					if (CharacterMesh->GetBoneIndex(Candidate) != INDEX_NONE
+						|| CharacterMesh->DoesSocketExist(Candidate))
+					{
+						ResolvedHandName = Candidate;
+						break;
+					}
+				}
+			}
+
+			if (ResolvedHandName != NAME_None)
+			{
+				return CharacterMesh
+					->GetSocketTransform(ResolvedHandName, RTS_World)
+					.TransformPosition(RaiseBulletSourceHandOffset);
+			}
+		}
+
+		return SourceCharacter->GetActorTransform().TransformPosition(
+			RaiseBulletFallbackCharacterOffset);
+	}
+
+	if (ChamberPivot && BulletRestRelativeTransforms.IsValidIndex(StartCount))
+	{
+		return ChamberPivot->GetComponentTransform().TransformPosition(
+			BulletRestRelativeTransforms[StartCount].GetLocation()
+				+ RaiseBulletLoadStartOffset);
+	}
+
+	return GetActorLocation();
+}
+
+void ASDSelfShotGunActor::ReceiveRaiseBulletLoadPresentation(
+	int32 PreviousBet,
+	int32 NewBet,
+	int32 PresentationRound,
+	EShowDownPlayerSlot SourceSlot)
+{
+	const int32 ClampedPreviousBet = FMath::Clamp(PreviousBet, 0, RevolverBulletSlotCount);
+	const int32 ClampedNewBet = FMath::Clamp(NewBet, 0, RevolverBulletSlotCount);
+	if (ClampedNewBet <= ClampedPreviousBet)
+	{
+		return;
+	}
+
+	const AShowDownGameStateBase* ShowDownGameState = BoundShowDownGameState.Get();
+	if (!ShowDownGameState)
+	{
+		const UWorld* World = GetWorld();
+		ShowDownGameState = World ? World->GetGameState<AShowDownGameStateBase>() : nullptr;
+	}
+
+	const int32 LocalRound = ShowDownGameState
+		? FMath::Max(0, ShowDownGameState->CurrentRound)
+		: 0;
+	const EShowDownPhase LocalPhase = ShowDownGameState
+		? ShowDownGameState->CurrentPhase
+		: StatusPhase;
+	const int32 SafePresentationRound = FMath::Max(0, PresentationRound);
+	if (SafePresentationRound > 0 && LocalRound > SafePresentationRound)
+	{
+		ClearPendingRaiseBulletLoadPresentation();
+		SetBulletPresentationImmediate(StatusLiveRounds);
+		RefreshRuntimeTickState();
+		return;
+	}
+
+	if (SafePresentationRound > 0 && LocalRound > 0 && LocalRound < SafePresentationRound)
+	{
+		PendingRaiseBulletLoadPreviousCount = ClampedPreviousBet;
+		PendingRaiseBulletLoadTargetCount = ClampedNewBet;
+		PendingRaiseBulletLoadRound = SafePresentationRound;
+		PendingRaiseBulletLoadSourceSlot = SourceSlot;
+		bRaiseBulletLoadPending = true;
+		RefreshRuntimeTickState();
+		return;
+	}
+
+	if (IsRaiseBulletLoadTerminalPhase(LocalPhase))
+	{
+		// GameState and the gun replicate on different actor channels. A phase may
+		// legitimately overtake this reliable RPC; never replay a stale load during
+		// reveal or roulette.
+		ClearPendingRaiseBulletLoadPresentation();
+		SetBulletPresentationImmediate(StatusLiveRounds);
+		RefreshRuntimeTickState();
+		return;
+	}
+
+	if (LocalPhase != EShowDownPhase::Betting)
+	{
+		PendingRaiseBulletLoadPreviousCount = ClampedPreviousBet;
+		PendingRaiseBulletLoadTargetCount = ClampedNewBet;
+		PendingRaiseBulletLoadRound = SafePresentationRound;
+		PendingRaiseBulletLoadSourceSlot = SourceSlot;
+		bRaiseBulletLoadPending = true;
+		RefreshRuntimeTickState();
+		return;
+	}
+
+	ClearPendingRaiseBulletLoadPresentation();
+	StartRaiseBulletLoadAnimation(ClampedPreviousBet, ClampedNewBet, SourceSlot);
+}
+
+void ASDSelfShotGunActor::TryStartPendingRaiseBulletLoadPresentation()
+{
+	if (!bRaiseBulletLoadPending)
+	{
+		return;
+	}
+
+	const AShowDownGameStateBase* ShowDownGameState = BoundShowDownGameState.Get();
+	if (!ShowDownGameState)
+	{
+		const UWorld* World = GetWorld();
+		ShowDownGameState = World ? World->GetGameState<AShowDownGameStateBase>() : nullptr;
+	}
+
+	const int32 LocalRound = ShowDownGameState
+		? FMath::Max(0, ShowDownGameState->CurrentRound)
+		: 0;
+	const EShowDownPhase LocalPhase = ShowDownGameState
+		? ShowDownGameState->CurrentPhase
+		: StatusPhase;
+	if (PendingRaiseBulletLoadRound > 0 && LocalRound > PendingRaiseBulletLoadRound)
+	{
+		ClearPendingRaiseBulletLoadPresentation();
+		SetBulletPresentationImmediate(StatusLiveRounds);
+		return;
+	}
+	if (PendingRaiseBulletLoadRound > 0
+		&& LocalRound > 0
+		&& LocalRound < PendingRaiseBulletLoadRound)
+	{
+		return;
+	}
+	if (IsRaiseBulletLoadTerminalPhase(LocalPhase))
+	{
+		ClearPendingRaiseBulletLoadPresentation();
+		SetBulletPresentationImmediate(StatusLiveRounds);
+		return;
+	}
+	if (LocalPhase != EShowDownPhase::Betting)
+	{
+		return;
+	}
+
+	const int32 PreviousBet = PendingRaiseBulletLoadPreviousCount;
+	const int32 NewBet = PendingRaiseBulletLoadTargetCount;
+	const EShowDownPlayerSlot SourceSlot = PendingRaiseBulletLoadSourceSlot;
+	ClearPendingRaiseBulletLoadPresentation();
+	StartRaiseBulletLoadAnimation(PreviousBet, NewBet, SourceSlot);
+}
+
+void ASDSelfShotGunActor::ClearPendingRaiseBulletLoadPresentation()
+{
+	bRaiseBulletLoadPending = false;
+	PendingRaiseBulletLoadPreviousCount = 0;
+	PendingRaiseBulletLoadTargetCount = 0;
+	PendingRaiseBulletLoadRound = 0;
+	PendingRaiseBulletLoadSourceSlot = EShowDownPlayerSlot::None;
+}
+
+void ASDSelfShotGunActor::StartRaiseBulletLoadAnimation(
+	int32 PreviousBet,
+	int32 NewBet,
+	EShowDownPlayerSlot SourceSlot)
+{
+	const int32 ClampedPreviousBet = FMath::Clamp(PreviousBet, 0, RevolverBulletSlotCount);
+	const int32 ClampedNewBet = FMath::Clamp(NewBet, 0, RevolverBulletSlotCount);
+	if (ClampedNewBet <= ClampedPreviousBet)
+	{
+		return;
+	}
+
+	if (!bEnableRaiseBulletLoadAnimation)
+	{
+		SetBulletPresentationImmediate(ClampedNewBet);
+		ApplyAmmoStatusDisplaySettings();
+		RefreshRuntimeTickState();
+		return;
+	}
+
+	const int32 StartCount = ResolveRaiseBulletLoadStartCount(
+		ClampedPreviousBet,
+		ClampedNewBet,
+		bReloadAllBulletsOnRaise);
+	SetBulletPresentationImmediate(StartCount);
+	RaiseBulletLoadPreviousCount = ClampedPreviousBet;
+	RaiseBulletLoadStartCount = StartCount;
+	RaiseBulletLoadTargetCount = ClampedNewBet;
+	RaiseBulletLoadElapsedTime = 0.0f;
+	ActiveRaiseBulletSourceSlot = SourceSlot;
+	ActiveRaiseBulletSourceWorldLocation = ResolveRaiseBulletSourceWorldLocation(SourceSlot, StartCount);
+	bRaiseBulletLoadActive = true;
+	UpdateRaiseBulletLoadAnimation(0.0f);
+	ApplyAmmoStatusDisplaySettings();
+	RefreshRuntimeTickState();
+}
+
+void ASDSelfShotGunActor::UpdateRaiseBulletLoadAnimation(float DeltaSeconds)
+{
+	if (!bRaiseBulletLoadActive
+		|| !ChamberPivot
+		|| BulletRestRelativeTransforms.Num() != RevolverBulletSlotCount)
+	{
+		return;
+	}
+
+	RaiseBulletLoadElapsedTime += FMath::Max(0.0f, DeltaSeconds);
+	const float BulletDuration = FMath::Max(0.05f, RaiseBulletLoadDuration);
+	const float StaggerDelay = FMath::Max(0.0f, RaiseBulletLoadStaggerDelay);
+	const float StartHoldTime = FMath::Clamp(
+		RaiseBulletLoadStartHoldTime,
+		0.0f,
+		FMath::Max(0.0f, BulletDuration - 0.05f));
+	const float TravelDuration = FMath::Max(0.05f, BulletDuration - StartHoldTime);
+	const int32 StartCount = FMath::Clamp(
+		RaiseBulletLoadStartCount,
+		0,
+		RaiseBulletLoadTargetCount);
+	const int32 TargetCount = FMath::Clamp(
+		RaiseBulletLoadTargetCount,
+		StartCount,
+		RevolverBulletSlotCount);
+
+	for (int32 BulletIndex = 0; BulletIndex < RevolverBulletSlotCount; ++BulletIndex)
+	{
+		UStaticMeshComponent* BettingBulletMesh = GetBettingBulletMeshComponent(BulletIndex);
+		if (!BettingBulletMesh)
+		{
+			continue;
+		}
+
+		const FTransform& RestTransform = BulletRestRelativeTransforms[BulletIndex];
+		if (BulletIndex < StartCount)
+		{
+			BettingBulletMesh->SetRelativeLocationAndRotation(
+				RestTransform.GetLocation(),
+				RestTransform.GetRotation());
+			BettingBulletMesh->SetRelativeScale3D(FVector(FMath::Max(0.001f, RaiseBulletBettingScale)));
+			BettingBulletMesh->SetVisibility(true, true);
+			BettingBulletMesh->SetHiddenInGame(false, true);
+			continue;
+		}
+		if (BulletIndex >= TargetCount)
+		{
+			BettingBulletMesh->SetRelativeLocationAndRotation(
+				RestTransform.GetLocation(),
+				RestTransform.GetRotation());
+			BettingBulletMesh->SetRelativeScale3D(FVector(FMath::Max(0.001f, RaiseBulletBettingScale)));
+			BettingBulletMesh->SetVisibility(false, true);
+			BettingBulletMesh->SetHiddenInGame(true, true);
+			continue;
+		}
+
+		const int32 SequenceIndex = BulletIndex - StartCount;
+		const float LocalElapsedTime = RaiseBulletLoadElapsedTime
+			- static_cast<float>(SequenceIndex) * StaggerDelay;
+		if (LocalElapsedTime < 0.0f)
+		{
+			BettingBulletMesh->SetVisibility(false, true);
+			BettingBulletMesh->SetHiddenInGame(true, true);
+			continue;
+		}
+
+		BettingBulletMesh->SetVisibility(true, true);
+		BettingBulletMesh->SetHiddenInGame(false, true);
+		const FTransform ChamberWorldTransform = ChamberPivot->GetComponentTransform();
+		const FVector TargetWorldLocation = ChamberWorldTransform.TransformPosition(
+			RestTransform.GetLocation());
+		if (LocalElapsedTime >= BulletDuration)
+		{
+			BettingBulletMesh->SetRelativeLocationAndRotation(
+				RestTransform.GetLocation(),
+				RestTransform.GetRotation());
+			BettingBulletMesh->SetRelativeScale3D(FVector(FMath::Max(0.001f, RaiseBulletBettingScale)));
+			continue;
+		}
+
+		const float TravelElapsedTime = FMath::Max(0.0f, LocalElapsedTime - StartHoldTime);
+		const float Alpha = FMath::Clamp(TravelElapsedTime / TravelDuration, 0.0f, 1.0f);
+		// Intentionally use a plain lerp: every bullet follows one straight segment
+		// from the raiser's hand directly into its cylinder slot.
+		const FVector CurrentWorldLocation = FMath::Lerp(
+			ActiveRaiseBulletSourceWorldLocation,
+			TargetWorldLocation,
+			Alpha);
+		const FVector TravelDirection = (
+			TargetWorldLocation - ActiveRaiseBulletSourceWorldLocation).GetSafeNormal();
+		const FQuat CurrentWorldRotation = TravelDirection.IsNearlyZero()
+			? ChamberWorldTransform.TransformRotation(RestTransform.GetRotation())
+			: FRotationMatrix::MakeFromZ(TravelDirection).ToQuat();
+		BettingBulletMesh->SetWorldLocationAndRotation(
+			CurrentWorldLocation,
+			CurrentWorldRotation);
+		BettingBulletMesh->SetWorldScale3D(FVector(FMath::Max(0.001f, RaiseBulletBettingScale)));
+	}
+
+	const int32 AnimatedBulletCount = TargetCount - StartCount;
+	int32 SettledBulletCount = StartCount;
+	for (int32 SequenceIndex = 0; SequenceIndex < AnimatedBulletCount; ++SequenceIndex)
+	{
+		const float BulletSettleTime = BulletDuration
+			+ static_cast<float>(SequenceIndex) * StaggerDelay;
+		if (RaiseBulletLoadElapsedTime + KINDA_SMALL_NUMBER >= BulletSettleTime)
+		{
+			SettledBulletCount = StartCount + SequenceIndex + 1;
+		}
+	}
+	if (DisplayedBulletCount != SettledBulletCount)
+	{
+		DisplayedBulletCount = SettledBulletCount;
+		ApplyAmmoStatusDisplaySettings();
+	}
+
+	const float SequenceDuration = CalculateRaiseBulletLoadSequenceDuration(
+		AnimatedBulletCount,
+		BulletDuration,
+		StaggerDelay);
+	if (RaiseBulletLoadElapsedTime >= SequenceDuration)
+	{
+		SetBulletPresentationImmediate(TargetCount);
+		ApplyAmmoStatusDisplaySettings();
+		RefreshRuntimeTickState();
+	}
+}
+
 bool ASDSelfShotGunActor::IsRuntimeTickRequired() const
 {
 	const bool bPresentationActive = AnimState != EGunAnimState::Idle
@@ -2040,7 +2720,9 @@ bool ASDSelfShotGunActor::IsRuntimeTickRequired() const
 		|| bSelfShotCinematicCameraStartPending
 		|| bCinematicCameraShakeActive
 		|| TinnitusAudioComponent != nullptr
-		|| bOpeningCardDropActive;
+		|| bOpeningCardDropActive
+		|| bRaiseBulletLoadActive
+		|| bRaiseBulletLoadPending;
 
 #if WITH_EDITOR
 	return bPresentationActive || bEnableRevolverPlacementDevMode || bRevolverPlacementDevPreviewActive;
@@ -2358,6 +3040,7 @@ void ASDSelfShotGunActor::HandleGameStateSet(AGameStateBase* GameState)
 		ShowDownGameState->OnMultiplayerRoulettePresentation.AddUniqueDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
+		HandleGamePhaseChanged(ShowDownGameState->CurrentPhase);
 	}
 }
 
@@ -2392,7 +3075,7 @@ void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(EShowDownPlayerSlo
 {
 	if (!CanInteract_Implementation(nullptr))
 	{
-		if (!HasAuthority())
+		if (GetNetMode() != NM_DedicatedServer)
 		{
 			PendingMultiplayerRoulettePresentations.Add({ TargetSlot, bHit });
 			UE_LOG(
@@ -2450,7 +3133,7 @@ void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(EShowDownPlayerSlo
 
 void ASDSelfShotGunActor::TryStartPendingMultiplayerRoulettePresentation()
 {
-	if (HasAuthority()
+	if (GetNetMode() == NM_DedicatedServer
 		|| PendingMultiplayerRoulettePresentations.IsEmpty()
 		|| !CanInteract_Implementation(nullptr))
 	{
@@ -2470,19 +3153,27 @@ bool ASDSelfShotGunActor::ShouldTreatSlotAsLocalPlayer(EShowDownPlayerSlot Targe
 		return false;
 	}
 
-	const APlayerController* LocalPlayerController = FindLocalPlayerController(this);
+	const AShowDownPlayerController* LocalPlayerController = Cast<AShowDownPlayerController>(
+		FindLocalPlayerController(this));
 	if (!LocalPlayerController
 		|| !LocalPlayerController->IsLocalController()
 		|| !LocalPlayerController->GetLocalPlayer())
 	{
 		return false;
 	}
-	const ASDPlayerState* LocalPlayerState = LocalPlayerController
-		? Cast<ASDPlayerState>(LocalPlayerController->PlayerState)
-		: nullptr;
+	if (IsGunShotTargetLocalPlayer(
+		TargetSlot,
+		LocalPlayerController->ResolveLocalShowDownPlayerSlot()))
+	{
+		return true;
+	}
 
-	return LocalPlayerState
-		&& IsGunShotTargetLocalPlayer(TargetSlot, LocalPlayerState->ShowDownSlot);
+	// Seat assignment may arrive one frame after the reliable shot presentation.
+	// The character's local marker gives the victim a deterministic fallback,
+	// while observers still fail this check and keep their current first-person view.
+	const AShowDownCharacter* TargetCharacter = Cast<AShowDownCharacter>(
+		FindMultiplayerShotTarget(TargetSlot));
+	return IsValid(TargetCharacter) && TargetCharacter->IsLocalPlayerCharacter();
 }
 
 bool ASDSelfShotGunActor::ShouldTreatTargetAsLocalPlayer(AActor* TargetActor) const

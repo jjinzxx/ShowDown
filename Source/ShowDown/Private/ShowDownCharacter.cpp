@@ -553,6 +553,22 @@ FTransform AShowDownCharacter::GetRevolverPresentationTransform() const
 		: GetActorTransform();
 }
 
+bool AShowDownCharacter::TryGetRevolverPresentationAimLocation(FVector& OutAimLocation) const
+{
+	const USkeletalMeshComponent* CharacterMesh = GetMesh();
+	const FName AimAttachName = ResolvePlayerCameraAttachName();
+	if (!CharacterMesh
+		|| AimAttachName == NAME_None
+		|| (!CharacterMesh->DoesSocketExist(AimAttachName)
+			&& CharacterMesh->GetBoneIndex(AimAttachName) == INDEX_NONE))
+	{
+		return false;
+	}
+
+	OutAimLocation = CharacterMesh->GetSocketLocation(AimAttachName);
+	return true;
+}
+
 void AShowDownCharacter::StartHitRagdoll()
 {
 	StartHitRecoveryPresentation(CharacterLives <= 0);
@@ -1582,10 +1598,6 @@ void AShowDownCharacter::LogAssignedActionAnimationFailure(
 		ActionAnimationFallbackReturnDelay);
 
 	UE_LOG(LogTemp, Warning, TEXT("%s"), *Message);
-	if (GEngine && GetWorld() && GetWorld()->IsGameWorld())
-	{
-		GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Yellow, Message);
-	}
 }
 
 FName AShowDownCharacter::ResolveRagdollHitBoneName() const

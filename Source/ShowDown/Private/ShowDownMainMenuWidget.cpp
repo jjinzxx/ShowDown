@@ -246,12 +246,12 @@ void UShowDownMainMenuWidget::RefreshPlayerInfo()
 
 		if (Text_Coin)
 		{
-			Text_Coin->SetText(FText::FromString(TEXT("◉ 0")));
+			Text_Coin->SetText(FText::FromString(TEXT("0$")));
 		}
 
 		if (Text_Score)
 		{
-			Text_Score->SetText(FText::FromString(TEXT("▣ 0")));
+			Text_Score->SetText(FText::FromString(TEXT("0P")));
 		}
 
 		return;
@@ -265,14 +265,14 @@ void UShowDownMainMenuWidget::RefreshPlayerInfo()
 	if (Text_Coin)
 	{
 		Text_Coin->SetText(FText::FromString(FString::Printf(
-			TEXT("◉ %s"),
+			TEXT("%s$"),
 			*FText::AsNumber(SupabaseSubsystem->GetCoin()).ToString())));
 	}
 
 	if (Text_Score)
 	{
 		Text_Score->SetText(FText::FromString(FString::Printf(
-			TEXT("▣ %s"),
+			TEXT("%sP"),
 			*FText::AsNumber(SupabaseSubsystem->GetScore()).ToString())));
 	}
 }

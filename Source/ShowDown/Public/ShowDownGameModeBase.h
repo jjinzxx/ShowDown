@@ -221,6 +221,13 @@ public:
 		float PresentationFinishDelay,
 		float PostShotHoldDuration);
 
+	// Keeps the next multiplayer turn from overtaking a configurable bullet-load
+	// cascade, while retaining the normal action interval for shorter effects.
+	static float CalculateRaiseBulletLoadHandoffDelay(
+		float BaseActionInterval,
+		float PresentationDuration,
+		float SafetyPadding = 0.10f);
+
 	void RequestMultiplayerRestartFromController(AController* RequestingController);
 
 	// 게임 종료 후 허브(메인메뉴)로 돌아갈 때 게임판을 정리합니다.
@@ -467,8 +474,17 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Single Player Intro", meta = (EditCondition = "bPlaySinglePlayerIntro && bUseSinglePlayerIntroFallbackWhenNoSequence", ClampMin = "0.0"))
 	float SinglePlayerIntroFallbackStartDistance = 280.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Chat", meta = (DisplayName = "Single Player Opening Greeting"))
+	FString SinglePlayerOpeningGreeting = TEXT("왔네. 한 판 제대로 해보자.");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Decision Timer", meta = (ClampMin = "1.0", DisplayName = "Card Selection Time Limit"))
+	float CardSelectionTimeLimitSeconds = 30.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Decision Timer", meta = (ClampMin = "1.0", DisplayName = "Betting Turn Time Limit"))
+	float BettingTurnTimeLimitSeconds = 30.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Debug")
-	bool bShowGameFlowDebugMessages = true;
+	bool bShowGameFlowDebugMessages = false;
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Betting")
 	void RequestPlayerBetAction(EShowDownBetAction Action, int32 TargetBet);
@@ -493,6 +509,7 @@ private:
 	
 	bool bBettingPhase = false;
 	FTimerHandle RevealDelayHandle;
+	FTimerHandle DecisionTimeoutTimerHandle;
 	FTimerHandle MultiplayerRevealContinuationTimerHandle;
 	TArray<FTimerHandle> CardRevealPresentationTimerHandles;
 	TArray<FTimerHandle> MultiplayerRoundTimerHandles;
@@ -653,6 +670,7 @@ private:
 	bool bSinglePlayerGameplayCameraReady = false;
 	bool bSinglePlayerStageReadyForMatchIntro = false;
 	bool bSinglePlayerMatchIntroQueued = false;
+	bool bSinglePlayerOpeningGreetingSent = false;
 	bool bInitialCardDealPresentationInProgress = false;
 	bool bInitialCardDealPresentationPlayed = false;
 	bool bInitialDealCinematicCueActive = false;
@@ -720,6 +738,7 @@ private:
 	FSDLLMBossContext BuildLLMChatContext(const FString& PlayerDialogue) const;
 	void TryRequestBossChatReply(const FString& PlayerDialogue, bool bIgnoreCooldown = false);
 	void RequestPendingBossChatReply();
+	void QueueSinglePlayerOpeningGreeting();
 	void AppendRecentDialogueLine(const FString& Speaker, const FString& Message);
 	void ResetCurrentRoundMemory();
 	void RecordCurrentRoundAction(const FString& ActionText);
@@ -727,6 +746,23 @@ private:
 	FString GetSideText(EShowDownSide Side) const;
 	FString GetSideDisplayText(EShowDownSide Side) const;
 	FString GetRoundResultText(EShowDownRoundResult Result) const;
+	void StartDecisionTimer(
+		EShowDownDecisionTimerKind Kind,
+		float DurationSeconds,
+		EShowDownSide TargetSide,
+		EShowDownPlayerSlot TargetSlot);
+	void ClearDecisionTimer();
+	void HandleDecisionTimerExpired(
+		int32 ExpectedRevision,
+		EShowDownDecisionTimerKind ExpectedKind,
+		EShowDownSide ExpectedSide,
+		EShowDownPlayerSlot ExpectedSlot,
+		int32 ExpectedRound,
+		uint32 ExpectedMultiplayerRoundSequence);
+	void HandleSinglePlayerCardSelectionTimeout();
+	void HandleMultiplayerCardSelectionTimeout();
+	void HandleSinglePlayerBettingTimeout();
+	void HandleMultiplayerBettingTimeout(EShowDownPlayerSlot ExpectedSlot);
 	void BeginCardSelectionRound();
 	void SetNextRoundFirstSideFromResult(EShowDownRoundResult Result);
 	void FinishBettingAndResolveRound();
@@ -772,9 +808,19 @@ private:
 	void PlayCollectorActionPresentationThen(TFunction<void()>&& Continuation);
 	void FinishCollectorActionPresentation();
 	void BroadcastCardSelectedAction(EShowDownSide Side) const;
-	void BroadcastBetActionCommitted(EShowDownSide Side, EShowDownBetAction Action, int32 TargetBet) const;
+	void BroadcastBetActionCommitted(
+		EShowDownSide Side,
+		EShowDownBetAction Action,
+		int32 TargetBet,
+		int32 RaiseAmount = 0,
+		bool bWasAutomatic = false) const;
 	void BroadcastMultiplayerCardSelectedAction(ASDPlayerState* Player) const;
-	void BroadcastMultiplayerBetActionCommitted(ASDPlayerState* Player, EShowDownBetAction Action, int32 TargetBet) const;
+	void BroadcastMultiplayerBetActionCommitted(
+		ASDPlayerState* Player,
+		EShowDownBetAction Action,
+		int32 TargetBet,
+		int32 RaiseAmount = 0,
+		bool bWasAutomatic = false) const;
 	void BroadcastSystemChatMessage(const FString& Message) const;
 	void PlaySelfShotGunPresentationThen(
 		EShowDownSide TargetSide,
@@ -892,7 +938,11 @@ private:
 	void StartMultiplayerCardSelection();
 	void HandleMultiplayerSelectedCard(ASDPlayerState* SubmittingPlayer, ACard* SelectedCard);
 	void StartMultiplayerBetting();
-	void HandleMultiplayerBetAction(ASDPlayerState* SubmittingPlayer, EShowDownBetAction Action, int32 TargetBet);
+	void HandleMultiplayerBetAction(
+		ASDPlayerState* SubmittingPlayer,
+		EShowDownBetAction Action,
+		int32 TargetBet,
+		bool bWasAutomatic = false);
 	void ScheduleMultiplayerRoundAction(float DelaySeconds, TFunction<void()>&& Action);
 	void QueueNextMultiplayerBetTurn(EShowDownPlayerSlot ActingSlot, int32 CurrentBet, float DelaySeconds);
 	void QueueMultiplayerRevealAfterBetting(float CompletedBetFocusHoldSeconds = 0.0f);
@@ -918,6 +968,10 @@ private:
 		TArray<TWeakObjectPtr<ASDPlayerState>> Targets,
 		int32 TargetIndex = 0);
 	void RefreshCentralGunStatus();
+	float PlayCentralGunRaiseBulletLoadPresentation(
+		int32 PreviousBet,
+		int32 NewBet,
+		EShowDownPlayerSlot SourceSlot);
 	float ApplyMultiplayerRoulette(ASDPlayerState* TargetPlayer, int32 BulletCount, float StartDelay = 0.0f, bool bUseSharedChambers = false);
 	void EndMultiplayerRound();
 	void ShowMultiplayerFinalRanking(ASDPlayerState* Winner);

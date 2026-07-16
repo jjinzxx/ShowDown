@@ -56,17 +56,25 @@
 
 namespace
 {
-	enum class ESDCardSelectionPromptState : uint8
+	struct FSDGameplayPromptContent
 	{
-		Hidden,
-		Choose,
-		Waiting
+		FString StateKey;
+		FText Label;
+		FText Title;
+		FText Detail;
+		FLinearColor AccentColor = FLinearColor(1.0f, 0.68f, 0.10f, 0.98f);
+		bool bPulse = false;
+		bool bHighlightSelectableCards = false;
 	};
 
 	const TCHAR* DefaultInteractionOutlineMaterialPath = TEXT("/Game/ArtTone/M_PP_InteractionOutline.M_PP_InteractionOutline");
 	constexpr float CharacterHeadLookReplicationInterval = 0.05f;
 	constexpr float CharacterHeadLookReplicationAngleThreshold = 0.5f;
-	constexpr int32 CardSelectionPromptZOrder = 400;
+	constexpr int32 GameplayPromptZOrder = 400;
+	constexpr int32 GameplayStatusHudZOrder = 390;
+	constexpr float GameplayHudIntroFadeDuration = 0.55f;
+	constexpr float GameplayHudElementFadeSpeed = 9.0f;
+	constexpr float BetActionNoticeSeconds = 2.6f;
 
 	FSlateFontInfo MakeCardSelectionPromptFont(int32 Size)
 	{
@@ -81,79 +89,146 @@ namespace
 		return Font;
 	}
 
-	TSharedRef<SWidget> BuildCardSelectionPromptWidget(
-		ESDCardSelectionPromptState State,
-		bool bMultiplayer,
-		bool bSingleClickSubmit)
+	TSharedRef<SWidget> BuildGameplayPromptWidget(const FSDGameplayPromptContent& Content)
 	{
-		const bool bWaiting = State == ESDCardSelectionPromptState::Waiting;
-		const FText Title = bWaiting
-			? FText::FromString(TEXT("카드 선택 완료"))
-			: FText::FromString(TEXT("카드를 선택하세요"));
-		const FText Detail = bWaiting
-			? FText::FromString(bMultiplayer
-				? TEXT("다른 플레이어가 카드를 고르는 중입니다")
-				: TEXT("카드 전달과 다음 단계를 준비하는 중입니다"))
-			: FText::FromString(bSingleClickSubmit
-				? TEXT("상대에게 건넬 카드 한 장을 클릭하세요")
-				: TEXT("한 번 클릭해 선택하고, 다시 클릭해 확정하세요"));
-		const FLinearColor AccentColor = bWaiting
-			? FLinearColor(0.35f, 0.72f, 0.88f, 0.94f)
-			: FLinearColor(1.0f, 0.68f, 0.10f, 0.98f);
+		float PromptWidth = 460.0f;
+		if (GEngine && GEngine->GameViewport)
+		{
+			FVector2D ViewportSize = FVector2D::ZeroVector;
+			GEngine->GameViewport->GetViewportSize(ViewportSize);
+			if (ViewportSize.X > 0.0f)
+			{
+				// Preserve breathing room between the enlarged bottom-left chat and
+				// this bottom-right panel on narrower desktop resolutions.
+				PromptWidth = FMath::Clamp(ViewportSize.X - 630.0f, 360.0f, 460.0f);
+			}
+		}
 
 		return SNew(SOverlay)
 			.Visibility(EVisibility::HitTestInvisible)
 			+ SOverlay::Slot()
-			.HAlign(HAlign_Center)
-			.VAlign(VAlign_Top)
-			.Padding(FMargin(0.0f, 66.0f, 0.0f, 0.0f))
+			.HAlign(HAlign_Right)
+			.VAlign(VAlign_Bottom)
+			.Padding(FMargin(0.0f, 0.0f, 28.0f, 38.0f))
 			[
 				SNew(SBox)
-				.WidthOverride(650.0f)
+				.HAlign(HAlign_Center)
 				[
+					SNew(SBox)
+					.WidthOverride(PromptWidth)
+					[
 					SNew(SBorder)
 					.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-					.BorderBackgroundColor(AccentColor)
-					.Padding(FMargin(2.0f))
+					.BorderBackgroundColor(Content.AccentColor)
+					.Padding(FMargin(1.5f))
 					[
 						SNew(SBorder)
 						.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
 						.BorderBackgroundColor(FLinearColor(0.012f, 0.016f, 0.024f, 0.94f))
-						.Padding(FMargin(24.0f, 11.0f, 24.0f, 13.0f))
+						.Padding(FMargin(20.0f, 7.0f, 20.0f, 9.0f))
 						[
 							SNew(SVerticalBox)
 							+ SVerticalBox::Slot()
 							.AutoHeight()
-							.HAlign(HAlign_Center)
+							.HAlign(HAlign_Fill)
 							[
 								SNew(STextBlock)
-								.Text(bWaiting ? FText::FromString(TEXT("READY")) : FText::FromString(TEXT("CARD SELECT")))
+								.Text(Content.Label)
 								.Font(MakeCardSelectionPromptFont(12))
-								.ColorAndOpacity(FSlateColor(AccentColor))
+								.ColorAndOpacity(FSlateColor(Content.AccentColor))
 								.Justification(ETextJustify::Center)
 							]
 							+ SVerticalBox::Slot()
 							.AutoHeight()
-							.HAlign(HAlign_Center)
-							.Padding(FMargin(0.0f, 1.0f, 0.0f, 2.0f))
+							.HAlign(HAlign_Fill)
+							.Padding(FMargin(0.0f, 1.0f, 0.0f, 0.0f))
 							[
 								SNew(STextBlock)
-								.Text(Title)
-								.Font(MakeCardSelectionPromptFont(27))
+								.Text(Content.Title)
+								.Font(MakeCardSelectionPromptFont(25))
 								.ColorAndOpacity(FSlateColor(FLinearColor::White))
 								.Justification(ETextJustify::Center)
-							]
-							+ SVerticalBox::Slot()
-							.AutoHeight()
-							.HAlign(HAlign_Center)
-							[
-								SNew(STextBlock)
-								.Text(Detail)
-								.Font(MakeCardSelectionPromptFont(16))
-								.ColorAndOpacity(FSlateColor(FLinearColor(0.82f, 0.86f, 0.91f, 1.0f)))
-								.Justification(ETextJustify::Center)
+								.AutoWrapText(true)
 							]
 						]
+					]
+					]
+				]
+			];
+	}
+
+	TSharedRef<SWidget> BuildGameplayStatusHudWidget(
+		TSharedPtr<SBorder>& OutLivesPanel,
+		TSharedPtr<STextBlock>& OutLivesText,
+		TSharedPtr<SBorder>& OutTimerPanel,
+		TSharedPtr<STextBlock>& OutTimerLabelText,
+		TSharedPtr<STextBlock>& OutTimerValueText)
+	{
+		return SNew(SOverlay)
+			.Visibility(EVisibility::HitTestInvisible)
+			+ SOverlay::Slot()
+			.HAlign(HAlign_Left)
+			.VAlign(VAlign_Top)
+			.Padding(FMargin(38.0f, 30.0f, 0.0f, 0.0f))
+			[
+				SAssignNew(OutLivesPanel, SBorder)
+					.BorderImage(FCoreStyle::Get().GetBrush("NoBrush"))
+					.BorderBackgroundColor(FLinearColor::Transparent)
+				.Padding(FMargin(16.0f, 9.0f, 18.0f, 10.0f))
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot()
+					.AutoHeight()
+					[
+						SNew(STextBlock)
+						.Text(FText::FromString(TEXT("LIFE")))
+						.Font(MakeCardSelectionPromptFont(11))
+						.ColorAndOpacity(FSlateColor(FLinearColor(0.78f, 0.82f, 0.88f, 0.92f)))
+					]
+					+ SVerticalBox::Slot()
+					.AutoHeight()
+					.Padding(FMargin(0.0f, 1.0f, 0.0f, 0.0f))
+					[
+						SAssignNew(OutLivesText, STextBlock)
+						.Text(FText::GetEmpty())
+						.Font(MakeCardSelectionPromptFont(25))
+						.ColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.23f, 0.35f, 1.0f)))
+						.ShadowOffset(FVector2D(0.0f, 1.0f))
+						.ShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.72f))
+					]
+				]
+			]
+			+ SOverlay::Slot()
+			.HAlign(HAlign_Right)
+			.VAlign(VAlign_Top)
+			.Padding(FMargin(0.0f, 30.0f, 38.0f, 0.0f))
+			[
+				SAssignNew(OutTimerPanel, SBorder)
+					.Visibility(EVisibility::Collapsed)
+					.BorderImage(FCoreStyle::Get().GetBrush("NoBrush"))
+					.BorderBackgroundColor(FLinearColor::Transparent)
+				.Padding(FMargin(18.0f, 8.0f, 18.0f, 10.0f))
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot()
+					.AutoHeight()
+					.HAlign(HAlign_Right)
+					[
+						SAssignNew(OutTimerLabelText, STextBlock)
+						.Text(FText::GetEmpty())
+						.Font(MakeCardSelectionPromptFont(11))
+						.ColorAndOpacity(FSlateColor(FLinearColor(0.72f, 0.80f, 0.90f, 0.92f)))
+					]
+					+ SVerticalBox::Slot()
+					.AutoHeight()
+					.HAlign(HAlign_Right)
+					[
+						SAssignNew(OutTimerValueText, STextBlock)
+						.Text(FText::FromString(TEXT("00:30")))
+						.Font(MakeCardSelectionPromptFont(27))
+						.ColorAndOpacity(FSlateColor(FLinearColor::White))
+						.ShadowOffset(FVector2D(0.0f, 1.0f))
+						.ShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.72f))
 					]
 				]
 			];
@@ -368,6 +443,7 @@ void AShowDownPlayerController::BeginPlay()
 	{
 		return;
 	}
+	ResetGameplayHudIntroFade();
 	SetUserBrightness(UserBrightnessMultiplier);
 
 	bShowMouseCursor = false;
@@ -376,6 +452,7 @@ void AShowDownPlayerController::BeginPlay()
 	InitializeFromPossessedPawn();
 	InitializeInteractableOutlinePostProcess();
 	CreateCenterCrosshairWidget();
+	EnsureGameplayStatusHud();
 	UpdateCenterCrosshairVisibility();
 	TryBindVoiceChatEvents();
 	SubmitLocalEquippedCharacterSkin();
@@ -428,7 +505,8 @@ void AShowDownPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason
 	SetHoveredCard(nullptr);
 	RemoveCenterCrosshairWidget();
 	ClearCardSelectionHandHighlight();
-	RemoveCardSelectionPrompt();
+	RemoveGameplayPrompt();
+	RemoveGameplayStatusHud();
 	if (MultiplayerLoadingWidget)
 	{
 		MultiplayerLoadingWidget->RemoveFromParent();
@@ -454,6 +532,7 @@ void AShowDownPlayerController::ClientEnterMultiplayerGameplay_Implementation()
 	}
 
 	bGameplayChatEnabled = true;
+	ResetGameplayHudIntroFade();
 	if (UShowDownAudioSubsystem* AudioSubsystem = GetGameInstance()
 		? GetGameInstance()->GetSubsystem<UShowDownAudioSubsystem>()
 		: nullptr)
@@ -547,45 +626,40 @@ void AShowDownPlayerController::ClientSetInitialCardDealInputLocked_Implementati
 		EnsureChatWidget();
 	}
 	bInitialCardDealInputLocked = bLocked;
-	if (bLocked)
+	const bool bGameplayCameraReady = GetNetMode() == NM_Standalone || !bPendingMultiplayerSeatCamera;
+	if (bLocked && bGameplayCameraReady)
 	{
-		bHandleShowDownGameplayInput = false;
-		bShowCenterCrosshair = false;
-		CancelPressedBetActionButton();
-		SetFocusedInteractable(nullptr);
-		SetHoveredCard(nullptr);
-		if (!bInitialCardDealIgnoreMoveInputApplied)
-		{
-			SetIgnoreMoveInput(true);
-			bInitialCardDealIgnoreMoveInputApplied = true;
-		}
-		UpdateCenterCrosshairVisibility();
-
-		const bool bMultiplayerCameraReady = GetNetMode() != NM_Standalone
-			&& !bPendingMultiplayerSeatCamera
-			&& bUseCharacterPlayerCamera
-			&& IsValid(LocalPlayerCameraCharacterTarget)
-			&& GetViewTarget() == GetPawn();
-		if (bMultiplayerCameraReady)
-		{
-			ServerNotifyInitialCardDealCameraReady();
-		}
-		return;
+		StartGameplayHudIntroFade();
 	}
-
-	if (bInitialCardDealIgnoreMoveInputApplied)
+	if (bGameplayCameraReady && !HasBlockingGameplayUi())
 	{
-		SetIgnoreMoveInput(false);
-		bInitialCardDealIgnoreMoveInputApplied = false;
-	}
-	if (GetNetMode() == NM_Standalone || !bPendingMultiplayerSeatCamera)
-	{
+		// The initial deal is presentation-only. Phase/selectability checks still
+		// reject premature card and betting requests, while camera, interactions,
+		// and chat stay responsive throughout the animation.
 		bHandleShowDownGameplayInput = true;
 		bShowCenterCrosshair = true;
 		if (GetNetMode() != NM_Standalone)
 		{
-			RestoreMultiplayerGameplayInput();
+			if (bChatOpen)
+			{
+				ApplyChatInputMode(true);
+			}
+			else
+			{
+				RestoreMultiplayerGameplayInput();
+			}
 		}
+	}
+
+	const bool bMultiplayerCameraReady = bLocked
+		&& GetNetMode() != NM_Standalone
+		&& !bPendingMultiplayerSeatCamera
+		&& bUseCharacterPlayerCamera
+		&& IsValid(LocalPlayerCameraCharacterTarget)
+		&& GetViewTarget() == GetPawn();
+	if (bMultiplayerCameraReady)
+	{
+		ServerNotifyInitialCardDealCameraReady();
 	}
 	UpdateCenterCrosshairVisibility();
 }
@@ -761,13 +835,21 @@ bool AShowDownPlayerController::TryApplyPendingMultiplayerCharacterCamera()
 
 	EnsureChatWidget();
 	bPendingMultiplayerSeatCamera = false;
-	bHandleShowDownGameplayInput = !bInitialCardDealInputLocked;
-	bShowCenterCrosshair = !bInitialCardDealInputLocked;
+	const bool bBlockingGameplayUi = HasBlockingGameplayUi();
+	if (!bBlockingGameplayUi)
+	{
+		bHandleShowDownGameplayInput = true;
+		bShowCenterCrosshair = true;
+	}
 	if (bInitialCardDealInputLocked)
 	{
 		ServerNotifyInitialCardDealCameraReady();
 	}
-	else
+	if (!bBlockingGameplayUi && bChatOpen)
+	{
+		ApplyChatInputMode(true);
+	}
+	else if (!bBlockingGameplayUi)
 	{
 		RestoreMultiplayerGameplayInput();
 	}
@@ -779,6 +861,7 @@ bool AShowDownPlayerController::TryApplyPendingMultiplayerCharacterCamera()
 		MultiplayerLoadingWidget->Dismiss(0.22f);
 		MultiplayerLoadingWidget = nullptr;
 	}
+	StartGameplayHudIntroFade();
 	if (USDGunVisionSequenceSubsystem* VisionSequence = GetWorld()->GetSubsystem<USDGunVisionSequenceSubsystem>())
 	{
 		// This is the first frame where the local seat camera is genuinely ready;
@@ -800,7 +883,16 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime);
 	UpdateGunShotCameraOverride(DeltaTime);
-	UpdateCardSelectionPrompt(DeltaTime);
+	if (!bGameplayHudIntroFadeStarted
+		&& bGameplayChatEnabled
+		&& !bPendingMultiplayerSeatCamera
+		&& !MultiplayerLoadingWidget)
+	{
+		StartGameplayHudIntroFade();
+	}
+	UpdateGameplayHudIntroFade(DeltaTime);
+	UpdateGameplayPrompt(DeltaTime);
+	UpdateGameplayStatusHud(DeltaTime);
 	if (MultiplayerLoadingWidget)
 	{
 		MultiplayerLoadingElapsedTime += FMath::Max(0.0f, DeltaTime);
@@ -833,6 +925,7 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 		UpdateFixedCameraMouseLook(DeltaTime);
 	}
 	else if (bInitialCardDealInputLocked
+		&& !bHandleShowDownGameplayInput
 		&& GetPawn()
 		&& bEnablePawnCameraMouseLook
 		&& (!bRequireRightMouseForPawnCameraLook || IsInputKeyDown(EKeys::RightMouseButton)))
@@ -845,7 +938,7 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 			ApplyPawnCameraInput(MouseDeltaX, MouseDeltaY);
 		}
 	}
-	if (bInitialCardDealInputLocked)
+	if (bInitialCardDealInputLocked && !bHandleShowDownGameplayInput)
 	{
 		UpdateCharacterPlayerCamera(DeltaTime);
 	}
@@ -856,15 +949,6 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 		&& (!LeaveConfirmWidget || LeaveConfirmWidget->GetVisibility() != ESlateVisibility::Visible))
 	{
 		TogglePauseMenu();
-		return;
-	}
-
-	if (!bHandleShowDownGameplayInput)
-	{
-		CancelPressedBetActionButton();
-		SetFocusedInteractable(nullptr);
-		SetHoveredCard(nullptr);
-		UpdateCenterCrosshairVisibility();
 		return;
 	}
 
@@ -879,7 +963,10 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 		return;
 	}
 
-	if (bChatOpen)
+	// Chat is intentionally independent from the gameplay-input gate so it stays
+	// available during deal/camera presentations and other non-interactive beats.
+	const bool bChatInputAvailable = bGameplayChatEnabled && !HasBlockingGameplayUi();
+	if (bChatInputAvailable && bChatOpen)
 	{
 		CancelPressedBetActionButton();
 		SetFocusedInteractable(nullptr);
@@ -900,10 +987,19 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 		return;
 	}
 
-	if (WasInputKeyJustPressed(ToggleChatKey))
+	if (bChatInputAvailable && WasInputKeyJustPressed(ToggleChatKey))
 	{
 		CancelPressedBetActionButton();
 		OpenChat();
+		return;
+	}
+
+	if (!bHandleShowDownGameplayInput)
+	{
+		CancelPressedBetActionButton();
+		SetFocusedInteractable(nullptr);
+		SetHoveredCard(nullptr);
+		UpdateCenterCrosshairVisibility();
 		return;
 	}
 
@@ -1447,9 +1543,9 @@ void AShowDownPlayerController::RefreshInteractableOutlineMaterialParameters()
 
 	float OutlineThickness = FMath::Max(1.0f, InteractableOutlineThickness);
 	float OutlineOpacity = FMath::Clamp(InteractableOutlineOpacity, 0.0f, 1.0f);
-	if (CardSelectionPromptState == static_cast<uint8>(ESDCardSelectionPromptState::Choose))
+	if (bGameplayPromptHighlightsCards)
 	{
-		const float PulseAlpha = 0.5f + 0.5f * FMath::Sin(CardSelectionPromptAnimationTime * 6.4f);
+		const float PulseAlpha = 0.5f + 0.5f * FMath::Sin(GameplayPromptAnimationTime * 6.4f);
 		OutlineThickness = FMath::Lerp(2.0f, 3.0f, PulseAlpha);
 		OutlineOpacity = FMath::Lerp(0.45f, 1.0f, PulseAlpha);
 	}
@@ -1614,7 +1710,6 @@ void AShowDownPlayerController::SubmitSelectedCard(ACard* SelectedCard)
 	}
 
 	bCardSelectionSubmittedLocally = true;
-	SetCardSelectionPromptState(static_cast<uint8>(ESDCardSelectionPromptState::Waiting));
 
 	if (HasAuthority())
 	{
@@ -2337,6 +2432,27 @@ void AShowDownPlayerController::ApplyPawnCameraInput(float YawInput, float Pitch
 	SetControlRotation(FRotator(NewPitch, NewYaw, 0.0f));
 }
 
+EShowDownPlayerSlot AShowDownPlayerController::ResolveLocalShowDownPlayerSlot() const
+{
+	if (const ASDPlayerState* ShowDownPlayerState = GetPlayerState<ASDPlayerState>())
+	{
+		if (ShowDownPlayerState->ShowDownSlot != EShowDownPlayerSlot::None)
+		{
+			return ShowDownPlayerState->ShowDownSlot;
+		}
+	}
+
+	if (IsValid(LocalPlayerCameraCharacterTarget)
+		&& LocalPlayerCameraCharacterTarget->GetPlayerSlot() != EShowDownPlayerSlot::None)
+	{
+		return LocalPlayerCameraCharacterTarget->GetPlayerSlot();
+	}
+
+	return PendingMultiplayerSeatIndex != INDEX_NONE
+		? GetPlayerSlotFromSeatIndex(PendingMultiplayerSeatIndex)
+		: EShowDownPlayerSlot::None;
+}
+
 AShowDownCharacter* AShowDownPlayerController::FindLocalCharacterForPlayerCamera() const
 {
 	UWorld* World = GetWorld();
@@ -2345,14 +2461,7 @@ AShowDownCharacter* AShowDownPlayerController::FindLocalCharacterForPlayerCamera
 		return nullptr;
 	}
 
-	const ASDPlayerState* ShowDownPlayerState = GetPlayerState<ASDPlayerState>();
-	EShowDownPlayerSlot LocalSlot = ShowDownPlayerState
-		? ShowDownPlayerState->ShowDownSlot
-		: EShowDownPlayerSlot::None;
-	if (LocalSlot == EShowDownPlayerSlot::None && PendingMultiplayerSeatIndex != INDEX_NONE)
-	{
-		LocalSlot = GetPlayerSlotFromSeatIndex(PendingMultiplayerSeatIndex);
-	}
+	const EShowDownPlayerSlot LocalSlot = ResolveLocalShowDownPlayerSlot();
 
 	AShowDownCharacter* FirstCharacter = nullptr;
 	AShowDownCharacter* FallbackPlayerCharacter = nullptr;
@@ -2889,6 +2998,7 @@ void AShowDownPlayerController::EnsureChatWidget()
 	ChatWidget->AddToViewport();
 	ChatWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
 	ChatWidget->SetChatInputOpen(false);
+	ChatWidget->SetRenderOpacity(GameplayHudIntroOpacity);
 }
 
 void AShowDownPlayerController::RemoveLocalChatWidgetsExcept(UShowDownChatWidget* WidgetToKeep)
@@ -2963,6 +3073,20 @@ void AShowDownPlayerController::RestoreMultiplayerGameplayInput()
 	SetInputMode(InputMode);
 }
 
+bool AShowDownPlayerController::HasBlockingGameplayUi() const
+{
+	auto IsVisible = [](const UWidget* Widget)
+	{
+		return Widget
+			&& Widget->GetVisibility() != ESlateVisibility::Collapsed
+			&& Widget->GetVisibility() != ESlateVisibility::Hidden;
+	};
+
+	return bPauseMenuOpen
+		|| IsVisible(LeaveConfirmWidget)
+		|| IsVisible(MultiplayerRankWidget);
+}
+
 void AShowDownPlayerController::ApplyChatInputMode(bool bOpen)
 {
 	if (bOpen && ChatWidget)
@@ -2972,6 +3096,17 @@ void AShowDownPlayerController::ApplyChatInputMode(bool bOpen)
 		InputMode.SetWidgetToFocus(ChatWidget->TakeWidget());
 		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
 		SetInputMode(InputMode);
+		ChatWidget->FocusChatInput();
+		if (GetWorld())
+		{
+			GetWorldTimerManager().SetTimerForNextTick(FTimerDelegate::CreateWeakLambda(this, [this]()
+			{
+				if (bChatOpen && ChatWidget && !HasBlockingGameplayUi())
+				{
+					ChatWidget->FocusChatInput();
+				}
+			}));
+		}
 	}
 	else if (FixedCameraMouseLookTarget)
 	{
@@ -3112,108 +3247,621 @@ void AShowDownPlayerController::ClearCardSelectionHandHighlight()
 	CardSelectionPrimitiveStates.Reset();
 }
 
-void AShowDownPlayerController::UpdateCardSelectionPrompt(float DeltaTime)
+void AShowDownPlayerController::ResetGameplayHudIntroFade()
+{
+	GameplayHudIntroFadeElapsedTime = 0.0f;
+	GameplayHudIntroOpacity = 0.0f;
+	bGameplayHudIntroFadeStarted = false;
+	bGameplayHudIntroFadeActive = false;
+	ApplyGameplayHudIntroOpacity();
+	if (GameplayPromptWidget.IsValid())
+	{
+		GameplayPromptWidget->SetRenderOpacity(0.0f);
+	}
+}
+
+void AShowDownPlayerController::StartGameplayHudIntroFade()
+{
+	if (bGameplayHudIntroFadeStarted)
+	{
+		return;
+	}
+
+	GameplayHudIntroFadeElapsedTime = 0.0f;
+	GameplayHudIntroOpacity = 0.0f;
+	bGameplayHudIntroFadeStarted = true;
+	bGameplayHudIntroFadeActive = true;
+	ApplyGameplayHudIntroOpacity();
+	if (GameplayPromptWidget.IsValid())
+	{
+		GameplayPromptWidget->SetRenderOpacity(0.0f);
+	}
+}
+
+void AShowDownPlayerController::UpdateGameplayHudIntroFade(float DeltaTime)
+{
+	if (!bGameplayHudIntroFadeActive)
+	{
+		return;
+	}
+
+	GameplayHudIntroFadeElapsedTime += FMath::Max(0.0f, DeltaTime);
+	const float FadeAlpha = FMath::Clamp(
+		GameplayHudIntroFadeElapsedTime / GameplayHudIntroFadeDuration,
+		0.0f,
+		1.0f);
+	GameplayHudIntroOpacity = FMath::InterpEaseOut(0.0f, 1.0f, FadeAlpha, 2.0f);
+	ApplyGameplayHudIntroOpacity();
+	if (FadeAlpha >= 1.0f)
+	{
+		GameplayHudIntroOpacity = 1.0f;
+		bGameplayHudIntroFadeActive = false;
+		ApplyGameplayHudIntroOpacity();
+	}
+}
+
+void AShowDownPlayerController::ApplyGameplayHudIntroOpacity()
+{
+	const float ClampedOpacity = FMath::Clamp(GameplayHudIntroOpacity, 0.0f, 1.0f);
+	if (ChatWidget)
+	{
+		ChatWidget->SetRenderOpacity(ClampedOpacity);
+	}
+	if (GameplayStatusHudWidget.IsValid())
+	{
+		GameplayStatusHudWidget->SetRenderOpacity(ClampedOpacity);
+	}
+}
+
+void AShowDownPlayerController::EnsureGameplayStatusHud()
+{
+	if (GameplayStatusHudWidget.IsValid() || !CanCreateLocalPlayerWidgets())
+	{
+		return;
+	}
+	if (!GEngine || !GEngine->GameViewport)
+	{
+		return;
+	}
+
+	GameplayStatusHudWidget = BuildGameplayStatusHudWidget(
+		GameplayLivesPanel,
+		GameplayLivesText,
+		GameplayTimerPanel,
+		GameplayTimerLabelText,
+		GameplayTimerValueText);
+	GEngine->GameViewport->AddViewportWidgetContent(
+		GameplayStatusHudWidget.ToSharedRef(),
+		GameplayStatusHudZOrder);
+	GameplayStatusHudWidget->SetRenderOpacity(GameplayHudIntroOpacity);
+}
+
+int32 AShowDownPlayerController::ResolveLocalLivesForHud() const
+{
+	if (IsValid(LocalPlayerCameraCharacterTarget))
+	{
+		return FMath::Max(0, LocalPlayerCameraCharacterTarget->GetCharacterLives());
+	}
+	if (GetNetMode() != NM_Standalone)
+	{
+		if (const ASDPlayerState* LocalShowDownPlayerState = GetPlayerState<ASDPlayerState>())
+		{
+			return FMath::Max(0, LocalShowDownPlayerState->Lives);
+		}
+	}
+	if (AShowDownCharacter* LocalCharacter = FindLocalCharacterForPlayerCamera())
+	{
+		return FMath::Max(0, LocalCharacter->GetCharacterLives());
+	}
+	if (const ASDPlayerState* LocalShowDownPlayerState = GetPlayerState<ASDPlayerState>())
+	{
+		return FMath::Max(0, LocalShowDownPlayerState->Lives);
+	}
+
+	return INDEX_NONE;
+}
+
+void AShowDownPlayerController::UpdateGameplayStatusHud(float DeltaTime)
+{
+	EnsureGameplayStatusHud();
+	if (!GameplayStatusHudWidget.IsValid())
+	{
+		return;
+	}
+
+	const AShowDownGameStateBase* ShowDownGameState = GetWorld()
+		? GetWorld()->GetGameState<AShowDownGameStateBase>()
+		: nullptr;
+	if (HasBlockingGameplayUi())
+	{
+		GameplayStatusHudWidget->SetVisibility(EVisibility::Collapsed);
+		return;
+	}
+	GameplayStatusHudWidget->SetVisibility(EVisibility::HitTestInvisible);
+
+	const int32 LocalLives = ResolveLocalLivesForHud();
+	const bool bShowLives = ShowDownGameState
+		&& LocalLives != INDEX_NONE
+		&& (bGameplayChatEnabled
+			|| bInitialCardDealInputLocked
+			|| ShowDownGameState->CurrentPhase != EShowDownPhase::None);
+	if (GameplayLivesPanel.IsValid())
+	{
+		if (bShowLives && !bGameplayLivesWasVisible)
+		{
+			GameplayLivesFadeOpacity = 0.0f;
+		}
+		GameplayLivesFadeOpacity = bShowLives
+			? FMath::FInterpTo(
+				GameplayLivesFadeOpacity,
+				1.0f,
+				FMath::Max(0.0f, DeltaTime),
+				GameplayHudElementFadeSpeed)
+			: 0.0f;
+		GameplayLivesPanel->SetVisibility(bShowLives
+			? EVisibility::HitTestInvisible
+			: EVisibility::Collapsed);
+		GameplayLivesPanel->SetRenderOpacity(GameplayLivesFadeOpacity);
+	}
+	bGameplayLivesWasVisible = bShowLives;
+	if (bShowLives && GameplayLivesText.IsValid() && LocalLives != LastRenderedGameplayHudLives)
+	{
+		FString Hearts;
+		if (LocalLives <= 0)
+		{
+			Hearts.AppendChar(static_cast<TCHAR>(0x2661));
+		}
+		else
+		{
+			for (int32 HeartIndex = 0; HeartIndex < LocalLives; ++HeartIndex)
+			{
+				if (HeartIndex > 0)
+				{
+					Hearts += TEXT("  ");
+				}
+				Hearts.AppendChar(static_cast<TCHAR>(0x2665));
+			}
+		}
+		GameplayLivesText->SetText(FText::FromString(Hearts));
+		GameplayLivesText->SetColorAndOpacity(FSlateColor(LocalLives > 0
+			? FLinearColor(1.0f, 0.23f, 0.35f, 1.0f)
+			: FLinearColor(0.52f, 0.35f, 0.39f, 0.88f)));
+		LastRenderedGameplayHudLives = LocalLives;
+	}
+
+	const bool bShowTimer = ShowDownGameState
+		&& ShowDownGameState->DecisionTimerState.Kind != EShowDownDecisionTimerKind::None
+		&& ShowDownGameState->DecisionTimerState.DeadlineServerWorldTimeSeconds >= 0.0f;
+	if (GameplayTimerPanel.IsValid())
+	{
+		if (bShowTimer && !bGameplayTimerWasVisible)
+		{
+			GameplayTimerFadeOpacity = 0.0f;
+		}
+		GameplayTimerFadeOpacity = bShowTimer
+			? FMath::FInterpTo(
+				GameplayTimerFadeOpacity,
+				1.0f,
+				FMath::Max(0.0f, DeltaTime),
+				GameplayHudElementFadeSpeed)
+			: 0.0f;
+		GameplayTimerPanel->SetVisibility(bShowTimer
+			? EVisibility::HitTestInvisible
+			: EVisibility::Collapsed);
+		GameplayTimerPanel->SetRenderOpacity(GameplayTimerFadeOpacity);
+	}
+	bGameplayTimerWasVisible = bShowTimer;
+	if (!bShowTimer || !GameplayTimerLabelText.IsValid() || !GameplayTimerValueText.IsValid())
+	{
+		return;
+	}
+
+	const FShowDownDecisionTimerState& DecisionTimer = ShowDownGameState->DecisionTimerState;
+	const float RemainingSeconds = FMath::Max(
+		0.0f,
+		DecisionTimer.DeadlineServerWorldTimeSeconds - ShowDownGameState->GetServerWorldTimeSeconds());
+	const int32 RemainingWholeSeconds = FMath::CeilToInt(RemainingSeconds);
+	if (DecisionTimer.Kind != LastRenderedGameplayHudTimerKind)
+	{
+		GameplayTimerLabelText->SetText(FText::FromString(
+			DecisionTimer.Kind == EShowDownDecisionTimerKind::CardSelection
+				? TEXT("CARD SELECT")
+				: TEXT("BETTING")));
+		LastRenderedGameplayHudTimerKind = DecisionTimer.Kind;
+	}
+	if (RemainingWholeSeconds == LastRenderedGameplayHudTimerSecond)
+	{
+		return;
+	}
+
+	GameplayTimerValueText->SetText(FText::FromString(FString::Printf(
+		TEXT("00:%02d"),
+		FMath::Clamp(RemainingWholeSeconds, 0, 99))));
+
+	FLinearColor TimerColor = FLinearColor::White;
+	if (RemainingWholeSeconds <= 5)
+	{
+		TimerColor = FLinearColor(1.0f, 0.30f, 0.34f, 1.0f);
+	}
+	else if (RemainingWholeSeconds <= 10)
+	{
+		TimerColor = FLinearColor(1.0f, 0.68f, 0.20f, 1.0f);
+	}
+	GameplayTimerValueText->SetColorAndOpacity(FSlateColor(TimerColor));
+	LastRenderedGameplayHudTimerSecond = RemainingWholeSeconds;
+}
+
+void AShowDownPlayerController::RemoveGameplayStatusHud()
+{
+	if (GameplayStatusHudWidget.IsValid() && GEngine && GEngine->GameViewport)
+	{
+		GEngine->GameViewport->RemoveViewportWidgetContent(GameplayStatusHudWidget.ToSharedRef());
+	}
+	GameplayStatusHudWidget.Reset();
+	GameplayLivesPanel.Reset();
+	GameplayLivesText.Reset();
+	GameplayTimerPanel.Reset();
+	GameplayTimerLabelText.Reset();
+	GameplayTimerValueText.Reset();
+	LastRenderedGameplayHudLives = INDEX_NONE;
+	LastRenderedGameplayHudTimerSecond = INDEX_NONE;
+	LastRenderedGameplayHudTimerKind = EShowDownDecisionTimerKind::None;
+	GameplayLivesFadeOpacity = 0.0f;
+	GameplayTimerFadeOpacity = 0.0f;
+	bGameplayLivesWasVisible = false;
+	bGameplayTimerWasVisible = false;
+}
+
+void AShowDownPlayerController::UpdateGameplayPrompt(float DeltaTime)
 {
 	const AShowDownGameStateBase* ShowDownGameState = GetWorld()
 		? GetWorld()->GetGameState<AShowDownGameStateBase>()
 		: nullptr;
-	const bool bCardSelectionPhase = ShowDownGameState
-		&& ShowDownGameState->CurrentPhase == EShowDownPhase::SelectCard;
-
-	if (!bCardSelectionPhase)
+	if (!CanCreateLocalPlayerWidgets() || !ShowDownGameState || HasBlockingGameplayUi())
+	{
+		SetGameplayPromptContent(
+			FString(),
+			FText::GetEmpty(),
+			FText::GetEmpty(),
+			FText::GetEmpty(),
+			FLinearColor::Transparent,
+			false,
+			false);
+		return;
+	}
+	if (ShowDownGameState->CurrentPhase != LastObservedGameplayPromptPhase
+		|| ShowDownGameState->CurrentRound != LastObservedGameplayPromptRound)
 	{
 		bCardSelectionSubmittedLocally = false;
-		SetCardSelectionPromptState(static_cast<uint8>(ESDCardSelectionPromptState::Hidden));
+		LastObservedGameplayPromptPhase = ShowDownGameState->CurrentPhase;
+		LastObservedGameplayPromptRound = ShowDownGameState->CurrentRound;
+	}
+
+	const bool bMultiplayer = ShowDownGameState->IsMultiplayerMatch();
+	const ASDPlayerState* LocalShowDownPlayerState = GetPlayerState<ASDPlayerState>();
+	const EShowDownPlayerSlot LocalSlot = LocalShowDownPlayerState
+		? LocalShowDownPlayerState->ShowDownSlot
+		: EShowDownPlayerSlot::None;
+	const float CurrentServerTimeSeconds = ShowDownGameState->GetServerWorldTimeSeconds();
+
+	auto ResolveOpponentName = []()
+	{
+		FString OpponentName = TEXT("상대");
+		GConfig->GetString(
+			TEXT("ShowDown.UserSettings"),
+			TEXT("CharacterName"),
+			OpponentName,
+			GGameUserSettingsIni);
+		OpponentName = OpponentName.TrimStartAndEnd().Left(32);
+		return OpponentName.IsEmpty() ? FString(TEXT("상대")) : OpponentName;
+	};
+
+	auto ResolveSlotName = [this, ShowDownGameState, LocalSlot](EShowDownPlayerSlot Slot)
+	{
+		if (Slot == LocalSlot && LocalSlot != EShowDownPlayerSlot::None)
+		{
+			return GetChatSenderName();
+		}
+		for (const FShowDownNetworkPlayerSlot& PlayerSlot : ShowDownGameState->PlayerSlots)
+		{
+			if (PlayerSlot.Slot == Slot)
+			{
+				const FString DisplayName = PlayerSlot.DisplayName.TrimStartAndEnd().Left(32);
+				if (!DisplayName.IsEmpty())
+				{
+					return DisplayName;
+				}
+			}
+		}
+
+		const int32 SeatNumber = static_cast<int32>(Slot);
+		return SeatNumber > 0
+			? FString::Printf(TEXT("플레이어 %d"), SeatNumber)
+			: FString(TEXT("다른 플레이어"));
+	};
+
+	auto ResolveActionActorName = [this, bMultiplayer, LocalSlot, &ResolveOpponentName, &ResolveSlotName](
+		const FShowDownBetActionNotice& Notice)
+	{
+		if (bMultiplayer && Notice.PlayerSlot != EShowDownPlayerSlot::None)
+		{
+			return ResolveSlotName(Notice.PlayerSlot);
+		}
+		if (Notice.Side == EShowDownSide::Collector
+			|| Notice.ActorName.Equals(TEXT("Collector"), ESearchCase::IgnoreCase))
+		{
+			return ResolveOpponentName();
+		}
+		if (Notice.ActorName.Equals(TEXT("Player"), ESearchCase::IgnoreCase)
+			|| (Notice.PlayerSlot == LocalSlot && LocalSlot != EShowDownPlayerSlot::None))
+		{
+			return GetChatSenderName();
+		}
+
+		const FString ActorName = Notice.ActorName.TrimStartAndEnd().Left(32);
+		return ActorName.IsEmpty() ? FString(TEXT("플레이어")) : ActorName;
+	};
+	const FShowDownBetActionNotice& ActionNotice = ShowDownGameState->LastBetActionNotice;
+	const float ActionNoticeAgeSeconds = CurrentServerTimeSeconds - ActionNotice.ServerWorldTimeSeconds;
+	const bool bRecentActionNotice = ActionNotice.Revision > 0
+		&& ActionNotice.ServerWorldTimeSeconds >= 0.0f
+		&& ActionNoticeAgeSeconds >= -0.25f
+		&& ActionNoticeAgeSeconds <= BetActionNoticeSeconds;
+	const bool bActionNoticeFromLocalPlayer = bMultiplayer
+		? ActionNotice.PlayerSlot == LocalSlot && LocalSlot != EShowDownPlayerSlot::None
+		: ActionNotice.Side == EShowDownSide::Player;
+
+	FSDGameplayPromptContent Content;
+	if (bInitialCardDealInputLocked)
+	{
+		Content.StateKey = TEXT("InitialDeal");
+		Content.Label = FText::FromString(TEXT("CARD DEAL"));
+		Content.Title = FText::FromString(TEXT("카드 배분 중"));
+		Content.AccentColor = FLinearColor(0.35f, 0.72f, 0.88f, 0.96f);
+	}
+	else
+	{
+		const bool bShowActionNotice = bRecentActionNotice
+			&& (ShowDownGameState->CurrentPhase == EShowDownPhase::Betting
+				|| ShowDownGameState->CurrentPhase == EShowDownPhase::Reveal);
+		if (bShowActionNotice)
+		{
+			const FString ActorName = ResolveActionActorName(ActionNotice);
+			const bool bLocalAction = bActionNoticeFromLocalPlayer;
+			Content.StateKey = FString::Printf(TEXT("BetAction:%d"), ActionNotice.Revision);
+			Content.AccentColor = bLocalAction
+				? FLinearColor(0.20f, 0.78f, 1.0f, 0.98f)
+				: FLinearColor(1.0f, 0.55f, 0.14f, 0.98f);
+			switch (ActionNotice.Action)
+			{
+			case EShowDownBetAction::Check:
+				Content.Label = FText::FromString(ActionNotice.bWasAutomatic ? TEXT("TIME OUT") : TEXT("CHECK"));
+				Content.Title = FText::FromString(FString::Printf(
+					ActionNotice.bWasAutomatic
+						? TEXT("%s님이 시간 초과로 체크했습니다.")
+						: TEXT("%s님이 체크했습니다."),
+					*ActorName));
+				break;
+			case EShowDownBetAction::Call:
+				Content.Label = FText::FromString(TEXT("CALL"));
+				Content.Title = FText::FromString(FString::Printf(
+					TEXT("%s님이 %d발 콜했습니다."),
+					*ActorName,
+					ActionNotice.TargetBet));
+				break;
+			case EShowDownBetAction::Raise:
+				Content.Label = FText::FromString(TEXT("RAISE"));
+				Content.Title = FText::FromString(FString::Printf(
+					TEXT("%s님이 %d발 레이즈했습니다."),
+					*ActorName,
+					FMath::Max(1, ActionNotice.RaiseAmount)));
+				break;
+			case EShowDownBetAction::Fold:
+				Content.Label = FText::FromString(ActionNotice.bWasAutomatic ? TEXT("TIME OUT") : TEXT("FOLD"));
+				Content.Title = FText::FromString(FString::Printf(
+					ActionNotice.bWasAutomatic
+						? TEXT("%s님이 시간 초과로 폴드했습니다.")
+						: TEXT("%s님이 폴드했습니다."),
+					*ActorName));
+				break;
+			default:
+				break;
+			}
+		}
+		else
+		{
+			switch (ShowDownGameState->CurrentPhase)
+			{
+			case EShowDownPhase::SelectCard:
+				if (bCardSelectionSubmittedLocally)
+				{
+					Content.StateKey = TEXT("CardWaiting");
+					Content.Label = FText::FromString(TEXT("CARD SELECT"));
+					Content.Title = FText::FromString(TEXT("카드 선택 완료"));
+					Content.AccentColor = FLinearColor(0.35f, 0.72f, 0.88f, 0.96f);
+				}
+				else if (HasLocalSelectableCard())
+				{
+					Content.StateKey = TEXT("CardChoose");
+					Content.Label = FText::FromString(TEXT("CARD SELECT"));
+					Content.Title = FText::FromString(TEXT("상대에게 건넬 카드 선택"));
+					Content.AccentColor = FLinearColor(1.0f, 0.68f, 0.10f, 0.98f);
+					Content.bPulse = true;
+					Content.bHighlightSelectableCards = true;
+				}
+				else if (!bMultiplayer && ShowDownGameState->NameTagTurnSide == EShowDownSide::Collector)
+				{
+					const FString OpponentName = ResolveOpponentName();
+					Content.StateKey = TEXT("CollectorCardChoose");
+					Content.Label = FText::FromString(TEXT("CARD SELECT"));
+					Content.Title = FText::FromString(FString::Printf(TEXT("%s님 카드 선택 중"), *OpponentName));
+					Content.AccentColor = FLinearColor(1.0f, 0.55f, 0.14f, 0.96f);
+				}
+				break;
+
+			case EShowDownPhase::Betting:
+				// Betting is event-only. When the latest committed action expires,
+				// leave the panel hidden instead of rebuilding a turn instruction.
+				break;
+
+			case EShowDownPhase::Reveal:
+				// The reveal animation communicates progress; only concrete results
+				// should claim this notification panel.
+				break;
+
+			case EShowDownPhase::Roulette:
+			{
+				FString TargetName;
+				if (bMultiplayer && ShowDownGameState->NameTagTurnSlot != EShowDownPlayerSlot::None)
+				{
+					TargetName = ResolveSlotName(ShowDownGameState->NameTagTurnSlot);
+				}
+				else
+				{
+					TargetName = ShowDownGameState->NameTagTurnSide == EShowDownSide::Player
+						? TEXT("당신")
+						: ResolveOpponentName();
+				}
+				int32 BulletCount = ShowDownGameState->NameTagLoadedBulletCount;
+				if (bMultiplayer && ShowDownGameState->NameTagTurnSlot != EShowDownPlayerSlot::None)
+				{
+					for (const FShowDownNameTagPlayerBetState& PlayerBet : ShowDownGameState->NameTagPlayerBets)
+					{
+						if (PlayerBet.Slot == ShowDownGameState->NameTagTurnSlot)
+						{
+							BulletCount = PlayerBet.LoadedBulletCount;
+							break;
+						}
+					}
+				}
+				else
+				{
+					BulletCount = ShowDownGameState->NameTagTurnSide == EShowDownSide::Player
+						? ShowDownGameState->NameTagPlayerLoadedBulletCount
+						: ShowDownGameState->NameTagCollectorLoadedBulletCount;
+				}
+				BulletCount = FMath::Clamp(BulletCount, 0, 6);
+				Content.StateKey = FString::Printf(TEXT("Roulette:%s:%d"), *TargetName, BulletCount);
+				Content.Label = FText::FromString(TEXT("ROULETTE"));
+				Content.Title = FText::FromString(FString::Printf(TEXT("%s · 격발"), *TargetName));
+				Content.AccentColor = FLinearColor(0.92f, 0.18f, 0.20f, 0.98f);
+				break;
+			}
+
+			case EShowDownPhase::RoundEnd:
+				break;
+
+			case EShowDownPhase::GameOver:
+				Content.StateKey = TEXT("GameOver");
+				Content.Label = FText::FromString(TEXT("GAME OVER"));
+				Content.Title = FText::FromString(TEXT("게임 종료"));
+				Content.AccentColor = FLinearColor(0.92f, 0.18f, 0.20f, 0.98f);
+				break;
+
+			case EShowDownPhase::None:
+			default:
+				break;
+			}
+		}
+	}
+
+	if (!Content.StateKey.IsEmpty())
+	{
+		Content.StateKey += TEXT(":BottomRight");
+	}
+
+	SetGameplayPromptContent(
+		Content.StateKey,
+		Content.Label,
+		Content.Title,
+		Content.Detail,
+		Content.AccentColor,
+		Content.bPulse,
+		Content.bHighlightSelectableCards);
+	if (!GameplayPromptWidget.IsValid())
+	{
 		return;
 	}
 
-	ESDCardSelectionPromptState DesiredState = ESDCardSelectionPromptState::Hidden;
-	if (CanCreateLocalPlayerWidgets()
-		&& bHandleShowDownGameplayInput
-		&& !bPauseMenuOpen
-		&& !bChatOpen)
-	{
-		if (bCardSelectionSubmittedLocally)
-		{
-			DesiredState = ESDCardSelectionPromptState::Waiting;
-		}
-		else if (HasLocalSelectableCard())
-		{
-			DesiredState = ESDCardSelectionPromptState::Choose;
-		}
-	}
-
-	SetCardSelectionPromptState(static_cast<uint8>(DesiredState));
-	if (!CardSelectionPromptWidget.IsValid())
-	{
-		return;
-	}
-
-	CardSelectionPromptAnimationTime += FMath::Max(0.0f, DeltaTime);
-	const float FadeAlpha = FMath::Clamp(CardSelectionPromptAnimationTime / 0.18f, 0.0f, 1.0f);
-	const float PulseOpacity = DesiredState == ESDCardSelectionPromptState::Choose
-		? 0.94f + 0.06f * (0.5f + 0.5f * FMath::Sin(CardSelectionPromptAnimationTime * 4.6f))
-		: 0.84f;
-	CardSelectionPromptWidget->SetRenderOpacity(
-		FMath::InterpEaseOut(0.0f, PulseOpacity, FadeAlpha, 2.0f));
-	if (DesiredState == ESDCardSelectionPromptState::Choose)
+	GameplayPromptAnimationTime += FMath::Max(0.0f, DeltaTime);
+	const float FadeAlpha = FMath::Clamp(GameplayPromptAnimationTime / 0.18f, 0.0f, 1.0f);
+	const float TargetOpacity = bGameplayPromptPulse
+		? 0.94f + 0.06f * (0.5f + 0.5f * FMath::Sin(GameplayPromptAnimationTime * 4.6f))
+		: 0.94f;
+	GameplayPromptWidget->SetRenderOpacity(
+		FMath::InterpEaseOut(0.0f, TargetOpacity, FadeAlpha, 2.0f)
+			* GameplayHudIntroOpacity);
+	if (bGameplayPromptHighlightsCards)
 	{
 		RefreshCardSelectionHandHighlight();
 	}
 }
 
-void AShowDownPlayerController::SetCardSelectionPromptState(uint8 NewState)
+void AShowDownPlayerController::SetGameplayPromptContent(
+	const FString& StateKey,
+	const FText& Label,
+	const FText& Title,
+	const FText& Detail,
+	const FLinearColor& AccentColor,
+	bool bPulse,
+	bool bHighlightSelectableCards)
 {
-	const uint8 HiddenState = static_cast<uint8>(ESDCardSelectionPromptState::Hidden);
-	const uint8 ChooseState = static_cast<uint8>(ESDCardSelectionPromptState::Choose);
-	if (CardSelectionPromptState == NewState
-		&& (NewState == HiddenState || CardSelectionPromptWidget.IsValid()))
+	if (GameplayPromptStateKey == StateKey
+		&& (StateKey.IsEmpty() || GameplayPromptWidget.IsValid()))
 	{
 		return;
 	}
 
-	const bool bLeavingChooseState = CardSelectionPromptState == ChooseState && NewState != ChooseState;
-	RemoveCardSelectionPrompt();
-	if (bLeavingChooseState || NewState != ChooseState)
+	const bool bWasHighlightingCards = bGameplayPromptHighlightsCards;
+	RemoveGameplayPrompt();
+	GameplayPromptStateKey = StateKey;
+	GameplayPromptAnimationTime = 0.0f;
+	bGameplayPromptPulse = bPulse;
+	bGameplayPromptHighlightsCards = bHighlightSelectableCards;
+	if (bWasHighlightingCards && !bHighlightSelectableCards)
 	{
 		ClearCardSelectionHandHighlight();
+		RefreshInteractableOutlineMaterialParameters();
 	}
-	CardSelectionPromptState = NewState;
-	CardSelectionPromptAnimationTime = 0.0f;
-	if (NewState == HiddenState || !CanCreateLocalPlayerWidgets())
+
+	if (StateKey.IsEmpty() || !CanCreateLocalPlayerWidgets())
 	{
 		return;
 	}
 
-	const ESDCardSelectionPromptState State = static_cast<ESDCardSelectionPromptState>(NewState);
-	CardSelectionPromptWidget = BuildCardSelectionPromptWidget(
-		State,
-		IsMultiplayerGameMap(GetWorld()),
-		bSubmitCardsOnSingleClick);
-	CardSelectionPromptWidget->SetRenderOpacity(0.0f);
+	FSDGameplayPromptContent Content;
+	Content.StateKey = StateKey;
+	Content.Label = Label;
+	Content.Title = Title;
+	Content.Detail = Detail;
+	Content.AccentColor = AccentColor;
+	Content.bPulse = bPulse;
+	Content.bHighlightSelectableCards = bHighlightSelectableCards;
+	GameplayPromptWidget = BuildGameplayPromptWidget(Content);
+	GameplayPromptWidget->SetRenderOpacity(0.0f);
 	if (GEngine && GEngine->GameViewport)
 	{
 		GEngine->GameViewport->AddViewportWidgetContent(
-			CardSelectionPromptWidget.ToSharedRef(),
-			CardSelectionPromptZOrder);
+			GameplayPromptWidget.ToSharedRef(),
+			GameplayPromptZOrder);
 	}
 	else
 	{
-		CardSelectionPromptWidget.Reset();
+		GameplayPromptWidget.Reset();
 	}
 }
 
-void AShowDownPlayerController::RemoveCardSelectionPrompt()
+void AShowDownPlayerController::RemoveGameplayPrompt()
 {
-	if (!CardSelectionPromptWidget.IsValid())
+	if (!GameplayPromptWidget.IsValid())
 	{
 		return;
 	}
 	if (GEngine && GEngine->GameViewport)
 	{
-		GEngine->GameViewport->RemoveViewportWidgetContent(CardSelectionPromptWidget.ToSharedRef());
+		GEngine->GameViewport->RemoveViewportWidgetContent(GameplayPromptWidget.ToSharedRef());
 	}
-	CardSelectionPromptWidget.Reset();
+	GameplayPromptWidget.Reset();
 }
 
 void AShowDownPlayerController::SetHitBlackoutUiOpacity(float Opacity)
@@ -3648,10 +4296,6 @@ void AShowDownPlayerController::ClientShowStatusMessage_Implementation(const FSt
 	if (MultiplayerRankWidget)
 	{
 		MultiplayerRankWidget->SetRestartStatus(Message);
-	}
-	if (GEngine)
-	{
-		GEngine->AddOnScreenDebugMessage(-1, 4.0f, FColor::Green, Message);
 	}
 }
 

@@ -192,6 +192,8 @@ public:
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Presentation")
 	FTransform GetRevolverPresentationTransform() const;
 
+	bool TryGetRevolverPresentationAimLocation(FVector& OutAimLocation) const;
+
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Presentation")
 	bool ShouldAutoAimRevolverPresentationAtTarget() const { return bAutoAimRevolverPresentationAtTarget; }
 

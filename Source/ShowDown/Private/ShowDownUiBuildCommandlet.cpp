@@ -12,10 +12,13 @@
 #include "Components/EditableTextBox.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
+#include "Components/Image.h"
 #include "Components/ScrollBox.h"
 #include "Components/Slider.h"
+#include "Components/Spacer.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
+#include "Engine/Texture2D.h"
 #include "HAL/FileManager.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/PackageName.h"
@@ -43,9 +46,14 @@ namespace
 const FLinearColor Ink(0.92f, 0.95f, 0.96f, 1.0f);
 const FLinearColor Panel(0.0f, 0.0f, 0.0f, 0.68f);
 const FLinearColor Accent(0.0f, 0.0f, 0.0f, 0.82f);
+const TCHAR* MainMenuWidgetObjectPath = TEXT("/Game/UI/WBP_MainMenu.WBP_MainMenu");
 const TCHAR* ShopWidgetObjectPath = TEXT("/Game/UI/WBP_Shop.WBP_Shop");
 const TCHAR* CharacterSkinCatalogObjectPath =
 	TEXT("/Game/Data/Characters/DA_CharacterSkinCatalog.DA_CharacterSkinCatalog");
+const TCHAR* CurrencyIconObjectPath =
+	TEXT("/Game/UI/Icons/T_UI_Currency.T_UI_Currency");
+const TCHAR* ScoreIconObjectPath =
+	TEXT("/Game/UI/Icons/T_UI_Score.T_UI_Score");
 
 UObject* PretendardRegular()
 {
@@ -306,6 +314,314 @@ void SaveExisting(UWidgetBlueprint* BP)
 		BP,
 		*FPackageName::LongPackageNameToFilename(BP->GetOutermost()->GetName(), FPackageName::GetAssetPackageExtension()),
 		FSavePackageArgs());
+}
+
+void RegisterPatchedWidget(UWidgetBlueprint* Blueprint, UWidget* Widget)
+{
+	Widget->bIsVariable = true;
+	Blueprint->WidgetVariableNameToGuidMap.Add(Widget->GetFName(), FGuid::NewGuid());
+}
+
+bool WrapCanvasMetricTextWithIcon(
+	UWidgetBlueprint* Blueprint,
+	const FName TextWidgetName,
+	const FName RowWidgetName,
+	const FName SpacerWidgetName,
+	const FName ImageWidgetName,
+	const TCHAR* TextureObjectPath,
+	const TCHAR* InitialValue,
+	const float IconSize)
+{
+	if (!Blueprint || !Blueprint->WidgetTree)
+	{
+		UE_LOG(LogShowDownUiBuild, Error, TEXT("Cannot patch a null Widget Blueprint or WidgetTree."));
+		return false;
+	}
+
+	UWidgetTree* Tree = Blueprint->WidgetTree;
+	UTextBlock* ValueText = Cast<UTextBlock>(Tree->FindWidget(TextWidgetName));
+	if (!ValueText)
+	{
+		UE_LOG(
+			LogShowDownUiBuild,
+			Error,
+			TEXT("%s is missing required metric text '%s'."),
+			*Blueprint->GetPathName(),
+			*TextWidgetName.ToString());
+		return false;
+	}
+
+	UTexture2D* IconTexture = LoadObject<UTexture2D>(nullptr, TextureObjectPath);
+	if (!IconTexture)
+	{
+		UE_LOG(LogShowDownUiBuild, Error, TEXT("Missing metric icon texture: %s"), TextureObjectPath);
+		return false;
+	}
+
+	if (UWidget* ExistingImageWidget = Tree->FindWidget(ImageWidgetName))
+	{
+		UImage* ExistingImage = Cast<UImage>(ExistingImageWidget);
+		if (!ExistingImage)
+		{
+			UE_LOG(
+				LogShowDownUiBuild,
+				Error,
+				TEXT("%s already contains non-image widget '%s'."),
+				*Blueprint->GetPathName(),
+				*ImageWidgetName.ToString());
+			return false;
+		}
+
+		ExistingImage->SetBrushFromTexture(IconTexture, false);
+		ExistingImage->SetDesiredSizeOverride(FVector2D(IconSize, IconSize));
+		ValueText->SetText(FText::FromString(InitialValue));
+		ValueText->SetJustification(ETextJustify::Left);
+		return true;
+	}
+
+	if (Tree->FindWidget(RowWidgetName) || Tree->FindWidget(SpacerWidgetName))
+	{
+		UE_LOG(
+			LogShowDownUiBuild,
+			Error,
+			TEXT("%s contains a metric wrapper name collision for '%s'."),
+			*Blueprint->GetPathName(),
+			*RowWidgetName.ToString());
+		return false;
+	}
+
+	UCanvasPanel* ParentCanvas = Cast<UCanvasPanel>(ValueText->GetParent());
+	UCanvasPanelSlot* OriginalSlot = Cast<UCanvasPanelSlot>(ValueText->Slot);
+	if (!ParentCanvas || !OriginalSlot)
+	{
+		UE_LOG(
+			LogShowDownUiBuild,
+			Error,
+			TEXT("%s metric '%s' is not a direct CanvasPanel child; no changes were saved."),
+			*Blueprint->GetPathName(),
+			*TextWidgetName.ToString());
+		return false;
+	}
+
+	const FAnchors Anchors = OriginalSlot->GetAnchors();
+	const FMargin Offsets = OriginalSlot->GetOffsets();
+	const FVector2D Alignment = OriginalSlot->GetAlignment();
+	const bool bAutoSize = OriginalSlot->GetAutoSize();
+	const int32 ZOrder = OriginalSlot->GetZOrder();
+	const int32 ChildIndex = ParentCanvas->GetChildIndex(ValueText);
+
+	Blueprint->Modify();
+	Tree->Modify();
+	ParentCanvas->Modify();
+	ValueText->Modify();
+
+	if (!ParentCanvas->RemoveChild(ValueText))
+	{
+		UE_LOG(
+			LogShowDownUiBuild,
+			Error,
+			TEXT("Failed to detach metric '%s' from %s."),
+			*TextWidgetName.ToString(),
+			*Blueprint->GetPathName());
+		return false;
+	}
+
+	UHorizontalBox* MetricRow = Tree->ConstructWidget<UHorizontalBox>(
+		UHorizontalBox::StaticClass(),
+		RowWidgetName);
+	RegisterPatchedWidget(Blueprint, MetricRow);
+	UCanvasPanelSlot* RowSlot = Cast<UCanvasPanelSlot>(
+		ParentCanvas->InsertChildAt(ChildIndex, MetricRow));
+	if (!RowSlot)
+	{
+		UE_LOG(LogShowDownUiBuild, Error, TEXT("Failed to preserve the metric child position in %s."), *Blueprint->GetPathName());
+		return false;
+	}
+	RowSlot->SetAnchors(Anchors);
+	RowSlot->SetOffsets(Offsets);
+	RowSlot->SetAlignment(Alignment);
+	RowSlot->SetAutoSize(bAutoSize);
+	RowSlot->SetZOrder(ZOrder);
+
+	USpacer* LeadingSpacer = Tree->ConstructWidget<USpacer>(
+		USpacer::StaticClass(),
+		SpacerWidgetName);
+	RegisterPatchedWidget(Blueprint, LeadingSpacer);
+	if (UHorizontalBoxSlot* SpacerSlot = MetricRow->AddChildToHorizontalBox(LeadingSpacer))
+	{
+		SpacerSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+	}
+
+	UImage* MetricIcon = Tree->ConstructWidget<UImage>(
+		UImage::StaticClass(),
+		ImageWidgetName);
+	RegisterPatchedWidget(Blueprint, MetricIcon);
+	MetricIcon->SetBrushFromTexture(IconTexture, false);
+	MetricIcon->SetDesiredSizeOverride(FVector2D(IconSize, IconSize));
+	if (UHorizontalBoxSlot* IconSlot = MetricRow->AddChildToHorizontalBox(MetricIcon))
+	{
+		IconSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
+		IconSlot->SetPadding(FMargin(0.0f, 0.0f, 6.0f, 0.0f));
+		IconSlot->SetVerticalAlignment(VAlign_Center);
+	}
+
+	ValueText->SetText(FText::FromString(InitialValue));
+	ValueText->SetJustification(ETextJustify::Left);
+	if (UHorizontalBoxSlot* ValueSlot = MetricRow->AddChildToHorizontalBox(ValueText))
+	{
+		ValueSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
+		ValueSlot->SetVerticalAlignment(VAlign_Center);
+	}
+
+	UE_LOG(
+		LogShowDownUiBuild,
+		Display,
+		TEXT("Patched only metric '%s' in %s; the rest of the widget tree was preserved."),
+		*TextWidgetName.ToString(),
+		*Blueprint->GetPathName());
+	return true;
+}
+
+bool CompileMetricIconPatch(UWidgetBlueprint* Blueprint)
+{
+	FKismetEditorUtilities::CompileBlueprint(Blueprint);
+	if (Blueprint->Status == BS_Error)
+	{
+		UE_LOG(LogShowDownUiBuild, Error, TEXT("Metric icon patch failed to compile for %s."), *Blueprint->GetPathName());
+		return false;
+	}
+	return true;
+}
+
+bool SaveMetricIconPatch(UWidgetBlueprint* Blueprint)
+{
+	Blueprint->MarkPackageDirty();
+	const FString Filename = FPackageName::LongPackageNameToFilename(
+		Blueprint->GetOutermost()->GetName(),
+		FPackageName::GetAssetPackageExtension());
+	const bool bSaved = UPackage::SavePackage(
+		Blueprint->GetOutermost(),
+		Blueprint,
+		*Filename,
+		FSavePackageArgs());
+	if (!bSaved)
+	{
+		UE_LOG(LogShowDownUiBuild, Error, TEXT("Failed to save metric icon patch for %s."), *Blueprint->GetPathName());
+	}
+	return bSaved;
+}
+
+bool PatchPlayerMetricIcons()
+{
+	UWidgetBlueprint* MainMenu = LoadObject<UWidgetBlueprint>(nullptr, MainMenuWidgetObjectPath);
+	UWidgetBlueprint* Shop = LoadObject<UWidgetBlueprint>(nullptr, ShopWidgetObjectPath);
+	if (!MainMenu || !Shop)
+	{
+		UE_LOG(LogShowDownUiBuild, Error, TEXT("Main menu or shop Widget Blueprint could not be loaded."));
+		return false;
+	}
+
+	const bool bMainCoinPatched = WrapCanvasMetricTextWithIcon(
+		MainMenu,
+		TEXT("Text_Coin"),
+		TEXT("CoinMetricRow"),
+		TEXT("CoinMetricSpacer"),
+		TEXT("Image_Coin"),
+		CurrencyIconObjectPath,
+		TEXT("0$"),
+		30.0f);
+	const bool bMainScorePatched = WrapCanvasMetricTextWithIcon(
+		MainMenu,
+		TEXT("Text_Score"),
+		TEXT("ScoreMetricRow"),
+		TEXT("ScoreMetricSpacer"),
+		TEXT("Image_Score"),
+		ScoreIconObjectPath,
+		TEXT("0P"),
+		30.0f);
+	const bool bShopCoinPatched = WrapCanvasMetricTextWithIcon(
+		Shop,
+		TEXT("Text_Coin"),
+		TEXT("ShopCoinMetricRow"),
+		TEXT("ShopCoinMetricSpacer"),
+		TEXT("Image_Coin"),
+		CurrencyIconObjectPath,
+		TEXT("0$"),
+		30.0f);
+
+	if (!bMainCoinPatched || !bMainScorePatched || !bShopCoinPatched)
+	{
+		UE_LOG(LogShowDownUiBuild, Error, TEXT("Metric icon patch aborted before saving all target assets."));
+		return false;
+	}
+	if (!CompileMetricIconPatch(MainMenu) || !CompileMetricIconPatch(Shop))
+	{
+		UE_LOG(LogShowDownUiBuild, Error, TEXT("Metric icon patch aborted because a target failed to compile."));
+		return false;
+	}
+
+	return SaveMetricIconPatch(MainMenu) && SaveMetricIconPatch(Shop);
+}
+
+bool ValidateMetricIconWidget(
+	UWidgetBlueprint* Blueprint,
+	const FName TextWidgetName,
+	const FName RowWidgetName,
+	const FName ImageWidgetName)
+{
+	if (!Blueprint || !Blueprint->WidgetTree)
+	{
+		return false;
+	}
+
+	UTextBlock* ValueText = Cast<UTextBlock>(Blueprint->WidgetTree->FindWidget(TextWidgetName));
+	UHorizontalBox* MetricRow = Cast<UHorizontalBox>(Blueprint->WidgetTree->FindWidget(RowWidgetName));
+	UImage* MetricIcon = Cast<UImage>(Blueprint->WidgetTree->FindWidget(ImageWidgetName));
+	const bool bValid = ValueText
+		&& MetricRow
+		&& MetricIcon
+		&& ValueText->GetParent() == MetricRow
+		&& MetricIcon->GetParent() == MetricRow
+		&& Cast<UCanvasPanel>(MetricRow->GetParent())
+		&& Cast<UCanvasPanelSlot>(MetricRow->Slot);
+	if (!bValid)
+	{
+		UE_LOG(
+			LogShowDownUiBuild,
+			Error,
+			TEXT("Metric icon hierarchy validation failed for '%s' in %s."),
+			*TextWidgetName.ToString(),
+			*Blueprint->GetPathName());
+	}
+	return bValid;
+}
+
+bool ValidatePlayerMetricIcons()
+{
+	UWidgetBlueprint* MainMenu = LoadObject<UWidgetBlueprint>(nullptr, MainMenuWidgetObjectPath);
+	UWidgetBlueprint* Shop = LoadObject<UWidgetBlueprint>(nullptr, ShopWidgetObjectPath);
+	const bool bHierarchyValid =
+		ValidateMetricIconWidget(MainMenu, TEXT("Text_Coin"), TEXT("CoinMetricRow"), TEXT("Image_Coin"))
+		&& ValidateMetricIconWidget(MainMenu, TEXT("Text_Score"), TEXT("ScoreMetricRow"), TEXT("Image_Score"))
+		&& ValidateMetricIconWidget(Shop, TEXT("Text_Coin"), TEXT("ShopCoinMetricRow"), TEXT("Image_Coin"));
+	if (!bHierarchyValid)
+	{
+		return false;
+	}
+
+	FKismetEditorUtilities::CompileBlueprint(MainMenu);
+	FKismetEditorUtilities::CompileBlueprint(Shop);
+	if (MainMenu->Status == BS_Error || Shop->Status == BS_Error)
+	{
+		UE_LOG(LogShowDownUiBuild, Error, TEXT("A metric icon Widget Blueprint failed fresh-load compilation."));
+		return false;
+	}
+
+	UE_LOG(
+		LogShowDownUiBuild,
+		Display,
+		TEXT("Metric icon Widget Blueprints loaded and compiled without rebuilding or saving their widget trees."));
+	return true;
 }
 
 bool BuildShop(UWidgetBlueprint* BP)
@@ -1248,6 +1564,16 @@ void BuildMultiResult(UWidgetBlueprint* BP)
 
 int32 UShowDownUiBuildCommandlet::Main(const FString& Params)
 {
+	if (FParse::Param(*Params, TEXT("ValidateMetricIconsOnly")))
+	{
+		return ValidatePlayerMetricIcons() ? 0 : 1;
+	}
+
+	if (FParse::Param(*Params, TEXT("MetricIconsOnly")))
+	{
+		return PatchPlayerMetricIcons() ? 0 : 1;
+	}
+
 	const bool bShopOnly = FParse::Param(*Params, TEXT("ShopOnly"));
 	const bool bForceRebuildShopAssets =
 		FParse::Param(*Params, TEXT("ForceRebuildShopAssets"));

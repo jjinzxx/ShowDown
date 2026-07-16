@@ -103,7 +103,7 @@ public:
 
 	// Pure helpers kept public so the multiplayer gate and seat-relative camera
 	// math can be covered without creating a PIE world.
-	static bool ShouldUseGunShotCamera(bool bLiveRound, bool bTargetsLocalPlayer);
+	static bool ShouldUseGunShotCamera(bool bTargetsLocalPlayer);
 	static bool ShouldUseEliminationTableOverview(
 		bool bLiveRound,
 		bool bTargetsLocalPlayer,
@@ -115,15 +115,37 @@ public:
 		const FTransform& PlayerOneCameraTransform,
 		const FTransform& PlayerOneCharacterTransform,
 		const FTransform& TargetCharacterTransform);
+	static FTransform BuildFallbackGunShotCameraTransform(
+		const FVector& TableCenter,
+		const FTransform& TargetCharacterTransform,
+		float BackDistance,
+		float SideDistance,
+		float Height,
+		float LookAtHeight);
 	static FTransform BuildEliminationTableOverviewTransform(
 		const FVector& TableCenter,
 		const FTransform& TargetCharacterTransform,
 		float BackDistance,
 		float Height,
 		float LookAtHeight);
+	static int32 ResolveRaiseBulletLoadStartCount(
+		int32 PreviousBet,
+		int32 NewBet,
+		bool bReloadAllBullets);
+	static float CalculateRaiseBulletLoadSequenceDuration(
+		int32 BulletCount,
+		float BulletDuration,
+		float StaggerDelay);
+	float GetRaiseBulletLoadPresentationDuration(int32 PreviousBet, int32 NewBet) const;
 
 	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Status")
 	void SetTableStatus(int32 LiveRounds, int32 RemainingChambers, EShowDownPhase Phase, EShowDownPlayerSlot TurnSlot);
+
+	/** Plays the reliable table presentation for a successfully committed raise. */
+	float PlayRaiseBulletLoadPresentation(
+		int32 PreviousBet,
+		int32 NewBet,
+		EShowDownPlayerSlot SourceSlot);
 
 	// Clears the centre of the table while the opening deck is displayed, then
 	// drops the complete revolver actor back onto its authored table transform.
@@ -228,7 +250,7 @@ protected:
 	EShowDownPlayerSlot StatusTurnSlot = EShowDownPlayerSlot::None;
 
 	UPROPERTY(ReplicatedUsing = OnRep_OpeningCardShowcaseStowed)
-	bool bOpeningCardShowcaseStowed = false;
+	bool bOpeningCardShowcaseStowed = true;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UStaticMeshComponent> GunMesh;
@@ -259,6 +281,47 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UStaticMeshComponent> BulletMesh06;
+
+	/** bulletBetting meshes used for both the hand-to-gun travel and settled rounds. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TArray<TObjectPtr<UStaticMeshComponent>> BettingBulletMeshes;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading")
+	bool bEnableRaiseBulletLoadAnimation = true;
+
+	/** Optional full reload. Disabled by default so a 1 -> 4 raise inserts exactly three new bullets. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading")
+	bool bReloadAllBulletsOnRaise = false;
+
+	/** Fallback start offset in ChamberPivot space when the raising character cannot be resolved. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading")
+	FVector RaiseBulletLoadStartOffset = FVector(86.0f, 0.0f, 12.0f);
+
+	/** Socket/bone used as the start of the straight loading path. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading")
+	FName RaiseBulletSourceHandName = TEXT("RightHand");
+
+	/** Local offset from the raising character's hand bone. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading")
+	FVector RaiseBulletSourceHandOffset = FVector::ZeroVector;
+
+	/** Character-local fallback when the active skin has no matching hand bone. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading")
+	FVector RaiseBulletFallbackCharacterOffset = FVector(32.0f, 26.0f, 42.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.05"))
+	float RaiseBulletLoadDuration = 0.48f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.0"))
+	float RaiseBulletLoadStaggerDelay = 0.12f;
+
+	/** Keeps each incoming bullet readable at its spawn point before it travels into the cylinder. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.0"))
+	float RaiseBulletLoadStartHoldTime = 0.06f;
+
+	/** World scale for /Game/Fab/Revolver/bulletBetting. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.001"))
+	float RaiseBulletBettingScale = 0.10f;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<USceneComponent> TriggerPivot;
@@ -330,7 +393,7 @@ protected:
 	float RaiseTime = 0.45f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Timing", meta = (ClampMin = "0.0"))
-	float AimHoldTime = 0.7f;
+	float AimHoldTime = 0.3f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Timing", meta = (ClampMin = "0.0"))
 	float ShotHoldTime = 0.12f;
@@ -365,11 +428,20 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Mechanism")
 	bool bKeepChamberRotationAfterShot = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera")
-	bool bUseSelfShotCinematicCamera = true;
-
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera", meta = (DisplayName = "Gun Shot Camera (Player 1 Reference)", ToolTip = "Author this camera for Player 1. Runtime copies the same character-relative position and rotation for Players 2-4."))
 	TObjectPtr<ACameraActor> SelfShotCinematicCamera;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera|Fallback", meta = (ClampMin = "0.0"))
+	float FallbackGunShotCameraBackDistance = 165.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera|Fallback")
+	float FallbackGunShotCameraSideDistance = 70.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera|Fallback")
+	float FallbackGunShotCameraHeight = 115.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera|Fallback")
+	float FallbackGunShotCameraLookAtHeight = 75.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Cinematic Camera", meta = (ClampMin = "0.0"))
 	float CinematicCameraBlendInTime = 0.25f;
@@ -512,10 +584,10 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Hit Sequence|Blackout", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float HitBlackoutAmount = 1.0f;
 
-	// Lets the victim and observers see the body settle before the blackout masks
-	// the shared seat-reset pulse at its peak.
+	// Briefly exposes the hit reaction before the blackout masks the shared
+	// seat-reset pulse. Keep this short so ArtTone flows directly into blackout.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Hit Sequence|Blackout", meta = (ClampMin = "0.0"))
-	float HitBlackoutDelay = 0.82f;
+	float HitBlackoutDelay = 0.25f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Hit Sequence|Blackout", meta = (ClampMin = "0.0"))
 	float HitBlackoutDuration = 0.45f;
@@ -555,6 +627,7 @@ protected:
 
 private:
 	friend class FShowDownGunVisionSequenceTimingTest;
+	friend class FShowDownRaiseBulletLoadingTest;
 
 	enum class EGunAnimState : uint8
 	{
@@ -590,7 +663,7 @@ private:
 	void UpdateMechanismReset();
 	void ResetTriggerAndHammer();
 	void StartSelfShotCinematicCamera();
-	void TryStartKnownLiveLocalShotCamera();
+	void TryStartLocalTargetShotCamera();
 	void ActivateSelfShotCinematicCamera();
 	void UpdateSelfShotCinematicCamera(float DeltaSeconds);
 	bool TryStartEliminationTableOverview();
@@ -643,6 +716,32 @@ private:
 	void StartTinnitusSound();
 	void UpdateTinnitusSound(float DeltaSeconds);
 	void StopTinnitusSound();
+	void CacheBulletRestRelativeTransforms();
+	UStaticMeshComponent* GetBulletMeshComponent(int32 BulletIndex) const;
+	UStaticMeshComponent* GetBettingBulletMeshComponent(int32 BulletIndex) const;
+	void SynchronizeBulletPresentationFromStatus();
+	void SetBulletPresentationImmediate(int32 BulletCount);
+	FVector ResolveRaiseBulletSourceWorldLocation(
+		EShowDownPlayerSlot SourceSlot,
+		int32 StartCount) const;
+	void StartRaiseBulletLoadAnimation(
+		int32 PreviousBet,
+		int32 NewBet,
+		EShowDownPlayerSlot SourceSlot);
+	void UpdateRaiseBulletLoadAnimation(float DeltaSeconds);
+	void ReceiveRaiseBulletLoadPresentation(
+		int32 PreviousBet,
+		int32 NewBet,
+		int32 PresentationRound,
+		EShowDownPlayerSlot SourceSlot);
+	void TryStartPendingRaiseBulletLoadPresentation();
+	void ClearPendingRaiseBulletLoadPresentation();
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastPlayRaiseBulletLoadPresentation(
+		int32 PreviousBet,
+		int32 NewBet,
+		int32 PresentationRound,
+		EShowDownPlayerSlot SourceSlot);
 	bool IsRuntimeTickRequired() const;
 	void RefreshRuntimeTickState();
 	void StageOpeningCardDrop();
@@ -698,6 +797,18 @@ private:
 	float MuzzleFlashElapsedTime = 0.0f;
 	float TinnitusElapsedTime = 0.0f;
 	float OpeningCardDropVelocityZ = 0.0f;
+	float RaiseBulletLoadElapsedTime = 0.0f;
+	FVector ActiveRaiseBulletSourceWorldLocation = FVector::ZeroVector;
+	int32 DisplayedBulletCount = 0;
+	int32 RaiseBulletLoadPreviousCount = 0;
+	int32 RaiseBulletLoadStartCount = 0;
+	int32 RaiseBulletLoadTargetCount = 0;
+	int32 PendingRaiseBulletLoadPreviousCount = 0;
+	int32 PendingRaiseBulletLoadTargetCount = 0;
+	int32 PendingRaiseBulletLoadRound = 0;
+	EShowDownPlayerSlot ActiveRaiseBulletSourceSlot = EShowDownPlayerSlot::None;
+	EShowDownPlayerSlot PendingRaiseBulletLoadSourceSlot = EShowDownPlayerSlot::None;
+	TArray<FTransform> BulletRestRelativeTransforms;
 	bool bSelfShotCinematicCameraActive = false;
 	bool bSelfShotCinematicCameraStartPending = false;
 	bool bSelfShotCinematicCameraHoldStarted = false;
@@ -717,6 +828,8 @@ private:
 	bool bTinnitusFadeOutStarted = false;
 	bool bHitSequenceBlackoutActive = false;
 	bool bMultiplayerRoulettePresentationActive = false;
+	bool bRaiseBulletLoadActive = false;
+	bool bRaiseBulletLoadPending = false;
 	UPROPERTY(Transient)
 	TObjectPtr<UAudioComponent> TinnitusAudioComponent;
 	TWeakObjectPtr<AShowDownGameStateBase> BoundShowDownGameState;

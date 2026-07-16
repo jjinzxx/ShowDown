@@ -22,7 +22,9 @@
 #include "ShowDownGameStateBase.h"
 #include "ShowDownShopWidget.h"
 #include "ShowDownTypes.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
+#include "Engine/StaticMesh.h"
 #include "Sound/SoundWave.h"
 #include "UObject/UnrealType.h"
 
@@ -1015,6 +1017,8 @@ bool FShowDownRoundCinematicDefaultsTest::RunTest(const FString& Parameters)
 	TestFloatDefault(TEXT("RoundCinematicLoserSpotlightHoldSeconds"), 1.5f);
 	TestFloatDefault(TEXT("CollectorCardSelectionDelaySeconds"), 2.1f);
 	TestFloatDefault(TEXT("RoundCinematicPostShotProgressHoldSeconds"), 3.5f);
+	TestFloatDefault(TEXT("CardSelectionTimeLimitSeconds"), 30.0f);
+	TestFloatDefault(TEXT("BettingTurnTimeLimitSeconds"), 30.0f);
 	return true;
 }
 
@@ -1026,14 +1030,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FShowDownGunShotCameraTest::RunTest(const FString& Parameters)
 {
 	TestTrue(
-		TEXT("Only a live hit targeting the local player enables the camera"),
-		ASDSelfShotGunActor::ShouldUseGunShotCamera(true, true));
+		TEXT("Any shot targeting the local player enables the third-person camera"),
+		ASDSelfShotGunActor::ShouldUseGunShotCamera(true));
 	TestFalse(
-		TEXT("A live hit on another player leaves this camera unchanged"),
-		ASDSelfShotGunActor::ShouldUseGunShotCamera(true, false));
-	TestFalse(
-		TEXT("An empty chamber never enables the target camera"),
-		ASDSelfShotGunActor::ShouldUseGunShotCamera(false, true));
+		TEXT("An observer leaves their first-person camera unchanged"),
+		ASDSelfShotGunActor::ShouldUseGunShotCamera(false));
 	TestTrue(
 		TEXT("A final live hit keeps only the victim on the table overview"),
 		ASDSelfShotGunActor::ShouldUseEliminationTableOverview(true, true, 0));
@@ -1108,6 +1109,23 @@ bool FShowDownGunShotCameraTest::RunTest(const FString& Parameters)
 	TestTrue(
 		TEXT("Player 3 receives the same character-relative camera rotation"),
 		PlayerThreeResult.GetRotation().AngularDistance(ExpectedPlayerThreeRotation) < 0.001f);
+
+	const FTransform FallbackCamera = ASDSelfShotGunActor::BuildFallbackGunShotCameraTransform(
+		FVector::ZeroVector,
+		FTransform(FRotator(0.0f, 180.0f, 0.0f), FVector(300.0f, 0.0f, 0.0f)),
+		165.0f,
+		70.0f,
+		115.0f,
+		75.0f);
+	TestTrue(
+		TEXT("The fallback camera is behind, above, and offset from the local victim"),
+		FallbackCamera.GetLocation().Equals(FVector(465.0f, -70.0f, 115.0f), 0.01f));
+	const FVector FallbackLookTarget(270.0f, 0.0f, 75.0f);
+	TestTrue(
+		TEXT("The fallback camera looks back toward the victim and gun"),
+		FVector::DotProduct(
+			FallbackCamera.GetUnitAxis(EAxis::X),
+			(FallbackLookTarget - FallbackCamera.GetLocation()).GetSafeNormal()) > 0.999f);
 
 	const FVector TableCenter(40.0f, -25.0f, 10.0f);
 	const float SeatDistance = 300.0f;
@@ -1432,6 +1450,29 @@ bool FShowDownGunVisionSequenceTimingTest::RunTest(const FString& Parameters)
 	TestFalse(
 		TEXT("Card selection explicitly keeps SpotLight6 off"),
 		SequenceSubsystem->bTableSpotlightEnabled);
+	GameState->CurrentPhase = EShowDownPhase::SelectCard;
+	SequenceSubsystem->BoundGameState = GameState;
+	SequenceSubsystem->HandleTableCinematicCue(ESDTableCinematicCue::TableSpotlightOn, 0);
+	TestFalse(
+		TEXT("Card selection rejects delayed SpotLight6-on cues"),
+		SequenceSubsystem->bTableSpotlightEnabled);
+
+	GameState->CurrentPhase = EShowDownPhase::Betting;
+	SequenceSubsystem->ApplyPhasePresentationPolicy(EShowDownPhase::Betting);
+	TestEqual(
+		TEXT("Betting has no darkness overlay"),
+		SequenceSubsystem->DesiredDarknessStrength,
+		0.0f);
+	SequenceSubsystem->HandleTableCinematicCue(ESDTableCinematicCue::BetFocusStarted, 0);
+	TestEqual(
+		TEXT("A committed bet clears darkness during its focus beat"),
+		SequenceSubsystem->DesiredDarknessStrength,
+		0.0f);
+	SequenceSubsystem->HandleTableCinematicCue(ESDTableCinematicCue::BetFocusEnded, 0);
+	TestEqual(
+		TEXT("Finishing bet focus keeps darkness disabled"),
+		SequenceSubsystem->DesiredDarknessStrength,
+		0.0f);
 
 	SequenceSubsystem->bTableSpotlightEnabled = false;
 	SequenceSubsystem->bZeroDarknessSpotlightEnabled = true;
@@ -1504,9 +1545,9 @@ bool FShowDownGunVisionSequenceTimingTest::RunTest(const FString& Parameters)
 		TEXT("The replicated reset releases the post-shot hold"),
 		SequenceSubsystem->bPostShotBrightHoldActive);
 	TestEqual(
-		TEXT("The replicated reset restores the next-game darkness target"),
+		TEXT("The replicated reset keeps the next-game darkness disabled"),
 		SequenceSubsystem->DesiredDarknessStrength,
-		1.0f);
+		0.0f);
 
 	GameState->CurrentPhase = EShowDownPhase::Betting;
 	GunActor->bMultiplayerRoulettePresentationActive = true;
@@ -1521,20 +1562,232 @@ bool FShowDownGunVisionSequenceTimingTest::RunTest(const FString& Parameters)
 	GunActor->PendingMultiplayerRoulettePresentations.Add(
 		{ EShowDownPlayerSlot::Player3, false });
 	GunActor->HandleTableCinematicCue(ESDTableCinematicCue::Reset, 0);
-	TestFalse(
-		TEXT("A reliable reset invalidates the active multiplayer gun presentation"),
+	TestTrue(
+		TEXT("A reliable reset preserves the active multiplayer gun presentation"),
 		GunActor->bMultiplayerRoulettePresentationActive);
-	TestTrue(
-		TEXT("A reliable reset clears delayed client gun presentations immediately"),
-		GunActor->PendingMultiplayerRoulettePresentations.IsEmpty());
+	TestEqual(
+		TEXT("A reliable reset preserves an already received delayed gun presentation"),
+		GunActor->PendingMultiplayerRoulettePresentations.Num(),
+		1);
 
-	GunActor->bMultiplayerRoulettePresentationActive = true;
-	GunActor->PendingMultiplayerRoulettePresentations.Add(
-		{ EShowDownPlayerSlot::Player3, false });
 	GunActor->HandleGamePhaseChanged(EShowDownPhase::RoundEnd);
+	TestEqual(
+		TEXT("Round-end phase replication cannot overtake and discard the delayed gun presentation"),
+		GunActor->PendingMultiplayerRoulettePresentations.Num(),
+		1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownRaiseBulletLoadingTest,
+	"ShowDown.Core.RaiseBulletLoading",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownRaiseBulletLoadingTest::RunTest(const FString& Parameters)
+{
+	TestEqual(
+		TEXT("Full reload mode starts a target load from an empty cylinder"),
+		ASDSelfShotGunActor::ResolveRaiseBulletLoadStartCount(2, 5, true),
+		0);
+	TestEqual(
+		TEXT("Additive mode preserves bullets that were already loaded"),
+		ASDSelfShotGunActor::ResolveRaiseBulletLoadStartCount(2, 5, false),
+		2);
+	TestEqual(
+		TEXT("The additive start count is clamped to the six chamber cylinder"),
+		ASDSelfShotGunActor::ResolveRaiseBulletLoadStartCount(8, 12, false),
+		6);
+	TestEqual(
+		TEXT("A zero-bullet sequence has no duration"),
+		ASDSelfShotGunActor::CalculateRaiseBulletLoadSequenceDuration(0, 0.48f, 0.12f),
+		0.0f);
+
+	const float SixBulletSequenceDuration =
+		ASDSelfShotGunActor::CalculateRaiseBulletLoadSequenceDuration(6, 0.48f, 0.12f);
+	const float ThreeBulletSequenceDuration =
+		ASDSelfShotGunActor::CalculateRaiseBulletLoadSequenceDuration(3, 0.48f, 0.12f);
 	TestTrue(
-		TEXT("Leaving roulette clears delayed client gun presentations"),
-		GunActor->PendingMultiplayerRoulettePresentations.IsEmpty());
+		TEXT("Six bullets use the configured visible 1.08 second cascade"),
+		FMath::IsNearlyEqual(SixBulletSequenceDuration, 1.08f));
+	TestTrue(
+		TEXT("A one-to-four raise inserts three bullets over 0.72 seconds"),
+		FMath::IsNearlyEqual(ThreeBulletSequenceDuration, 0.72f));
+	TestTrue(
+		TEXT("The next multiplayer turn reserves a safety margin after the cascade"),
+		FMath::IsNearlyEqual(
+			AShowDownGameModeBase::CalculateRaiseBulletLoadHandoffDelay(
+				0.6f,
+				SixBulletSequenceDuration),
+			1.18f));
+	TestTrue(
+		TEXT("Short effects retain the configured multiplayer action interval"),
+		FMath::IsNearlyEqual(
+			AShowDownGameModeBase::CalculateRaiseBulletLoadHandoffDelay(0.6f, 0.2f),
+			0.6f));
+
+	ASDSelfShotGunActor* GunActor = NewObject<ASDSelfShotGunActor>();
+	TestNotNull(TEXT("A raise bullet presentation gun can be created"), GunActor);
+	if (!GunActor)
+	{
+		return false;
+	}
+	TestFalse(
+		TEXT("Raises insert only the newly added bullets by default"),
+		GunActor->bReloadAllBulletsOnRaise);
+	TestEqual(
+		TEXT("Six dedicated bulletBetting meshes drive the cylinder presentation"),
+		GunActor->BettingBulletMeshes.Num(),
+		6);
+	TestTrue(
+		TEXT("The dedicated presentation uses the bulletBetting asset"),
+		GunActor->BettingBulletMeshes.IsValidIndex(0)
+			&& GunActor->BettingBulletMeshes[0]
+			&& GunActor->BettingBulletMeshes[0]->GetStaticMesh()
+			&& GunActor->BettingBulletMeshes[0]->GetStaticMesh()->GetName() == TEXT("bulletBetting"));
+	TestTrue(
+		TEXT("Incoming bullets pause briefly at their visible spawn point"),
+		GunActor->RaiseBulletLoadStartHoldTime > 0.0f);
+	TestTrue(
+		TEXT("The runtime duration reflects the complete configured six-bullet load"),
+		FMath::IsNearlyEqual(
+			GunActor->GetRaiseBulletLoadPresentationDuration(0, 6),
+			SixBulletSequenceDuration));
+
+	const UFunction* RaiseMulticastFunction = ASDSelfShotGunActor::StaticClass()
+		->FindFunctionByName(TEXT("MulticastPlayRaiseBulletLoadPresentation"));
+	TestNotNull(TEXT("The raise presentation multicast is reflected"), RaiseMulticastFunction);
+	TestTrue(
+		TEXT("The raise presentation remains a network multicast"),
+		RaiseMulticastFunction
+			&& RaiseMulticastFunction->HasAnyFunctionFlags(FUNC_NetMulticast));
+	TestTrue(
+		TEXT("The raise presentation remains reliable"),
+		RaiseMulticastFunction
+			&& RaiseMulticastFunction->HasAnyFunctionFlags(FUNC_NetReliable));
+
+	// Reproduce the real multiplayer ordering that previously skipped the effect:
+	// the replicated 4/6 status reaches the client before the 1 -> 4 raise RPC.
+	GunActor->StatusPhase = EShowDownPhase::Betting;
+	GunActor->StatusLiveRounds = 4;
+	GunActor->SetBulletPresentationImmediate(4);
+	GunActor->ReceiveRaiseBulletLoadPresentation(1, 4, 0, EShowDownPlayerSlot::Player1);
+	TestTrue(
+		TEXT("A status-first current-round raise still starts its reliable presentation"),
+		GunActor->bRaiseBulletLoadActive);
+	TestEqual(
+		TEXT("The status-first presentation returns the counter to its previous value"),
+		GunActor->DisplayedBulletCount,
+		1);
+	TestFalse(TEXT("Legacy slot meshes stay hidden"), GunActor->BulletMesh02->IsVisible());
+	TestTrue(TEXT("The existing first bulletBetting round remains loaded"), GunActor->BettingBulletMeshes[0]->IsVisible());
+	TestTrue(TEXT("The first newly raised bulletBetting round enters immediately"), GunActor->BettingBulletMeshes[1]->IsVisible());
+	TestFalse(TEXT("The next bulletBetting round waits for its stagger"), GunActor->BettingBulletMeshes[2]->IsVisible());
+	TestTrue(
+		TEXT("The current raise remembers which player's hand is the source"),
+		GunActor->ActiveRaiseBulletSourceSlot == EShowDownPlayerSlot::Player1);
+	GunActor->UpdateRaiseBulletLoadAnimation(0.48f);
+	TestEqual(
+		TEXT("The counter reaches 2/6 when the first new bullet seats"),
+		GunActor->DisplayedBulletCount,
+		2);
+	GunActor->UpdateRaiseBulletLoadAnimation(0.12f);
+	TestEqual(
+		TEXT("The counter reaches 3/6 when the second new bullet seats"),
+		GunActor->DisplayedBulletCount,
+		3);
+	GunActor->UpdateRaiseBulletLoadAnimation(0.12f);
+	TestFalse(TEXT("The three-bullet cascade reaches a stable final state"), GunActor->bRaiseBulletLoadActive);
+	TestEqual(TEXT("The final display reaches 4/6"), GunActor->DisplayedBulletCount, 4);
+	TestTrue(TEXT("The fourth raised bulletBetting round is visible"), GunActor->BettingBulletMeshes[3]->IsVisible());
+	TestFalse(TEXT("A bulletBetting round above the raised bet stays hidden"), GunActor->BettingBulletMeshes[4]->IsVisible());
+
+	// RPC-first delivery must also survive the later target status replication.
+	GunActor->StatusLiveRounds = 1;
+	GunActor->StatusPhase = EShowDownPhase::Betting;
+	GunActor->SetBulletPresentationImmediate(1);
+	GunActor->ReceiveRaiseBulletLoadPresentation(1, 4, 0, EShowDownPlayerSlot::Player1);
+	GunActor->StatusLiveRounds = 4;
+	GunActor->SynchronizeBulletPresentationFromStatus();
+	TestTrue(
+		TEXT("Target status replication does not snap an active cascade"),
+		GunActor->bRaiseBulletLoadActive);
+	TestEqual(TEXT("The active counter remains at the previous bet"), GunActor->DisplayedBulletCount, 1);
+	GunActor->UpdateRaiseBulletLoadAnimation(ThreeBulletSequenceDuration);
+	TestEqual(TEXT("RPC-first delivery also settles at 4/6"), GunActor->DisplayedBulletCount, 4);
+
+	GunActor->StatusPhase = EShowDownPhase::Betting;
+	GunActor->StatusLiveRounds = 2;
+	GunActor->SetBulletPresentationImmediate(2);
+	GunActor->ReceiveRaiseBulletLoadPresentation(2, 3, 0, EShowDownPlayerSlot::Player1);
+	GunActor->ReceiveRaiseBulletLoadPresentation(3, 5, 0, EShowDownPlayerSlot::Player2);
+	GunActor->StatusLiveRounds = 3;
+	GunActor->SynchronizeBulletPresentationFromStatus();
+	TestTrue(
+		TEXT("A stale intermediate status does not cancel a newer reliable raise"),
+		GunActor->bRaiseBulletLoadActive);
+	TestEqual(
+		TEXT("The newer consecutive raise remains the active target"),
+		GunActor->RaiseBulletLoadTargetCount,
+		5);
+	GunActor->UpdateRaiseBulletLoadAnimation(SixBulletSequenceDuration);
+	TestEqual(
+		TEXT("Consecutive raises settle on the latest target"),
+		GunActor->DisplayedBulletCount,
+		5);
+
+	GunActor->StatusLiveRounds = 2;
+	GunActor->SetBulletPresentationImmediate(2);
+	GunActor->HandleGamePhaseChanged(EShowDownPhase::SelectCard);
+	GunActor->ReceiveRaiseBulletLoadPresentation(2, 4, 0, EShowDownPlayerSlot::Player2);
+	TestTrue(
+		TEXT("A raise that overtakes betting phase replication is queued"),
+		GunActor->bRaiseBulletLoadPending);
+	TestFalse(
+		TEXT("A pre-betting raise does not animate early"),
+		GunActor->bRaiseBulletLoadActive);
+	GunActor->HandleGamePhaseChanged(EShowDownPhase::Betting);
+	TestFalse(
+		TEXT("The queued raise is consumed when betting arrives"),
+		GunActor->bRaiseBulletLoadPending);
+	TestTrue(
+		TEXT("The queued raise starts in betting"),
+		GunActor->bRaiseBulletLoadActive);
+	GunActor->UpdateRaiseBulletLoadAnimation(SixBulletSequenceDuration);
+
+	GunActor->SetBulletPresentationImmediate(2);
+	GunActor->StartRaiseBulletLoadAnimation(2, 4, EShowDownPlayerSlot::Player1);
+	GunActor->StatusLiveRounds = 4;
+	GunActor->StatusPhase = EShowDownPhase::Roulette;
+	GunActor->SynchronizeBulletPresentationFromStatus();
+	TestFalse(TEXT("Leaving betting settles an unfinished cascade"), GunActor->bRaiseBulletLoadActive);
+	TestEqual(TEXT("The settled cylinder keeps the authoritative count"), GunActor->DisplayedBulletCount, 4);
+
+	GunActor->ReceiveRaiseBulletLoadPresentation(2, 4, 0, EShowDownPlayerSlot::Player1);
+	TestFalse(
+		TEXT("A delayed raise RPC cannot restart during roulette"),
+		GunActor->bRaiseBulletLoadActive);
+	TestFalse(
+		TEXT("A delayed terminal-phase RPC is not left pending"),
+		GunActor->bRaiseBulletLoadPending);
+
+	AShowDownGameStateBase* GameState = NewObject<AShowDownGameStateBase>();
+	TestNotNull(TEXT("Round ordering can be tested with a game state"), GameState);
+	if (GameState)
+	{
+		GameState->CurrentRound = 2;
+		GameState->CurrentPhase = EShowDownPhase::Betting;
+		GunActor->BoundShowDownGameState = GameState;
+		GunActor->StatusLiveRounds = 1;
+		GunActor->SetBulletPresentationImmediate(1);
+		GunActor->ReceiveRaiseBulletLoadPresentation(2, 5, 1, EShowDownPlayerSlot::Player1);
+		TestFalse(
+			TEXT("A reliable raise from an older round is discarded"),
+			GunActor->bRaiseBulletLoadActive);
+		TestEqual(
+			TEXT("Discarding an old-round raise preserves the current authoritative status"),
+			GunActor->DisplayedBulletCount,
+			1);
+	}
 	return true;
 }
 

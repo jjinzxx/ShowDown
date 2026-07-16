@@ -8,6 +8,8 @@
 #include "Components/EditableTextBox.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
+#include "Components/Overlay.h"
+#include "Components/OverlaySlot.h"
 #include "Components/ScrollBox.h"
 #include "Components/ScrollBoxSlot.h"
 #include "Components/SizeBox.h"
@@ -31,13 +33,19 @@ namespace
 {
 	constexpr int32 MaxRenderedChatLines = 60;
 	constexpr float ChatLineIntroSeconds = 0.13f;
+	constexpr float ChatHighlightSweepSeconds = 0.24f;
+	constexpr float ChatHighlightHoldSeconds = 0.32f;
+	constexpr float ChatHighlightFadeSeconds = 0.82f;
+	constexpr float ChatHighlightMaxOpacity = 0.17f;
 	constexpr float ChatInputAnimationSeconds = 0.22f;
 	constexpr float ChatRecentVisibleSeconds = 6.0f;
 	constexpr float ChatVisualInterpSpeed = 9.0f;
-	constexpr float ChatRootWidth = 420.0f;
-	constexpr float ChatHistoryHeight = 166.0f;
-	constexpr float ChatInputHeight = 34.0f;
-	constexpr float ChatInputGap = 6.0f;
+	constexpr float ChatRootWidth = 540.0f;
+	constexpr float ChatHistoryHeight = 228.0f;
+	constexpr float ChatInputHeight = 40.0f;
+	constexpr float ChatInputGap = 8.0f;
+	constexpr float ChatMessageFontSize = 18.0f;
+	constexpr float ChatMessageWrapWidth = 420.0f;
 	constexpr float ChatClosedRootOffsetY = ChatInputHeight + ChatInputGap;
 	constexpr float SpeakingIndicatorInterpSpeed = 11.0f;
 
@@ -205,7 +213,7 @@ void UShowDownChatWidget::NativeConstruct()
 	{
 		EditableTextBox_ChatInput->SetHintText(FText::FromString(TEXT("메시지 입력...")));
 		EditableTextBox_ChatInput->SetForegroundColor(ChatMessageColor);
-		EditableTextBox_ChatInput->WidgetStyle.SetFont(MakePretendardFont(13.0f));
+		EditableTextBox_ChatInput->WidgetStyle.SetFont(MakePretendardFont(14.0f));
 		EditableTextBox_ChatInput->OnTextCommitted.AddUniqueDynamic(this, &UShowDownChatWidget::HandleInputCommitted);
 	}
 
@@ -219,10 +227,10 @@ void UShowDownChatWidget::NativeConstruct()
 
 	if (Border_ChatHistoryBackground)
 	{
-		Border_ChatHistoryBackground->SetBrushColor(FLinearColor(ChatPanelColor.R, ChatPanelColor.G, ChatPanelColor.B, 0.40f));
+		Border_ChatHistoryBackground->SetBrushColor(FLinearColor(ChatPanelColor.R, ChatPanelColor.G, ChatPanelColor.B, 0.68f));
 	}
 
-	CurrentHistoryBackgroundAlpha = 0.40f;
+	CurrentHistoryBackgroundAlpha = 0.68f;
 	CurrentHistoryOpacity = 1.0f;
 	LastChatLineTimeSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
 	SetChatInputOpen(false);
@@ -349,7 +357,7 @@ void UShowDownChatWidget::BuildNativeChatLayout()
 		UBorder::StaticClass(),
 		TEXT("Border_ChatHistoryBackground"));
 	Border_ChatHistoryBackground->SetBrush(FSlateRoundedBoxBrush(
-		FLinearColor(ChatPanelColor.R, ChatPanelColor.G, ChatPanelColor.B, 0.54f),
+		FLinearColor(ChatPanelColor.R, ChatPanelColor.G, ChatPanelColor.B, 0.68f),
 		2.0f,
 		FLinearColor::Transparent,
 		0.0f));
@@ -416,7 +424,7 @@ void UShowDownChatWidget::BuildNativeChatLayout()
 	FSlateBrush TransparentInputBrush;
 	TransparentInputBrush.DrawAs = ESlateBrushDrawType::NoDrawType;
 	FEditableTextBoxStyle InputStyle = FEditableTextBoxStyle::GetDefault();
-	FSlateFontInfo InputFont = MakePretendardFont(13.0f);
+	FSlateFontInfo InputFont = MakePretendardFont(14.0f);
 	InputStyle.SetFont(InputFont);
 	InputStyle.SetBackgroundImageNormal(TransparentInputBrush);
 	InputStyle.SetBackgroundImageHovered(TransparentInputBrush);
@@ -486,7 +494,8 @@ void UShowDownChatWidget::AppendDynamicChatLine(const FString& Speaker, const FS
 		return;
 	}
 
-	UHorizontalBox* LineWidget = CreateChatLineWidget(Speaker, Message);
+	UBorder* HighlightWidget = nullptr;
+	UOverlay* LineWidget = CreateChatLineWidget(Speaker, Message, HighlightWidget);
 	if (!LineWidget)
 	{
 		return;
@@ -501,6 +510,7 @@ void UShowDownChatWidget::AppendDynamicChatLine(const FString& Speaker, const FS
 
 	FRenderedChatLine RenderedLine;
 	RenderedLine.RowWidget = LineWidget;
+	RenderedLine.HighlightWidget = HighlightWidget;
 	RenderedLine.SpawnTimeSeconds = LastChatLineTimeSeconds;
 	RenderedChatLines.Add(RenderedLine);
 	TrimRenderedChatLines();
@@ -508,15 +518,55 @@ void UShowDownChatWidget::AppendDynamicChatLine(const FString& Speaker, const FS
 	ScrollChatHistoryToEnd();
 }
 
-UHorizontalBox* UShowDownChatWidget::CreateChatLineWidget(const FString& Speaker, const FString& Message)
+UOverlay* UShowDownChatWidget::CreateChatLineWidget(
+	const FString& Speaker,
+	const FString& Message,
+	UBorder*& OutHighlightWidget)
 {
-	UHorizontalBox* LineWidget = WidgetTree
-		? WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass())
-		: NewObject<UHorizontalBox>(this);
+	OutHighlightWidget = nullptr;
+	UOverlay* LineWidget = WidgetTree
+		? WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass())
+		: NewObject<UOverlay>(this);
 	if (!LineWidget)
 	{
 		return nullptr;
 	}
+	LineWidget->SetClipping(EWidgetClipping::ClipToBoundsAlways);
+
+	UBorder* HighlightWidget = WidgetTree
+		? WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass())
+		: NewObject<UBorder>(this);
+	UHorizontalBox* TextRow = WidgetTree
+		? WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass())
+		: NewObject<UHorizontalBox>(this);
+	if (!HighlightWidget || !TextRow)
+	{
+		return LineWidget;
+	}
+
+	const FLinearColor SpeakerColor = ResolveSpeakerColor(Speaker);
+	HighlightWidget->SetBrush(FSlateRoundedBoxBrush(
+		FLinearColor(SpeakerColor.R, SpeakerColor.G, SpeakerColor.B, 1.0f),
+		3.0f,
+		FLinearColor::Transparent,
+		0.0f));
+	HighlightWidget->SetPadding(FMargin(0.0f));
+	HighlightWidget->SetRenderOpacity(0.0f);
+	HighlightWidget->SetRenderTransformPivot(FVector2D(0.0f, 0.5f));
+	HighlightWidget->SetRenderScale(FVector2D(0.72f, 1.0f));
+	HighlightWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
+	if (UOverlaySlot* HighlightSlot = LineWidget->AddChildToOverlay(HighlightWidget))
+	{
+		HighlightSlot->SetHorizontalAlignment(HAlign_Fill);
+		HighlightSlot->SetVerticalAlignment(VAlign_Fill);
+	}
+	if (UOverlaySlot* TextSlot = LineWidget->AddChildToOverlay(TextRow))
+	{
+		TextSlot->SetPadding(FMargin(6.0f, 2.0f, 6.0f, 2.0f));
+		TextSlot->SetHorizontalAlignment(HAlign_Fill);
+		TextSlot->SetVerticalAlignment(VAlign_Fill);
+	}
+	OutHighlightWidget = HighlightWidget;
 
 	UTextBlock* NameText = WidgetTree
 		? WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass())
@@ -529,7 +579,7 @@ UHorizontalBox* UShowDownChatWidget::CreateChatLineWidget(const FString& Speaker
 		return LineWidget;
 	}
 
-	FSlateFontInfo BaseFont = MakePretendardFont(13.0f);
+	FSlateFontInfo BaseFont = MakePretendardFont(ChatMessageFontSize);
 	NameText->SetFont(BaseFont);
 	MessageText->SetFont(BaseFont);
 	NameText->SetText(FText::FromString(FString::Printf(TEXT("%s: "), *ResolveDisplaySpeakerName(Speaker))));
@@ -539,14 +589,14 @@ UHorizontalBox* UShowDownChatWidget::CreateChatLineWidget(const FString& Speaker
 	MessageText->SetText(FText::FromString(Message));
 	MessageText->SetColorAndOpacity(FSlateColor(ChatMessageColor));
 	MessageText->SetAutoWrapText(true);
-	MessageText->SetWrapTextAt(310.0f);
+	MessageText->SetWrapTextAt(ChatMessageWrapWidth);
 
-	if (UHorizontalBoxSlot* NameSlot = LineWidget->AddChildToHorizontalBox(NameText))
+	if (UHorizontalBoxSlot* NameSlot = TextRow->AddChildToHorizontalBox(NameText))
 	{
 		NameSlot->SetPadding(FMargin(0.0f, 0.0f, 2.0f, 0.0f));
 		NameSlot->SetVerticalAlignment(VAlign_Top);
 	}
-	if (UHorizontalBoxSlot* MessageSlot = LineWidget->AddChildToHorizontalBox(MessageText))
+	if (UHorizontalBoxSlot* MessageSlot = TextRow->AddChildToHorizontalBox(MessageText))
 	{
 		MessageSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 		MessageSlot->SetVerticalAlignment(VAlign_Top);
@@ -667,8 +717,8 @@ void UShowDownChatWidget::UpdateChatVisualState(float InDeltaTime)
 	const bool bRecentMessage = (CurrentTime - LastChatLineTimeSeconds) <= ChatRecentVisibleSeconds;
 
 	const float TargetBackgroundAlpha = bChatInputOpen
-		? 0.88f
-		: (bRecentMessage ? 0.54f : 0.40f);
+		? 0.92f
+		: (bRecentMessage ? 0.80f : 0.68f);
 	const float TargetHistoryOpacity = 1.0f;
 	const float InputAnimationRaw = (CurrentTime - ChatInputStateChangedTimeSeconds) / ChatInputAnimationSeconds;
 	const float InputAnimationAlpha = EaseOut(InputAnimationRaw);
@@ -692,10 +742,8 @@ void UShowDownChatWidget::UpdateChatVisualState(float InDeltaTime)
 	}
 	if (ScrollBox_ChatHistory)
 	{
-		const float ChatContentMoveAlpha = EaseOut((CurrentTime - LastChatLineTimeSeconds) / ChatLineIntroSeconds);
-		const float ChatContentOffsetY = (1.0f - ChatContentMoveAlpha) * 12.0f;
 		ScrollBox_ChatHistory->SetRenderOpacity(CurrentHistoryOpacity);
-		ScrollBox_ChatHistory->SetRenderTranslation(FVector2D(0.0f, ChatContentOffsetY));
+		ScrollBox_ChatHistory->SetRenderTranslation(FVector2D::ZeroVector);
 		ScrollBox_ChatHistory->SetScrollBarVisibility(ESlateVisibility::Collapsed);
 	}
 	if (Text_ChatHistory)
@@ -721,10 +769,20 @@ void UShowDownChatWidget::UpdateChatVisualState(float InDeltaTime)
 
 	for (FRenderedChatLine& RenderedLine : RenderedChatLines)
 	{
+		const float LineAgeSeconds = FMath::Max(0.0f, CurrentTime - RenderedLine.SpawnTimeSeconds);
+		const float IntroAlpha = EaseOut(LineAgeSeconds / ChatLineIntroSeconds);
 		if (UWidget* RowWidget = RenderedLine.RowWidget.Get())
 		{
-			RowWidget->SetRenderOpacity(1.0f);
-			RowWidget->SetRenderTranslation(FVector2D::ZeroVector);
+			RowWidget->SetRenderOpacity(FMath::Lerp(0.72f, 1.0f, IntroAlpha));
+			RowWidget->SetRenderTranslation(FVector2D((1.0f - IntroAlpha) * 8.0f, 0.0f));
+		}
+		if (UBorder* HighlightWidget = RenderedLine.HighlightWidget.Get())
+		{
+			const float SweepAlpha = EaseOut(LineAgeSeconds / ChatHighlightSweepSeconds);
+			const float FadeRaw = (LineAgeSeconds - ChatHighlightHoldSeconds) / ChatHighlightFadeSeconds;
+			const float FadeAlpha = 1.0f - FMath::SmoothStep(0.0f, 1.0f, FMath::Clamp(FadeRaw, 0.0f, 1.0f));
+			HighlightWidget->SetRenderScale(FVector2D(FMath::Lerp(0.72f, 1.0f, SweepAlpha), 1.0f));
+			HighlightWidget->SetRenderOpacity(ChatHighlightMaxOpacity * SweepAlpha * FadeAlpha);
 		}
 	}
 

@@ -39,6 +39,15 @@ enum class EShowDownBetAction : uint8
 	Fold
 };
 
+/** Server-authored decision windows shown by the in-game countdown HUD. */
+UENUM(BlueprintType)
+enum class EShowDownDecisionTimerKind : uint8
+{
+	None,
+	CardSelection,
+	Betting
+};
+
 UENUM(BlueprintType)
 enum class EShowDownMatchMode : uint8
 {

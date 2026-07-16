@@ -13,8 +13,10 @@
 
 namespace
 {
-	constexpr float BaseDarknessStrength = 1.0f;
-	constexpr float BetFocusDarknessStrength = 0.72f;
+	// Normal card-selection and betting gameplay has no darkness overlay.
+	// Reveal and roulette cues still drive their dedicated tension/peak values.
+	constexpr float BaseDarknessStrength = 0.0f;
+	constexpr float BetFocusDarknessStrength = 0.0f;
 	constexpr float BetFocusDarknessBlendDuration = 0.18f;
 	constexpr float MatchEntryBeatDelay = 1.0f;
 	constexpr float IntroCollapseDuration = 0.50f;
@@ -742,6 +744,17 @@ ASpotLight* USDGunVisionSequenceSubsystem::ResolveZeroDarknessSpotlight()
 
 bool USDGunVisionSequenceSubsystem::SetTableSpotlightEnabled(bool bEnabled)
 {
+	if (bEnabled)
+	{
+		const AShowDownGameStateBase* GameState = BoundGameState.Get();
+		if (GameState && GameState->CurrentPhase == EShowDownPhase::SelectCard)
+		{
+			// Card selection never uses SpotLight6, even if a delayed cinematic cue
+			// from an earlier presentation tries to switch it back on.
+			bEnabled = false;
+		}
+	}
+
 	ASpotLight* Spotlight = ResolveTableSpotlight();
 	USpotLightComponent* Light = Spotlight
 		? Cast<USpotLightComponent>(Spotlight->GetLightComponent())

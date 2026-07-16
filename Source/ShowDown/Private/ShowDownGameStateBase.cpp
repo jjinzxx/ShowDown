@@ -33,24 +33,19 @@ namespace
 		}
 	}
 
-	void ShowPresentationDebugMessage(const FString& Prefix, EShowDownPhase Phase, const FColor& Color)
+	void ShowPresentationDebugMessage(const FString& Prefix, EShowDownPhase Phase, const FColor&)
 	{
-		if (GEngine)
-		{
-			GEngine->AddOnScreenDebugMessage(
-				-1,
-				4.0f,
-				Color,
-				FString::Printf(TEXT("[%s] %s 연출"), *Prefix, *GetPhaseDebugName(Phase)));
-		}
+		UE_LOG(
+			LogTemp,
+			Verbose,
+			TEXT("[%s] %s presentation"),
+			*Prefix,
+			*GetPhaseDebugName(Phase));
 	}
 
-	void ShowRawDebugMessage(const FString& Message, const FColor& Color)
+	void ShowRawDebugMessage(const FString& Message, const FColor&)
 	{
-		if (GEngine)
-		{
-			GEngine->AddOnScreenDebugMessage(-1, 4.0f, Color, Message);
-		}
+		UE_LOG(LogTemp, Verbose, TEXT("Presentation: %s"), *Message);
 	}
 
 	void NotifyAudioPhaseChanged(const AShowDownGameStateBase* GameState, EShowDownPhase Phase)
@@ -222,6 +217,92 @@ void AShowDownGameStateBase::SetNameTagPlayerLoadedBulletCount(
 	NewPlayerBet.LoadedBulletCount = ClampedLoadedBulletCount;
 	NameTagPlayerBets.Add(NewPlayerBet);
 	OnNameTagRoundStatusChanged.Broadcast();
+	ForceNetUpdate();
+}
+
+void AShowDownGameStateBase::SetLastBetActionNotice(
+	EShowDownSide Side,
+	EShowDownPlayerSlot PlayerSlot,
+	const FString& ActorName,
+	EShowDownBetAction Action,
+	int32 TargetBet,
+	int32 RaiseAmount,
+	bool bWasAutomatic)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	LastBetActionNotice.Side = Side;
+	LastBetActionNotice.PlayerSlot = PlayerSlot;
+	LastBetActionNotice.ActorName = ActorName.TrimStartAndEnd().Left(32);
+	LastBetActionNotice.Action = Action;
+	LastBetActionNotice.TargetBet = FMath::Clamp(TargetBet, 0, 6);
+	LastBetActionNotice.RaiseAmount = Action == EShowDownBetAction::Raise
+		? FMath::Clamp(RaiseAmount, 0, 6)
+		: 0;
+	LastBetActionNotice.bWasAutomatic = bWasAutomatic;
+	LastBetActionNotice.ServerWorldTimeSeconds = GetServerWorldTimeSeconds();
+	LastBetActionNotice.Revision = LastBetActionNotice.Revision >= MAX_int32
+		? 1
+		: LastBetActionNotice.Revision + 1;
+	MulticastBetActionNotice(LastBetActionNotice);
+	ForceNetUpdate();
+}
+
+void AShowDownGameStateBase::MulticastBetActionNotice_Implementation(
+	const FShowDownBetActionNotice& Notice)
+{
+	// The replicated property keeps the latest value for late joiners. The
+	// reliable RPC additionally preserves every committed action instead of
+	// allowing rapid property changes to be coalesced into only the newest one.
+	LastBetActionNotice = Notice;
+}
+
+int32 AShowDownGameStateBase::SetDecisionTimerState(
+	EShowDownDecisionTimerKind Kind,
+	float DeadlineServerWorldTimeSeconds,
+	float DurationSeconds,
+	EShowDownSide TargetSide,
+	EShowDownPlayerSlot TargetSlot)
+{
+	if (!HasAuthority())
+	{
+		return DecisionTimerState.Revision;
+	}
+
+	if (Kind == EShowDownDecisionTimerKind::None)
+	{
+		ClearDecisionTimerState();
+		return DecisionTimerState.Revision;
+	}
+
+	const int32 NextRevision = DecisionTimerState.Revision >= MAX_int32
+		? 1
+		: DecisionTimerState.Revision + 1;
+	DecisionTimerState.Kind = Kind;
+	DecisionTimerState.DeadlineServerWorldTimeSeconds = DeadlineServerWorldTimeSeconds;
+	DecisionTimerState.DurationSeconds = FMath::Max(0.0f, DurationSeconds);
+	DecisionTimerState.TargetSide = TargetSide;
+	DecisionTimerState.TargetSlot = TargetSlot;
+	DecisionTimerState.Revision = NextRevision;
+	ForceNetUpdate();
+	return NextRevision;
+}
+
+void AShowDownGameStateBase::ClearDecisionTimerState()
+{
+	if (!HasAuthority() || DecisionTimerState.Kind == EShowDownDecisionTimerKind::None)
+	{
+		return;
+	}
+
+	const int32 NextRevision = DecisionTimerState.Revision >= MAX_int32
+		? 1
+		: DecisionTimerState.Revision + 1;
+	DecisionTimerState = FShowDownDecisionTimerState();
+	DecisionTimerState.Revision = NextRevision;
 	ForceNetUpdate();
 }
 
@@ -569,6 +650,8 @@ void AShowDownGameStateBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 	DOREPLIFETIME(AShowDownGameStateBase, NameTagPlayerBets);
 	DOREPLIFETIME(AShowDownGameStateBase, NameTagTurnSide);
 	DOREPLIFETIME(AShowDownGameStateBase, NameTagTurnSlot);
+	DOREPLIFETIME(AShowDownGameStateBase, LastBetActionNotice);
+	DOREPLIFETIME(AShowDownGameStateBase, DecisionTimerState);
 	DOREPLIFETIME(AShowDownGameStateBase, InitialDealDeckVisualState);
 }
 

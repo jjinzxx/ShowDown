@@ -45,6 +45,74 @@ struct FShowDownNameTagPlayerBetState
 	int32 LoadedBulletCount = 0;
 };
 
+/**
+ * Last committed betting action, replicated as one value so every local HUD can
+ * show the same short-lived notice without parsing localized chat text.
+ */
+USTRUCT(BlueprintType)
+struct FShowDownBetActionNotice
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Betting")
+	EShowDownSide Side = EShowDownSide::Player;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Betting")
+	EShowDownPlayerSlot PlayerSlot = EShowDownPlayerSlot::None;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Betting")
+	FString ActorName;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Betting")
+	EShowDownBetAction Action = EShowDownBetAction::Check;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Betting")
+	int32 TargetBet = 0;
+
+	/** Number of bullets added by this action. Non-zero only for a raise. */
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Betting")
+	int32 RaiseAmount = 0;
+
+	/** True when the server committed the action because the decision timer expired. */
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Betting")
+	bool bWasAutomatic = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Betting")
+	float ServerWorldTimeSeconds = -1.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Betting")
+	int32 Revision = 0;
+};
+
+/**
+ * One atomic, server-authored decision window. Clients derive the remaining
+ * time from DeadlineServerWorldTimeSeconds and the synchronized GameState clock
+ * instead of receiving a replicated value every second.
+ */
+USTRUCT(BlueprintType)
+struct FShowDownDecisionTimerState
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Decision Timer")
+	EShowDownDecisionTimerKind Kind = EShowDownDecisionTimerKind::None;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Decision Timer")
+	float DeadlineServerWorldTimeSeconds = -1.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Decision Timer")
+	float DurationSeconds = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Decision Timer")
+	EShowDownSide TargetSide = EShowDownSide::Player;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Decision Timer")
+	EShowDownPlayerSlot TargetSlot = EShowDownPlayerSlot::None;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ShowDown|Decision Timer")
+	int32 Revision = 0;
+};
+
 USTRUCT()
 struct FSDInitialDealDeckVisualState
 {
@@ -196,6 +264,12 @@ public:
 	UPROPERTY(ReplicatedUsing = OnRep_NameTagRoundStatus, BlueprintReadOnly, Category = "ShowDown|Name Tag")
 	EShowDownPlayerSlot NameTagTurnSlot = EShowDownPlayerSlot::None;
 
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "ShowDown|Betting")
+	FShowDownBetActionNotice LastBetActionNotice;
+
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "ShowDown|Decision Timer")
+	FShowDownDecisionTimerState DecisionTimerState;
+
 	UPROPERTY(ReplicatedUsing = OnRep_InitialDealDeckVisualState)
 	FSDInitialDealDeckVisualState InitialDealDeckVisualState;
 
@@ -226,6 +300,27 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Name Tag")
 	void SetNameTagPlayerLoadedBulletCount(EShowDownPlayerSlot Slot, int32 LoadedBulletCount);
+
+	void SetLastBetActionNotice(
+		EShowDownSide Side,
+		EShowDownPlayerSlot PlayerSlot,
+		const FString& ActorName,
+		EShowDownBetAction Action,
+		int32 TargetBet,
+		int32 RaiseAmount = 0,
+		bool bWasAutomatic = false);
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastBetActionNotice(const FShowDownBetActionNotice& Notice);
+
+	int32 SetDecisionTimerState(
+		EShowDownDecisionTimerKind Kind,
+		float DeadlineServerWorldTimeSeconds,
+		float DurationSeconds,
+		EShowDownSide TargetSide,
+		EShowDownPlayerSlot TargetSlot);
+
+	void ClearDecisionTimerState();
 
 	void SetInitialDealDeckVisualState(FName SourceActorTag, int32 RemainingSteps, int32 TotalSteps);
 

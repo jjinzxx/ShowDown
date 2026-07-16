@@ -13,6 +13,7 @@ class UButton;
 class UCanvasPanel;
 class UEditableTextBox;
 class UHorizontalBox;
+class UOverlay;
 class USizeBox;
 class UScrollBox;
 class UTextBlock;
@@ -53,6 +54,7 @@ private:
 	struct FRenderedChatLine
 	{
 		TWeakObjectPtr<UWidget> RowWidget;
+		TWeakObjectPtr<UBorder> HighlightWidget;
 		float SpawnTimeSeconds = 0.0f;
 	};
 
@@ -129,7 +131,7 @@ private:
 
 	void BuildNativeChatLayout();
 	void AppendDynamicChatLine(const FString& Speaker, const FString& Message);
-	UHorizontalBox* CreateChatLineWidget(const FString& Speaker, const FString& Message);
+	UOverlay* CreateChatLineWidget(const FString& Speaker, const FString& Message, UBorder*& OutHighlightWidget);
 	FString ResolveDisplaySpeakerName(const FString& Speaker) const;
 	FString ResolveLocalSpeakerName() const;
 	FLinearColor ResolveSpeakerColor(const FString& Speaker) const;

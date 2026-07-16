@@ -5,8 +5,12 @@
 #include "Components/Button.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
+#include "Components/HorizontalBox.h"
+#include "Components/HorizontalBoxSlot.h"
+#include "Components/Image.h"
 #include "Components/TextBlock.h"
 #include "Engine/GameInstance.h"
+#include "Engine/Texture2D.h"
 #include "Input/Reply.h"
 #include "InputCoreTypes.h"
 #include "ShowDownMainMenuWidget.h"
@@ -19,6 +23,8 @@ namespace
 	const FLinearColor ShopMutedInk(0.72f, 0.69f, 0.62f, 1.0f);
 	const FLinearColor ShopError(0.94f, 0.2f, 0.18f, 1.0f);
 	const FLinearColor ShopSuccess(0.35f, 0.88f, 0.55f, 1.0f);
+	const TCHAR* ShopCurrencyIconObjectPath =
+		TEXT("/Game/UI/Icons/T_UI_Currency.T_UI_Currency");
 
 	FSlateBrush MakeFlatBrush(const FLinearColor& Color)
 	{
@@ -357,9 +363,40 @@ void UShowDownShopWidget::BuildWidgetTreeIfNeeded()
 		FVector2D(190.0f, 52.0f),
 		FLinearColor(0.72f, 0.52f, 0.20f, 0.76f));
 
-	Text_Coin = MakeText(TEXT("Text_Coin"), 20, ETextJustify::Right);
-	AddPointAnchored(Text_Coin, FVector2D(0.97f, 0.06f), FVector2D(1.0f, 0.0f),
-		FVector2D::ZeroVector, FVector2D(330.0f, 42.0f));
+	UHorizontalBox* CoinRow = WidgetTree->ConstructWidget<UHorizontalBox>(
+		UHorizontalBox::StaticClass(),
+		TEXT("ShopCoinRow"));
+	UImage* CoinIcon = WidgetTree->ConstructWidget<UImage>(
+		UImage::StaticClass(),
+		TEXT("Image_Coin"));
+	if (UTexture2D* CurrencyTexture = LoadObject<UTexture2D>(nullptr, ShopCurrencyIconObjectPath))
+	{
+		CoinIcon->SetBrushFromTexture(CurrencyTexture, false);
+	}
+	CoinIcon->SetDesiredSizeOverride(FVector2D(42.0f, 42.0f));
+	if (UHorizontalBoxSlot* IconSlot = CoinRow->AddChildToHorizontalBox(CoinIcon))
+	{
+		IconSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
+		IconSlot->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f));
+		IconSlot->SetVerticalAlignment(VAlign_Center);
+	}
+
+	Text_Coin = MakeText(TEXT("Text_Coin"), 22, ETextJustify::Left);
+	Text_Coin->SetText(FText::FromString(TEXT("0$")));
+	if (UHorizontalBoxSlot* ValueSlot = CoinRow->AddChildToHorizontalBox(Text_Coin))
+	{
+		ValueSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
+		ValueSlot->SetVerticalAlignment(VAlign_Center);
+	}
+	if (UCanvasPanelSlot* CoinRowSlot = AddPointAnchored(
+		CoinRow,
+		FVector2D(0.97f, 0.06f),
+		FVector2D(1.0f, 0.0f),
+		FVector2D::ZeroVector,
+		FVector2D::ZeroVector))
+	{
+		CoinRowSlot->SetAutoSize(true);
+	}
 
 	Text_SkinName = MakeText(TEXT("Text_SkinName"), 42, ETextJustify::Center);
 	AddPointAnchored(Text_SkinName, FVector2D(0.5f, 0.09f), FVector2D(0.5f, 0.0f),
@@ -581,13 +618,20 @@ void UShowDownShopWidget::RefreshSelectedPresentation()
 {
 	const FShopDisplayItem* Item = GetSelectedItem();
 	USupabaseSubsystem* SupabaseSubsystem = GetSupabaseSubsystem();
+	if (Text_Coin)
+	{
+		Text_Coin->SetText(FText::FromString(FString::Printf(
+			TEXT("%s$"),
+			*FText::AsNumber(
+				SupabaseSubsystem ? SupabaseSubsystem->GetCoin() : 0).ToString())));
+	}
+
 	if (!Item)
 	{
 		if (Text_SkinName) Text_SkinName->SetText(FText::FromString(TEXT("스킨 없음")));
 		if (Text_Rarity) Text_Rarity->SetText(FText::GetEmpty());
 		if (Text_Description) Text_Description->SetText(FText::GetEmpty());
 		if (Text_Price) Text_Price->SetText(FText::FromString(TEXT("-")));
-		if (Text_Coin) Text_Coin->SetText(FText::GetEmpty());
 		if (Text_PrimaryAction) Text_PrimaryAction->SetText(FText::FromString(TEXT("사용 불가")));
 		if (Button_PrimaryAction) Button_PrimaryAction->SetIsEnabled(false);
 		if (Button_Previous) Button_Previous->SetIsEnabled(false);
@@ -639,13 +683,6 @@ void UShowDownShopWidget::RefreshSelectedPresentation()
 			: FText::FromString(TEXT("-")));
 		Text_Price->SetColorAndOpacity(FSlateColor(RarityColor));
 	}
-	if (Text_Coin)
-	{
-		Text_Coin->SetText(FText::FromString(FString::Printf(
-			TEXT("보유 코인  %d"),
-			SupabaseSubsystem ? SupabaseSubsystem->GetCoin() : 0)));
-	}
-
 	FString ActionLabel;
 	switch (ActionState)
 	{

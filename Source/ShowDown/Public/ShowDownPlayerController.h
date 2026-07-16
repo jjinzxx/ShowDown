@@ -12,6 +12,8 @@ class APostProcessVolume;
 class ASDBetActionButtonActor;
 class AShowDownCharacter;
 class AShowDownGameModeBase;
+class SBorder;
+class STextBlock;
 class SWidget;
 class UMaterialInstanceDynamic;
 class UMaterialInterface;
@@ -167,6 +169,7 @@ public:
 	// camera instead of returning to a character that is about to be hidden.
 	void ReleaseGunShotCameraOverrideForElimination(ACameraActor* Camera);
 	void CancelGunShotCameraOverride(ACameraActor* ExpectedCamera = nullptr);
+	EShowDownPlayerSlot ResolveLocalShowDownPlayerSlot() const;
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Camera")
 	void SetFixedCameraComponentMouseLook(
@@ -410,7 +413,6 @@ public:
 
 private:
 	bool bInitialCardDealInputLocked = false;
-	bool bInitialCardDealIgnoreMoveInputApplied = false;
 	void InitializeFromPossessedPawn();
 	void InitializeInteractableOutlinePostProcess();
 	void TraceCardUnderCursor();
@@ -459,13 +461,29 @@ private:
 	bool TryApplyPendingMultiplayerSeatCamera();
 	bool TryApplyPendingMultiplayerCharacterCamera();
 	void RestoreMultiplayerGameplayInput();
+	bool HasBlockingGameplayUi() const;
 	void ApplyChatInputMode(bool bOpen);
 	void CreateCenterCrosshairWidget();
 	void UpdateCenterCrosshairVisibility();
 	void RemoveCenterCrosshairWidget();
-	void UpdateCardSelectionPrompt(float DeltaTime);
-	void SetCardSelectionPromptState(uint8 NewState);
-	void RemoveCardSelectionPrompt();
+	void UpdateGameplayPrompt(float DeltaTime);
+	void ResetGameplayHudIntroFade();
+	void StartGameplayHudIntroFade();
+	void UpdateGameplayHudIntroFade(float DeltaTime);
+	void ApplyGameplayHudIntroOpacity();
+	void EnsureGameplayStatusHud();
+	void UpdateGameplayStatusHud(float DeltaTime);
+	void RemoveGameplayStatusHud();
+	int32 ResolveLocalLivesForHud() const;
+	void SetGameplayPromptContent(
+		const FString& StateKey,
+		const FText& Label,
+		const FText& Title,
+		const FText& Detail,
+		const FLinearColor& AccentColor,
+		bool bPulse,
+		bool bHighlightSelectableCards);
+	void RemoveGameplayPrompt();
 	bool HasLocalSelectableCard() const;
 	void RefreshCardSelectionHandHighlight();
 	void ClearCardSelectionHandHighlight();
@@ -551,11 +569,32 @@ private:
 
 	TSharedPtr<SWidget> CenterCrosshairWidget;
 	TSharedPtr<SWidget> HitBlackoutOverlayWidget;
-	TSharedPtr<SWidget> CardSelectionPromptWidget;
+	TSharedPtr<SWidget> GameplayPromptWidget;
+	TSharedPtr<SWidget> GameplayStatusHudWidget;
+	TSharedPtr<SBorder> GameplayLivesPanel;
+	TSharedPtr<STextBlock> GameplayLivesText;
+	TSharedPtr<SBorder> GameplayTimerPanel;
+	TSharedPtr<STextBlock> GameplayTimerLabelText;
+	TSharedPtr<STextBlock> GameplayTimerValueText;
+	int32 LastRenderedGameplayHudLives = INDEX_NONE;
+	int32 LastRenderedGameplayHudTimerSecond = INDEX_NONE;
+	EShowDownDecisionTimerKind LastRenderedGameplayHudTimerKind = EShowDownDecisionTimerKind::None;
+	float GameplayHudIntroFadeElapsedTime = 0.0f;
+	float GameplayHudIntroOpacity = 0.0f;
+	bool bGameplayHudIntroFadeStarted = false;
+	bool bGameplayHudIntroFadeActive = false;
+	float GameplayLivesFadeOpacity = 0.0f;
+	float GameplayTimerFadeOpacity = 0.0f;
+	bool bGameplayLivesWasVisible = false;
+	bool bGameplayTimerWasVisible = false;
 	TArray<FSDPrimitiveCustomDepthState> FocusedPrimitiveStates;
 	TArray<FSDPrimitiveCustomDepthState> CardSelectionPrimitiveStates;
-	uint8 CardSelectionPromptState = 0;
-	float CardSelectionPromptAnimationTime = 0.0f;
+	FString GameplayPromptStateKey;
+	float GameplayPromptAnimationTime = 0.0f;
+	bool bGameplayPromptPulse = false;
+	bool bGameplayPromptHighlightsCards = false;
+	EShowDownPhase LastObservedGameplayPromptPhase = EShowDownPhase::None;
+	int32 LastObservedGameplayPromptRound = INDEX_NONE;
 	bool bCardSelectionSubmittedLocally = false;
 
 	bool bChatOpen = false;
