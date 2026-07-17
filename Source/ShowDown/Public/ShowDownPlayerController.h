@@ -169,6 +169,9 @@ public:
 	// camera instead of returning to a character that is about to be hidden.
 	void ReleaseGunShotCameraOverrideForElimination(ACameraActor* Camera);
 	void CancelGunShotCameraOverride(ACameraActor* ExpectedCamera = nullptr);
+	static bool ShouldBlockGameplayInputForGunShot(
+		bool bGunShotCameraActive,
+		bool bEliminatedSpectatorActive);
 	EShowDownPlayerSlot ResolveLocalShowDownPlayerSlot() const;
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Camera")
@@ -443,6 +446,7 @@ private:
 	AShowDownCharacter* FindLocalCharacterForPlayerCamera() const;
 	void UpdateCharacterPlayerCamera(float DeltaTime);
 	void UpdateGunShotCameraOverride(float DeltaTime);
+	bool IsGunShotPresentationInputBlocked() const;
 	void ClearGunShotCameraOverrideState();
 	void ClearEliminatedSpectatorViewState();
 	void UpdateFixedCameraMouseLook(float DeltaTime);
@@ -474,6 +478,9 @@ private:
 	void EnsureGameplayStatusHud();
 	void UpdateGameplayStatusHud(float DeltaTime);
 	void RemoveGameplayStatusHud();
+	void ShowGameplayStatusMessage(const FString& Message);
+	void UpdateGameplayStatusMessage(float DeltaTime);
+	void ClearGameplayStatusMessage();
 	int32 ResolveLocalLivesForHud() const;
 	void SetGameplayPromptContent(
 		const FString& StateKey,
@@ -576,6 +583,11 @@ private:
 	TSharedPtr<SBorder> GameplayTimerPanel;
 	TSharedPtr<STextBlock> GameplayTimerLabelText;
 	TSharedPtr<STextBlock> GameplayTimerValueText;
+	TSharedPtr<SBorder> GameplayServerStatusPanel;
+	TSharedPtr<STextBlock> GameplayServerStatusText;
+	FString GameplayServerStatusMessage;
+	float GameplayServerStatusRemainingTime = 0.0f;
+	float GameplayServerStatusOpacity = 0.0f;
 	int32 LastRenderedGameplayHudLives = INDEX_NONE;
 	int32 LastRenderedGameplayHudTimerSecond = INDEX_NONE;
 	EShowDownDecisionTimerKind LastRenderedGameplayHudTimerKind = EShowDownDecisionTimerKind::None;

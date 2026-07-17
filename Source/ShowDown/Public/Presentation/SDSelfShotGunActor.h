@@ -101,6 +101,9 @@ public:
 	/** True while this local gun instance is playing a server-scripted multiplayer shot. */
 	bool IsMultiplayerRoulettePresentation() const;
 
+	/** Internal presentation availability. Player click interaction is intentionally disabled. */
+	bool CanStartPresentation() const;
+
 	// Pure helpers kept public so the multiplayer gate and seat-relative camera
 	// math can be covered without creating a PIE world.
 	static bool ShouldUseGunShotCamera(bool bTargetsLocalPlayer);
@@ -310,14 +313,30 @@ protected:
 	FVector RaiseBulletFallbackCharacterOffset = FVector(32.0f, 26.0f, 42.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.05"))
-	float RaiseBulletLoadDuration = 0.48f;
+	float RaiseBulletLoadDuration = 0.85f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.0"))
-	float RaiseBulletLoadStaggerDelay = 0.12f;
+	float RaiseBulletLoadStaggerDelay = 0.16f;
 
 	/** Keeps each incoming bullet readable at its spawn point before it travels into the cylinder. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.0"))
-	float RaiseBulletLoadStartHoldTime = 0.06f;
+	float RaiseBulletLoadStartHoldTime = 0.10f;
+
+	/** Local-space correction applied to the authored cylinder slot for the bulletBetting mesh. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading")
+	FVector RaiseBulletLoadedLocalOffset = FVector(0.0f, 0.0f, -1.5f);
+
+	/** Distance from the cylinder slot where the final aligned insertion begins. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.0"))
+	float RaiseBulletLoadEntryDistance = 18.0f;
+
+	/** Fraction of travel time reserved for the straight cylinder-axis insertion. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.1", ClampMax = "0.75"))
+	float RaiseBulletLoadInsertionFraction = 0.30f;
+
+	/** Small lift on the approach path before the bullet aligns with the cylinder. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.0"))
+	float RaiseBulletLoadArcHeight = 14.0f;
 
 	/** World scale for /Game/Fab/Revolver/bulletBetting. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.001"))
@@ -626,6 +645,7 @@ protected:
 	bool bDisableCollisionWhileUsing = true;
 
 private:
+	friend class FShowDownGunShotCameraTest;
 	friend class FShowDownGunVisionSequenceTimingTest;
 	friend class FShowDownRaiseBulletLoadingTest;
 
@@ -717,6 +737,7 @@ private:
 	void UpdateTinnitusSound(float DeltaSeconds);
 	void StopTinnitusSound();
 	void CacheBulletRestRelativeTransforms();
+	FTransform ResolveBettingBulletRestRelativeTransform(int32 BulletIndex) const;
 	UStaticMeshComponent* GetBulletMeshComponent(int32 BulletIndex) const;
 	UStaticMeshComponent* GetBettingBulletMeshComponent(int32 BulletIndex) const;
 	void SynchronizeBulletPresentationFromStatus();

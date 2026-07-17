@@ -352,6 +352,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Chat")
 	void BroadcastChatMessage(const FString& SenderName, const FString& Message);
 
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Presentation")
+	void BroadcastCardsRevealed(int32 PlayerCard, int32 CollectorCard);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Presentation")
+	void BroadcastRoundResolved(EShowDownRoundResult Result);
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Presentation")
+	void BroadcastGameOver(EShowDownSide Winner);
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Multiplayer|Presentation")
 	void BroadcastMultiplayerRouletteStarted(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount);
 
@@ -373,6 +382,15 @@ public:
 
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastChatMessage(const FString& SenderName, const FString& Message);
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastCardsRevealed(int32 PlayerCard, int32 CollectorCard);
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastRoundResolved(EShowDownRoundResult Result);
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastGameOver(EShowDownSide Winner);
 
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastMultiplayerRouletteStarted(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount);

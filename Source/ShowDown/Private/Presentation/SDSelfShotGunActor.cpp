@@ -1024,13 +1024,20 @@ void ASDSelfShotGunActor::UpdateAmmoStatusAnchorLocation()
 		return;
 	}
 
-	// Derive the label anchor from the complete visible revolver geometry rather
-	// than the actor pivot (which sits near the handle). The world-space AABB is
-	// updated as the gun moves and rotates, so the label remains centered above
-	// the actual weapon silhouette during the whole firing presentation.
+	// Keep the label centered over the revolver itself. Flying betting bullets
+	// are intentionally excluded so the status text does not chase them across
+	// the table during a raise-loading presentation.
 	FBox RevolverBounds(ForceInit);
-	TInlineComponentArray<UStaticMeshComponent*> MeshComponents(this);
-	for (const UStaticMeshComponent* MeshComponent : MeshComponents)
+	const UStaticMeshComponent* RevolverMeshComponents[] = {
+		GunMesh,
+		ChamberMesh,
+		TriggerMesh,
+		HammerMesh,
+		HandleMesh,
+		RatchetMechanismMesh,
+		ExtraMesh
+	};
+	for (const UStaticMeshComponent* MeshComponent : RevolverMeshComponents)
 	{
 		if (MeshComponent
 			&& MeshComponent->IsRegistered()
@@ -1173,7 +1180,7 @@ bool ASDSelfShotGunActor::TryResolveCharacterPresentationShot(
 
 void ASDSelfShotGunActor::StartGunUse()
 {
-	if (!CanInteract_Implementation(nullptr))
+	if (!CanStartPresentation())
 	{
 		return;
 	}
@@ -1208,6 +1215,13 @@ void ASDSelfShotGunActor::StartGunUse()
 
 bool ASDSelfShotGunActor::CanInteract_Implementation(AActor* Interactor) const
 {
+	// Direct clicking was a development-only preview path. Runtime shots are
+	// authored by GameMode and use CanStartPresentation instead.
+	return false;
+}
+
+bool ASDSelfShotGunActor::CanStartPresentation() const
+{
 	return AnimState == EGunAnimState::Idle
 		&& HitSequenceState == EHitSequenceState::Idle
 		&& !bSelfShotCinematicCameraActive
@@ -1217,7 +1231,8 @@ bool ASDSelfShotGunActor::CanInteract_Implementation(AActor* Interactor) const
 
 void ASDSelfShotGunActor::Interact_Implementation(AActor* Interactor)
 {
-	UseGun();
+	// Player interaction is intentionally disabled. Server-authored gameplay
+	// invokes the explicit presentation methods directly.
 }
 
 void ASDSelfShotGunActor::FireGun()
@@ -2252,6 +2267,20 @@ void ASDSelfShotGunActor::CacheBulletRestRelativeTransforms()
 	}
 }
 
+FTransform ASDSelfShotGunActor::ResolveBettingBulletRestRelativeTransform(int32 BulletIndex) const
+{
+	if (!BulletRestRelativeTransforms.IsValidIndex(BulletIndex))
+	{
+		return FTransform::Identity;
+	}
+
+	FTransform RestTransform = BulletRestRelativeTransforms[BulletIndex];
+	RestTransform.SetLocation(
+		RestTransform.GetLocation()
+		+ RestTransform.GetRotation().RotateVector(RaiseBulletLoadedLocalOffset));
+	return RestTransform;
+}
+
 UStaticMeshComponent* ASDSelfShotGunActor::GetBulletMeshComponent(int32 BulletIndex) const
 {
 	switch (BulletIndex)
@@ -2316,7 +2345,7 @@ void ASDSelfShotGunActor::SetBulletPresentationImmediate(int32 BulletCount)
 			continue;
 		}
 
-		const FTransform& SlotTransform = BulletRestRelativeTransforms[BulletIndex];
+		const FTransform SlotTransform = ResolveBettingBulletRestRelativeTransform(BulletIndex);
 		BettingBulletMesh->SetRelativeLocationAndRotation(
 			SlotTransform.GetLocation(),
 			SlotTransform.GetRotation());
@@ -2407,8 +2436,9 @@ FVector ASDSelfShotGunActor::ResolveRaiseBulletSourceWorldLocation(
 
 	if (ChamberPivot && BulletRestRelativeTransforms.IsValidIndex(StartCount))
 	{
+		const FTransform RestTransform = ResolveBettingBulletRestRelativeTransform(StartCount);
 		return ChamberPivot->GetComponentTransform().TransformPosition(
-			BulletRestRelativeTransforms[StartCount].GetLocation()
+			RestTransform.GetLocation()
 				+ RaiseBulletLoadStartOffset);
 	}
 
@@ -2617,7 +2647,7 @@ void ASDSelfShotGunActor::UpdateRaiseBulletLoadAnimation(float DeltaSeconds)
 			continue;
 		}
 
-		const FTransform& RestTransform = BulletRestRelativeTransforms[BulletIndex];
+		const FTransform RestTransform = ResolveBettingBulletRestRelativeTransform(BulletIndex);
 		if (BulletIndex < StartCount)
 		{
 			BettingBulletMesh->SetRelativeLocationAndRotation(
@@ -2654,6 +2684,8 @@ void ASDSelfShotGunActor::UpdateRaiseBulletLoadAnimation(float DeltaSeconds)
 		const FTransform ChamberWorldTransform = ChamberPivot->GetComponentTransform();
 		const FVector TargetWorldLocation = ChamberWorldTransform.TransformPosition(
 			RestTransform.GetLocation());
+		const FQuat TargetWorldRotation = ChamberWorldTransform.TransformRotation(
+			RestTransform.GetRotation());
 		if (LocalElapsedTime >= BulletDuration)
 		{
 			BettingBulletMesh->SetRelativeLocationAndRotation(
@@ -2665,17 +2697,69 @@ void ASDSelfShotGunActor::UpdateRaiseBulletLoadAnimation(float DeltaSeconds)
 
 		const float TravelElapsedTime = FMath::Max(0.0f, LocalElapsedTime - StartHoldTime);
 		const float Alpha = FMath::Clamp(TravelElapsedTime / TravelDuration, 0.0f, 1.0f);
-		// Intentionally use a plain lerp: every bullet follows one straight segment
-		// from the raiser's hand directly into its cylinder slot.
-		const FVector CurrentWorldLocation = FMath::Lerp(
-			ActiveRaiseBulletSourceWorldLocation,
-			TargetWorldLocation,
-			Alpha);
-		const FVector TravelDirection = (
-			TargetWorldLocation - ActiveRaiseBulletSourceWorldLocation).GetSafeNormal();
-		const FQuat CurrentWorldRotation = TravelDirection.IsNearlyZero()
-			? ChamberWorldTransform.TransformRotation(RestTransform.GetRotation())
-			: FRotationMatrix::MakeFromZ(TravelDirection).ToQuat();
+		FVector EntryAxis = TargetWorldRotation.GetAxisZ().GetSafeNormal();
+		const FVector TargetToSource = (
+			ActiveRaiseBulletSourceWorldLocation - TargetWorldLocation).GetSafeNormal();
+		if (EntryAxis.IsNearlyZero())
+		{
+			EntryAxis = TargetToSource.IsNearlyZero() ? FVector::UpVector : TargetToSource;
+		}
+		else if (!TargetToSource.IsNearlyZero() && FVector::DotProduct(EntryAxis, TargetToSource) < 0.0f)
+		{
+			EntryAxis *= -1.0f;
+		}
+
+		const FVector EntryWorldLocation = TargetWorldLocation
+			+ EntryAxis * FMath::Max(0.0f, RaiseBulletLoadEntryDistance);
+		const float InsertionFraction = FMath::Clamp(
+			RaiseBulletLoadInsertionFraction,
+			0.1f,
+			0.75f);
+		const float ApproachFraction = 1.0f - InsertionFraction;
+		FVector CurrentWorldLocation = TargetWorldLocation;
+		FQuat CurrentWorldRotation = TargetWorldRotation;
+		if (Alpha < ApproachFraction)
+		{
+			const float ApproachAlpha = FMath::Clamp(Alpha / ApproachFraction, 0.0f, 1.0f);
+			const float EasedApproachAlpha = FMath::InterpEaseInOut(
+				0.0f,
+				1.0f,
+				ApproachAlpha,
+				2.0f);
+			CurrentWorldLocation = FMath::Lerp(
+				ActiveRaiseBulletSourceWorldLocation,
+				EntryWorldLocation,
+				EasedApproachAlpha);
+			CurrentWorldLocation += FVector::UpVector
+				* FMath::Sin(EasedApproachAlpha * PI)
+				* FMath::Max(0.0f, RaiseBulletLoadArcHeight);
+
+			const FVector ApproachDirection = (
+				EntryWorldLocation - ActiveRaiseBulletSourceWorldLocation).GetSafeNormal();
+			const FQuat ApproachWorldRotation = ApproachDirection.IsNearlyZero()
+				? TargetWorldRotation
+				: FRotationMatrix::MakeFromZ(ApproachDirection).ToQuat();
+			CurrentWorldRotation = FQuat::Slerp(
+				ApproachWorldRotation,
+				TargetWorldRotation,
+				EasedApproachAlpha).GetNormalized();
+		}
+		else
+		{
+			const float InsertionAlpha = FMath::Clamp(
+				(Alpha - ApproachFraction) / InsertionFraction,
+				0.0f,
+				1.0f);
+			const float EasedInsertionAlpha = FMath::InterpEaseInOut(
+				0.0f,
+				1.0f,
+				InsertionAlpha,
+				2.0f);
+			CurrentWorldLocation = FMath::Lerp(
+				EntryWorldLocation,
+				TargetWorldLocation,
+				EasedInsertionAlpha);
+		}
 		BettingBulletMesh->SetWorldLocationAndRotation(
 			CurrentWorldLocation,
 			CurrentWorldRotation);
@@ -3073,7 +3157,7 @@ AActor* ASDSelfShotGunActor::FindMultiplayerShotTarget(EShowDownPlayerSlot Targe
 
 void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(EShowDownPlayerSlot TargetSlot, bool bHit)
 {
-	if (!CanInteract_Implementation(nullptr))
+	if (!CanStartPresentation())
 	{
 		if (GetNetMode() != NM_DedicatedServer)
 		{
@@ -3135,7 +3219,7 @@ void ASDSelfShotGunActor::TryStartPendingMultiplayerRoulettePresentation()
 {
 	if (GetNetMode() == NM_DedicatedServer
 		|| PendingMultiplayerRoulettePresentations.IsEmpty()
-		|| !CanInteract_Implementation(nullptr))
+		|| !CanStartPresentation())
 	{
 		return;
 	}

@@ -75,6 +75,8 @@ namespace
 	constexpr float GameplayHudIntroFadeDuration = 0.55f;
 	constexpr float GameplayHudElementFadeSpeed = 9.0f;
 	constexpr float BetActionNoticeSeconds = 2.6f;
+	constexpr float GameplayServerStatusSeconds = 3.5f;
+	constexpr float GameplayServerStatusFadeOutSeconds = 0.5f;
 
 	FSlateFontInfo MakeCardSelectionPromptFont(int32 Size)
 	{
@@ -120,7 +122,8 @@ namespace
 					SNew(SBorder)
 					.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
 					.BorderBackgroundColor(Content.AccentColor)
-					.Padding(FMargin(1.5f))
+					// Keep every edge at least one physical pixel wide after viewport DPI scaling.
+					.Padding(FMargin(2.0f))
 					[
 						SNew(SBorder)
 						.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
@@ -162,7 +165,9 @@ namespace
 		TSharedPtr<STextBlock>& OutLivesText,
 		TSharedPtr<SBorder>& OutTimerPanel,
 		TSharedPtr<STextBlock>& OutTimerLabelText,
-		TSharedPtr<STextBlock>& OutTimerValueText)
+		TSharedPtr<STextBlock>& OutTimerValueText,
+		TSharedPtr<SBorder>& OutServerStatusPanel,
+		TSharedPtr<STextBlock>& OutServerStatusText)
 	{
 		return SNew(SOverlay)
 			.Visibility(EVisibility::HitTestInvisible)
@@ -195,6 +200,32 @@ namespace
 						.ColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.23f, 0.35f, 1.0f)))
 						.ShadowOffset(FVector2D(0.0f, 1.0f))
 						.ShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.72f))
+					]
+				]
+			]
+			+ SOverlay::Slot()
+			.HAlign(HAlign_Center)
+			.VAlign(VAlign_Top)
+			.Padding(FMargin(0.0f, 30.0f, 0.0f, 0.0f))
+			[
+				SAssignNew(OutServerStatusPanel, SBorder)
+					.Visibility(EVisibility::Collapsed)
+					.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+					.BorderBackgroundColor(FLinearColor(1.0f, 0.68f, 0.10f, 0.98f))
+					.Padding(FMargin(1.5f))
+				[
+					SNew(SBorder)
+						.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+						.BorderBackgroundColor(FLinearColor(0.012f, 0.016f, 0.024f, 0.94f))
+						.Padding(FMargin(20.0f, 9.0f, 20.0f, 10.0f))
+					[
+						SAssignNew(OutServerStatusText, STextBlock)
+							.Text(FText::GetEmpty())
+							.Font(MakeCardSelectionPromptFont(17))
+							.ColorAndOpacity(FSlateColor(FLinearColor::White))
+							.Justification(ETextJustify::Center)
+							.AutoWrapText(true)
+							.WrapTextAt(720.0f)
 					]
 				]
 			]
@@ -994,6 +1025,18 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 		return;
 	}
 
+	if (IsGunShotPresentationInputBlocked())
+	{
+		CancelPressedBetActionButton();
+		SetFocusedInteractable(nullptr);
+		SetHoveredCard(nullptr);
+		// Keep the spectator recovery check alive so a rematch can restore the
+		// normal character camera without reopening gameplay input too early.
+		UpdateCharacterPlayerCamera(DeltaTime);
+		UpdateCenterCrosshairVisibility();
+		return;
+	}
+
 	if (!bHandleShowDownGameplayInput)
 	{
 		CancelPressedBetActionButton();
@@ -1161,6 +1204,11 @@ void AShowDownPlayerController::InitializeInteractableOutlinePostProcess()
 
 void AShowDownPlayerController::HandlePrimaryClick()
 {
+	if (IsGunShotPresentationInputBlocked())
+	{
+		return;
+	}
+
 	FHitResult Hit;
 	const bool bHasHit = TracePrimaryInteraction(Hit);
 
@@ -1450,7 +1498,10 @@ AActor* AShowDownPlayerController::ResolveInteractableFromHit(const FHitResult& 
 
 AActor* AShowDownPlayerController::FindFocusedInteractable() const
 {
-	if (!bEnableInteractableAimOutline || !bHandleShowDownGameplayInput || bChatOpen)
+	if (!bEnableInteractableAimOutline
+		|| !bHandleShowDownGameplayInput
+		|| bChatOpen
+		|| IsGunShotPresentationInputBlocked())
 	{
 		return nullptr;
 	}
@@ -2192,6 +2243,7 @@ bool AShowDownPlayerController::BeginGunShotCameraOverride(
 	bGunShotCameraOverrideActive = true;
 	bGunShotCameraBlendingOut = false;
 	GunShotCameraBlendOutTimeRemaining = 0.0f;
+	UpdateCenterCrosshairVisibility();
 	SetViewTargetWithBlend(
 		Camera,
 		FMath::Max(0.0f, BlendInTime),
@@ -2331,12 +2383,28 @@ void AShowDownPlayerController::ClearGunShotCameraOverrideState()
 	GunShotCameraBlendOutTimeRemaining = 0.0f;
 	bGunShotCameraOverrideActive = false;
 	bGunShotCameraBlendingOut = false;
+	UpdateCenterCrosshairVisibility();
 }
 
 void AShowDownPlayerController::ClearEliminatedSpectatorViewState()
 {
 	EliminatedSpectatorCameraTarget.Reset();
 	bEliminatedSpectatorViewActive = false;
+	UpdateCenterCrosshairVisibility();
+}
+
+bool AShowDownPlayerController::ShouldBlockGameplayInputForGunShot(
+	bool bGunShotCameraActive,
+	bool bEliminatedSpectatorActive)
+{
+	return bGunShotCameraActive || bEliminatedSpectatorActive;
+}
+
+bool AShowDownPlayerController::IsGunShotPresentationInputBlocked() const
+{
+	return ShouldBlockGameplayInputForGunShot(
+		bGunShotCameraOverrideActive,
+		bEliminatedSpectatorViewActive);
 }
 
 void AShowDownPlayerController::SetFixedCameraBreathingSway(
@@ -2411,6 +2479,11 @@ void AShowDownPlayerController::SubmitPlayerBetAction(EShowDownBetAction Action,
 
 void AShowDownPlayerController::ApplyPawnCameraInput(float YawInput, float PitchInput)
 {
+	if (IsGunShotPresentationInputBlocked())
+	{
+		return;
+	}
+
 	const FRotator CurrentControlRotation = GetControlRotation();
 	if (!bHasPawnCameraBaseRotation)
 	{
@@ -2661,24 +2734,27 @@ void AShowDownPlayerController::UpdateFixedCameraMouseLook(float DeltaTime)
 		CameraSteppedShakeElapsedTime = FMath::Min(CameraSteppedShakeElapsedTime + DeltaTime, SteppedShakeTotalTime);
 	}
 
-	float MouseDeltaX = 0.0f;
-	float MouseDeltaY = 0.0f;
-	GetInputMouseDelta(MouseDeltaX, MouseDeltaY);
-	if (!FMath::IsNearlyZero(MouseDeltaX) || !FMath::IsNearlyZero(MouseDeltaY))
+	if (!IsGunShotPresentationInputBlocked())
 	{
-		FixedCameraLookRotation.Yaw += MouseDeltaX * FixedCameraLookSensitivity * UserMouseSensitivityMultiplier;
+		float MouseDeltaX = 0.0f;
+		float MouseDeltaY = 0.0f;
+		GetInputMouseDelta(MouseDeltaX, MouseDeltaY);
+		if (!FMath::IsNearlyZero(MouseDeltaX) || !FMath::IsNearlyZero(MouseDeltaY))
+		{
+			FixedCameraLookRotation.Yaw += MouseDeltaX * FixedCameraLookSensitivity * UserMouseSensitivityMultiplier;
 
-		const float RelativeYaw = FRotator::NormalizeAxis(FixedCameraLookRotation.Yaw - FixedCameraBaseRotation.Yaw);
-		const float ClampedRelativeYaw = FMath::Clamp(RelativeYaw, FixedCameraMinYawOffset, FixedCameraMaxYawOffset);
-		FixedCameraLookRotation.Yaw = FixedCameraBaseRotation.Yaw + ClampedRelativeYaw;
+			const float RelativeYaw = FRotator::NormalizeAxis(FixedCameraLookRotation.Yaw - FixedCameraBaseRotation.Yaw);
+			const float ClampedRelativeYaw = FMath::Clamp(RelativeYaw, FixedCameraMinYawOffset, FixedCameraMaxYawOffset);
+			FixedCameraLookRotation.Yaw = FixedCameraBaseRotation.Yaw + ClampedRelativeYaw;
 
-		const float PitchInputSign = bFixedCameraInvertMouseY ? 1.0f : -1.0f;
-		const float CurrentPitch = FRotator::NormalizeAxis(FixedCameraLookRotation.Pitch);
-		FixedCameraLookRotation.Pitch = FMath::Clamp(
-			CurrentPitch + MouseDeltaY * FixedCameraLookSensitivity * UserMouseSensitivityMultiplier * PitchInputSign,
-			FixedCameraMinPitch,
-			FixedCameraMaxPitch);
-		FixedCameraLookRotation.Roll = 0.0f;
+			const float PitchInputSign = bFixedCameraInvertMouseY ? 1.0f : -1.0f;
+			const float CurrentPitch = FRotator::NormalizeAxis(FixedCameraLookRotation.Pitch);
+			FixedCameraLookRotation.Pitch = FMath::Clamp(
+				CurrentPitch + MouseDeltaY * FixedCameraLookSensitivity * UserMouseSensitivityMultiplier * PitchInputSign,
+				FixedCameraMinPitch,
+				FixedCameraMaxPitch);
+			FixedCameraLookRotation.Roll = 0.0f;
+		}
 	}
 
 	const float SwayStrength = bEnableFixedCameraBreathingSway
@@ -3030,6 +3106,7 @@ void AShowDownPlayerController::DisableGameplayChat()
 {
 	bGameplayChatEnabled = false;
 	bChatOpen = false;
+	ClearGameplayStatusMessage();
 	if (APlayerPawn* ShowDownPawn = Cast<APlayerPawn>(GetPawn()))
 	{
 		ShowDownPawn->ReleaseChatWidget();
@@ -3152,7 +3229,8 @@ void AShowDownPlayerController::UpdateCenterCrosshairVisibility()
 		bShowCenterCrosshair
 		&& bHandleShowDownGameplayInput
 		&& !bChatOpen
-		&& !bShowMouseCursor;
+		&& !bShowMouseCursor
+		&& !IsGunShotPresentationInputBlocked();
 
 	CenterCrosshairWidget->SetVisibility(bShouldShow ? EVisibility::HitTestInvisible : EVisibility::Collapsed);
 }
@@ -3329,11 +3407,77 @@ void AShowDownPlayerController::EnsureGameplayStatusHud()
 		GameplayLivesText,
 		GameplayTimerPanel,
 		GameplayTimerLabelText,
-		GameplayTimerValueText);
+		GameplayTimerValueText,
+		GameplayServerStatusPanel,
+		GameplayServerStatusText);
 	GEngine->GameViewport->AddViewportWidgetContent(
 		GameplayStatusHudWidget.ToSharedRef(),
 		GameplayStatusHudZOrder);
 	GameplayStatusHudWidget->SetRenderOpacity(GameplayHudIntroOpacity);
+}
+
+void AShowDownPlayerController::ShowGameplayStatusMessage(const FString& Message)
+{
+	const FString SanitizedMessage = Message.TrimStartAndEnd().Left(220);
+	if (!bGameplayChatEnabled || SanitizedMessage.IsEmpty() || !CanCreateLocalPlayerWidgets())
+	{
+		return;
+	}
+
+	EnsureGameplayStatusHud();
+	if (!GameplayServerStatusPanel.IsValid() || !GameplayServerStatusText.IsValid())
+	{
+		return;
+	}
+
+	GameplayServerStatusMessage = SanitizedMessage;
+	GameplayServerStatusRemainingTime = GameplayServerStatusSeconds;
+	GameplayServerStatusOpacity = 1.0f;
+	GameplayServerStatusText->SetText(FText::FromString(GameplayServerStatusMessage));
+	GameplayServerStatusPanel->SetRenderOpacity(GameplayServerStatusOpacity);
+	GameplayServerStatusPanel->SetVisibility(EVisibility::HitTestInvisible);
+}
+
+void AShowDownPlayerController::UpdateGameplayStatusMessage(float DeltaTime)
+{
+	if (!GameplayServerStatusPanel.IsValid())
+	{
+		return;
+	}
+
+	GameplayServerStatusRemainingTime = FMath::Max(
+		0.0f,
+		GameplayServerStatusRemainingTime - FMath::Max(0.0f, DeltaTime));
+	if (!bGameplayChatEnabled || GameplayServerStatusRemainingTime <= KINDA_SMALL_NUMBER)
+	{
+		ClearGameplayStatusMessage();
+		return;
+	}
+
+	GameplayServerStatusOpacity = GameplayServerStatusRemainingTime < GameplayServerStatusFadeOutSeconds
+		? FMath::Clamp(
+			GameplayServerStatusRemainingTime / GameplayServerStatusFadeOutSeconds,
+			0.0f,
+			1.0f)
+		: 1.0f;
+	GameplayServerStatusPanel->SetRenderOpacity(GameplayServerStatusOpacity);
+	GameplayServerStatusPanel->SetVisibility(EVisibility::HitTestInvisible);
+}
+
+void AShowDownPlayerController::ClearGameplayStatusMessage()
+{
+	GameplayServerStatusMessage.Reset();
+	GameplayServerStatusRemainingTime = 0.0f;
+	GameplayServerStatusOpacity = 0.0f;
+	if (GameplayServerStatusText.IsValid())
+	{
+		GameplayServerStatusText->SetText(FText::GetEmpty());
+	}
+	if (GameplayServerStatusPanel.IsValid())
+	{
+		GameplayServerStatusPanel->SetRenderOpacity(0.0f);
+		GameplayServerStatusPanel->SetVisibility(EVisibility::Collapsed);
+	}
 }
 
 int32 AShowDownPlayerController::ResolveLocalLivesForHud() const
@@ -3372,6 +3516,7 @@ void AShowDownPlayerController::UpdateGameplayStatusHud(float DeltaTime)
 	const AShowDownGameStateBase* ShowDownGameState = GetWorld()
 		? GetWorld()->GetGameState<AShowDownGameStateBase>()
 		: nullptr;
+	UpdateGameplayStatusMessage(DeltaTime);
 	if (HasBlockingGameplayUi())
 	{
 		GameplayStatusHudWidget->SetVisibility(EVisibility::Collapsed);
@@ -3493,6 +3638,7 @@ void AShowDownPlayerController::UpdateGameplayStatusHud(float DeltaTime)
 
 void AShowDownPlayerController::RemoveGameplayStatusHud()
 {
+	ClearGameplayStatusMessage();
 	if (GameplayStatusHudWidget.IsValid() && GEngine && GEngine->GameViewport)
 	{
 		GEngine->GameViewport->RemoveViewportWidgetContent(GameplayStatusHudWidget.ToSharedRef());
@@ -3503,6 +3649,8 @@ void AShowDownPlayerController::RemoveGameplayStatusHud()
 	GameplayTimerPanel.Reset();
 	GameplayTimerLabelText.Reset();
 	GameplayTimerValueText.Reset();
+	GameplayServerStatusPanel.Reset();
+	GameplayServerStatusText.Reset();
 	LastRenderedGameplayHudLives = INDEX_NONE;
 	LastRenderedGameplayHudTimerSecond = INDEX_NONE;
 	LastRenderedGameplayHudTimerKind = EShowDownDecisionTimerKind::None;
@@ -3636,11 +3784,9 @@ void AShowDownPlayerController::UpdateGameplayPrompt(float DeltaTime)
 			{
 			case EShowDownBetAction::Check:
 				Content.Label = FText::FromString(ActionNotice.bWasAutomatic ? TEXT("TIME OUT") : TEXT("CHECK"));
-				Content.Title = FText::FromString(FString::Printf(
-					ActionNotice.bWasAutomatic
-						? TEXT("%s님이 시간 초과로 체크했습니다.")
-						: TEXT("%s님이 체크했습니다."),
-					*ActorName));
+				Content.Title = FText::FromString(ActionNotice.bWasAutomatic
+					? FString::Printf(TEXT("%s님이 시간 초과로 체크했습니다."), *ActorName)
+					: FString::Printf(TEXT("%s님이 체크했습니다."), *ActorName));
 				break;
 			case EShowDownBetAction::Call:
 				Content.Label = FText::FromString(TEXT("CALL"));
@@ -3658,11 +3804,9 @@ void AShowDownPlayerController::UpdateGameplayPrompt(float DeltaTime)
 				break;
 			case EShowDownBetAction::Fold:
 				Content.Label = FText::FromString(ActionNotice.bWasAutomatic ? TEXT("TIME OUT") : TEXT("FOLD"));
-				Content.Title = FText::FromString(FString::Printf(
-					ActionNotice.bWasAutomatic
-						? TEXT("%s님이 시간 초과로 폴드했습니다.")
-						: TEXT("%s님이 폴드했습니다."),
-					*ActorName));
+				Content.Title = FText::FromString(ActionNotice.bWasAutomatic
+					? FString::Printf(TEXT("%s님이 시간 초과로 폴드했습니다."), *ActorName)
+					: FString::Printf(TEXT("%s님이 폴드했습니다."), *ActorName));
 				break;
 			default:
 				break;
@@ -4297,6 +4441,7 @@ void AShowDownPlayerController::ClientShowStatusMessage_Implementation(const FSt
 	{
 		MultiplayerRankWidget->SetRestartStatus(Message);
 	}
+	ShowGameplayStatusMessage(Message);
 }
 
 void AShowDownPlayerController::ClientReportLobbyKickResult_Implementation(bool bSuccess)

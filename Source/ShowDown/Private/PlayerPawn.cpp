@@ -360,7 +360,7 @@ void APlayerPawn::SDWin()
 	// 실제 전 스테이지 클리어 승리와 동일한 이벤트를 발생시켜
 	// HubFlowManager의 보상 지급 + 허브 복귀 흐름을 그대로 태웁니다.
 	ShowDownGameState->SetPhase(EShowDownPhase::GameOver);
-	ShowDownGameState->OnGameOver.Broadcast(EShowDownSide::Player);
+	ShowDownGameState->BroadcastGameOver(EShowDownSide::Player);
 
 	UE_LOG(LogTemp, Log, TEXT("[Debug] SDWin: forced player victory."));
 }

@@ -20,6 +20,7 @@
 #include "ShowDownCharacterSkinCatalog.h"
 #include "ShowDownGameModeBase.h"
 #include "ShowDownGameStateBase.h"
+#include "ShowDownPlayerController.h"
 #include "ShowDownShopWidget.h"
 #include "ShowDownTypes.h"
 #include "Components/StaticMeshComponent.h"
@@ -1029,6 +1030,16 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FShowDownGunShotCameraTest::RunTest(const FString& Parameters)
 {
+	TestFalse(
+		TEXT("Normal gameplay leaves gun-shot presentation input enabled"),
+		AShowDownPlayerController::ShouldBlockGameplayInputForGunShot(false, false));
+	TestTrue(
+		TEXT("An active gun-shot camera blocks gameplay input"),
+		AShowDownPlayerController::ShouldBlockGameplayInputForGunShot(true, false));
+	TestTrue(
+		TEXT("An eliminated spectator view keeps gameplay input blocked"),
+		AShowDownPlayerController::ShouldBlockGameplayInputForGunShot(false, true));
+
 	TestTrue(
 		TEXT("Any shot targeting the local player enables the third-person camera"),
 		ASDSelfShotGunActor::ShouldUseGunShotCamera(true));
@@ -1127,6 +1138,19 @@ bool FShowDownGunShotCameraTest::RunTest(const FString& Parameters)
 			FallbackCamera.GetUnitAxis(EAxis::X),
 			(FallbackLookTarget - FallbackCamera.GetLocation()).GetSafeNormal()) > 0.999f);
 
+	ASDSelfShotGunActor* InteractionGun = NewObject<ASDSelfShotGunActor>();
+	TestNotNull(TEXT("A gun interaction gate can be created"), InteractionGun);
+	if (InteractionGun)
+	{
+		InteractionGun->bOpeningCardShowcaseStowed = false;
+		TestTrue(
+			TEXT("Disabling player clicks does not disable server-authored gun presentations"),
+			InteractionGun->CanStartPresentation());
+		TestFalse(
+			TEXT("The development-only direct gun interaction stays disabled"),
+			InteractionGun->CanInteract_Implementation(nullptr));
+	}
+
 	const FVector TableCenter(40.0f, -25.0f, 10.0f);
 	const float SeatDistance = 300.0f;
 	const float OverviewBackDistance = 90.0f;
@@ -1162,6 +1186,32 @@ bool FShowDownGunShotCameraTest::RunTest(const FString& Parameters)
 			FVector::DotProduct(Overview.GetUnitAxis(EAxis::X), ExpectedLookDirection) > 0.999f);
 	}
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownNetworkPresentationEventsTest,
+	"ShowDown.Core.NetworkPresentationEvents",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownNetworkPresentationEventsTest::RunTest(const FString& Parameters)
+{
+	auto TestReliableMulticast = [this](const TCHAR* FunctionName)
+	{
+		const UFunction* Function = AShowDownGameStateBase::StaticClass()
+			->FindFunctionByName(FName(FunctionName));
+		TestNotNull(*FString::Printf(TEXT("%s is reflected"), FunctionName), Function);
+		TestTrue(
+			*FString::Printf(TEXT("%s is a network multicast"), FunctionName),
+			Function && Function->HasAnyFunctionFlags(FUNC_NetMulticast));
+		TestTrue(
+			*FString::Printf(TEXT("%s is reliable"), FunctionName),
+			Function && Function->HasAnyFunctionFlags(FUNC_NetReliable));
+	};
+
+	TestReliableMulticast(TEXT("MulticastCardsRevealed"));
+	TestReliableMulticast(TEXT("MulticastRoundResolved"));
+	TestReliableMulticast(TEXT("MulticastGameOver"));
 	return true;
 }
 

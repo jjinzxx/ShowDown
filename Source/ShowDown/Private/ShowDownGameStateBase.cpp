@@ -524,6 +524,39 @@ void AShowDownGameStateBase::BroadcastChatMessage(const FString& SenderName, con
 	OnChatMessageReceived.Broadcast(SenderName, Message);
 }
 
+void AShowDownGameStateBase::BroadcastCardsRevealed(int32 PlayerCard, int32 CollectorCard)
+{
+	if (HasAuthority())
+	{
+		MulticastCardsRevealed(PlayerCard, CollectorCard);
+		return;
+	}
+
+	OnCardsRevealed.Broadcast(PlayerCard, CollectorCard);
+}
+
+void AShowDownGameStateBase::BroadcastRoundResolved(EShowDownRoundResult Result)
+{
+	if (HasAuthority())
+	{
+		MulticastRoundResolved(Result);
+		return;
+	}
+
+	OnRoundResolved.Broadcast(Result);
+}
+
+void AShowDownGameStateBase::BroadcastGameOver(EShowDownSide Winner)
+{
+	if (HasAuthority())
+	{
+		MulticastGameOver(Winner);
+		return;
+	}
+
+	OnGameOver.Broadcast(Winner);
+}
+
 void AShowDownGameStateBase::BroadcastMultiplayerRouletteStarted(
 	EShowDownPlayerSlot TargetSlot,
 	const FString& TargetName,
@@ -597,6 +630,21 @@ void AShowDownGameStateBase::MulticastCollectorLLMStatus_Implementation(bool bSu
 void AShowDownGameStateBase::MulticastChatMessage_Implementation(const FString& SenderName, const FString& Message)
 {
 	OnChatMessageReceived.Broadcast(SenderName, Message);
+}
+
+void AShowDownGameStateBase::MulticastCardsRevealed_Implementation(int32 PlayerCard, int32 CollectorCard)
+{
+	OnCardsRevealed.Broadcast(PlayerCard, CollectorCard);
+}
+
+void AShowDownGameStateBase::MulticastRoundResolved_Implementation(EShowDownRoundResult Result)
+{
+	OnRoundResolved.Broadcast(Result);
+}
+
+void AShowDownGameStateBase::MulticastGameOver_Implementation(EShowDownSide Winner)
+{
+	OnGameOver.Broadcast(Winner);
 }
 
 void AShowDownGameStateBase::MulticastMultiplayerRouletteStarted_Implementation(
