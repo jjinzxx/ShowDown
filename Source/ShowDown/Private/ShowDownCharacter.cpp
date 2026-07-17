@@ -330,6 +330,15 @@ void AShowDownCharacter::PostInitializeComponents()
 		WorldLivesBaseRelativeScale = WorldLivesText->GetRelativeScale3D();
 	}
 	ApplyCharacterSkin();
+	if (RevolverPresentationAnchor && GetCapsuleComponent())
+	{
+		// Preserve the position authored against the head in existing Blueprints,
+		// then move the runtime anchor to the stable character root. This keeps
+		// head-look and animation bone rotation from changing gun placement.
+		RevolverPresentationAnchor->AttachToComponent(
+			GetCapsuleComponent(),
+			FAttachmentTransformRules::KeepWorldTransform);
+	}
 	CacheAnimBlueprintClass();
 	CacheBaseMeshTransform();
 	PushAnimStateToAnimInstance();

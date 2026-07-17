@@ -3240,6 +3240,8 @@ void AShowDownGameModeBase::BroadcastPendingSelfShotRouletteResult()
 	}
 
 	bPendingSelfShotRouletteResult = false;
+	ConsumeSingleRouletteChamber(bPendingSelfShotLiveRound);
+	RefreshCentralGunStatus();
 	if (GetWorld())
 	{
 		SingleRoundProgressBlockedUntilSeconds = FMath::Max(
@@ -6300,6 +6302,17 @@ void AShowDownGameModeBase::MarkSingleBetBulletRouletteTarget(EShowDownSide Targ
 	BetBulletRouletteTargetSide = TargetSide;
 	BetBulletRouletteTargetSlot = EShowDownPlayerSlot::None;
 	BetBulletRouletteBulletCount = FMath::Clamp(BulletCount, 0, 6);
+	SingleRouletteLiveRoundCount = BetBulletRouletteBulletCount;
+	SingleRemainingChamberCount = 6;
+}
+
+void AShowDownGameModeBase::ConsumeSingleRouletteChamber(bool bLiveRound)
+{
+	SingleRemainingChamberCount = FMath::Max(0, SingleRemainingChamberCount - 1);
+	if (bLiveRound)
+	{
+		SingleRouletteLiveRoundCount = FMath::Max(0, SingleRouletteLiveRoundCount - 1);
+	}
 }
 
 void AShowDownGameModeBase::MarkMultiplayerBetBulletRouletteTarget(ASDPlayerState* TargetPlayer, int32 BulletCount)
@@ -6328,6 +6341,8 @@ void AShowDownGameModeBase::ClearBetBulletTransientState()
 	BetBulletRouletteTargetSide = EShowDownSide::Player;
 	BetBulletRouletteTargetSlot = EShowDownPlayerSlot::None;
 	BetBulletRouletteBulletCount = 0;
+	SingleRouletteLiveRoundCount = 0;
+	SingleRemainingChamberCount = 6;
 }
 
 void AShowDownGameModeBase::ClearBetBulletActionHistory()
@@ -9297,7 +9312,7 @@ void AShowDownGameModeBase::RefreshCentralGunStatus()
 		{
 			if (bHasBetBulletRouletteTarget && !bBetBulletRouletteTargetIsMultiplayer)
 			{
-				DisplayLiveRounds = FMath::Clamp(BetBulletRouletteBulletCount, 0, 6);
+				DisplayLiveRounds = FMath::Clamp(SingleRouletteLiveRoundCount, 0, 6);
 			}
 			else
 			{
@@ -9332,7 +9347,9 @@ void AShowDownGameModeBase::RefreshCentralGunStatus()
 		}
 		const int32 DisplayRemainingChambers = bMultiplayerMatchStarted
 			? MultiplayerRemainingChamberCount
-			: 6;
+			: (bHasBetBulletRouletteTarget && !bBetBulletRouletteTargetIsMultiplayer
+				? SingleRemainingChamberCount
+				: 6);
 		GunActor->SetTableStatus(
 			DisplayLiveRounds,
 			DisplayRemainingChambers,

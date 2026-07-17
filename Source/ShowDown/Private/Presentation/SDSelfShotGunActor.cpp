@@ -955,6 +955,25 @@ void ASDSelfShotGunActor::OnRep_TableStatus()
 void ASDSelfShotGunActor::HandleGamePhaseChanged(EShowDownPhase NewPhase)
 {
 	StatusPhase = NewPhase;
+	if (NewPhase == EShowDownPhase::Reveal || NewPhase == EShowDownPhase::Roulette)
+	{
+		bAmmoStatusEmphasisLatched = true;
+		bAmmoStatusClearPending = false;
+	}
+	else if (NewPhase == EShowDownPhase::None
+		|| NewPhase == EShowDownPhase::SelectCard
+		|| NewPhase == EShowDownPhase::Betting)
+	{
+		const bool bShotPresentationActive =
+			AnimState != EGunAnimState::Idle
+			|| bMultiplayerRoulettePresentationActive
+			|| !PendingMultiplayerRoulettePresentations.IsEmpty();
+		bAmmoStatusClearPending = bShotPresentationActive;
+		if (!bShotPresentationActive)
+		{
+			bAmmoStatusEmphasisLatched = false;
+		}
+	}
 	if (NewPhase != EShowDownPhase::Betting && bRaiseBulletLoadActive)
 	{
 		SetBulletPresentationImmediate(StatusLiveRounds);
@@ -973,8 +992,30 @@ void ASDSelfShotGunActor::HandleTableCinematicCue(
 	// Reset and result are separate reliable multicasts. Reset is allowed to
 	// arrive while this peer is still presenting, so it must not discard the
 	// active or queued gun shots.
-	(void)Cue;
 	(void)PlayerSlotMask;
+
+	if (Cue == ESDTableCinematicCue::PreRevealBlackout
+		|| Cue == ESDTableCinematicCue::RevealStarted
+		|| Cue == ESDTableCinematicCue::TriggerPullStarted)
+	{
+		bAmmoStatusEmphasisLatched = true;
+		bAmmoStatusClearPending = false;
+	}
+	else if (Cue == ESDTableCinematicCue::Reset
+		|| Cue == ESDTableCinematicCue::InitialDealStarted)
+	{
+		const bool bShotPresentationActive =
+			AnimState != EGunAnimState::Idle
+			|| bMultiplayerRoulettePresentationActive
+			|| !PendingMultiplayerRoulettePresentations.IsEmpty();
+		bAmmoStatusClearPending = bShotPresentationActive;
+		if (!bShotPresentationActive)
+		{
+			bAmmoStatusEmphasisLatched = false;
+		}
+	}
+
+	ApplyAmmoStatusDisplaySettings();
 }
 
 void ASDSelfShotGunActor::ApplyAmmoStatusDisplaySettings()
@@ -990,31 +1031,55 @@ void ASDSelfShotGunActor::ApplyAmmoStatusDisplaySettings()
 	}
 	if (AmmoStatusWidgetComponent)
 	{
+		const bool bShotPresentationActive =
+			AnimState != EGunAnimState::Idle
+			|| bMultiplayerRoulettePresentationActive
+			|| !PendingMultiplayerRoulettePresentations.IsEmpty();
+		const bool bEmphasizedAmmoStatus =
+			bAmmoStatusEmphasisLatched
+			|| StatusPhase == EShowDownPhase::Reveal
+			|| StatusPhase == EShowDownPhase::Roulette
+			|| bShotPresentationActive;
 		const bool bShouldShowAmmoStatus =
 			!bOpeningCardShowcaseStowed
 			&& !bOpeningCardDropActive
 			&& (StatusPhase == EShowDownPhase::Betting
 				|| StatusPhase == EShowDownPhase::Reveal
-				|| StatusPhase == EShowDownPhase::Roulette);
+				|| StatusPhase == EShowDownPhase::Roulette
+				|| bEmphasizedAmmoStatus);
+		const float MinimumPulseSafeWidth =
+			(AmmoStatusSlotDiameter * 6.0f + AmmoStatusSlotSpacing * 5.0f + 28.0f) * 1.28f;
+		const float MinimumPulseSafeHeight = (AmmoStatusSlotDiameter + 28.0f) * 1.28f;
 		AmmoStatusWidgetComponent->SetDrawSize(FVector2D(
-			FMath::Max(32.0f, AmmoStatusDrawSize.X),
-			FMath::Max(32.0f, AmmoStatusDrawSize.Y)));
+			FMath::Max(MinimumPulseSafeWidth, AmmoStatusDrawSize.X),
+			FMath::Max(MinimumPulseSafeHeight, AmmoStatusDrawSize.Y)));
 		AmmoStatusWidgetComponent->InitWidget();
 		if (UShowDownAmmoStatusWidget* AmmoWidget =
 			Cast<UShowDownAmmoStatusWidget>(AmmoStatusWidgetComponent->GetUserWidgetObject()))
 		{
 			AmmoWidget->SetAmmoStatus(
-				FText::FromString(FString::Printf(
-					TEXT("%d/%d"),
-					DisplayedBulletCount,
-					StatusRemainingChambers)),
-				AmmoStatusFontSize,
-				AmmoStatusTextColor,
-				AmmoStatusBackgroundColor);
+				DisplayedBulletCount,
+				StatusRemainingChambers,
+				ResolveAmmoStatusRiskColor(DisplayedBulletCount),
+				AmmoStatusBackgroundColor,
+				AmmoStatusSlotDiameter,
+				AmmoStatusSlotSpacing,
+				bEmphasizedAmmoStatus);
 		}
 		AmmoStatusWidgetComponent->SetVisibility(bShouldShowAmmoStatus, true);
 		AmmoStatusWidgetComponent->SetHiddenInGame(!bShouldShowAmmoStatus, true);
 	}
+}
+
+FLinearColor ASDSelfShotGunActor::ResolveAmmoStatusRiskColor(int32 LiveRounds) const
+{
+	if (AmmoStatusRiskColors.IsEmpty())
+	{
+		return FLinearColor::White;
+	}
+
+	const int32 ColorIndex = FMath::Clamp(LiveRounds - 1, 0, AmmoStatusRiskColors.Num() - 1);
+	return AmmoStatusRiskColors[ColorIndex];
 }
 
 void ASDSelfShotGunActor::UpdateAmmoStatusAnchorLocation()
@@ -1126,53 +1191,27 @@ bool ASDSelfShotGunActor::TryResolveCharacterPresentationShot(
 		TargetCharacter->GetRevolverPresentationTransform();
 	OutSourceLocation = RevolverPresentationTransform.GetLocation();
 
-	if (!TargetCharacter->ShouldAutoAimRevolverPresentationAtTarget())
+	// Character-authored revolver placement is authoritative. Aim targets,
+	// camera sockets, and head animation must not alter the final gun transform.
+	FVector AimDirection = RevolverPresentationTransform.GetUnitAxis(EAxis::X).GetSafeNormal();
+	if (AimDirection.IsNearlyZero())
 	{
-		FVector AimDirection = RevolverPresentationTransform.GetUnitAxis(EAxis::X).GetSafeNormal();
-		if (AimDirection.IsNearlyZero())
-		{
-			AimDirection = TargetCharacter->GetActorForwardVector().GetSafeNormal();
-		}
-		if (AimDirection.IsNearlyZero())
-		{
-			AimDirection = FVector::ForwardVector;
-		}
-
-		OutAimLocation = OutSourceLocation + AimDirection * 100.0f;
-		if (OutRotationOffset)
-		{
-			FRotator ManualRotationOffset =
-				RevolverPresentationTransform.Rotator()
-				- AimDirection.Rotation()
-				- TargetShotRotationOffset;
-			ManualRotationOffset.Normalize();
-			*OutRotationOffset = ManualRotationOffset;
-		}
-
-		return true;
+		AimDirection = TargetCharacter->GetActorForwardVector().GetSafeNormal();
+	}
+	if (AimDirection.IsNearlyZero())
+	{
+		AimDirection = FVector::ForwardVector;
 	}
 
-	OutAimLocation = TargetCharacter->GetActorLocation() + TargetShotAimOffset;
+	OutAimLocation = OutSourceLocation + AimDirection * 100.0f;
 	if (OutRotationOffset)
 	{
-		*OutRotationOffset = RevolverAnchor->GetRelativeRotation();
-	}
-
-	TargetCharacter->TryGetRevolverPresentationAimLocation(OutAimLocation);
-
-	if ((OutAimLocation - OutSourceLocation).IsNearlyZero())
-	{
-		FVector AimDirection = TargetCharacter->GetActorForwardVector().GetSafeNormal();
-		if (AimDirection.IsNearlyZero())
-		{
-			AimDirection = RevolverAnchor->GetForwardVector().GetSafeNormal();
-		}
-		if (AimDirection.IsNearlyZero())
-		{
-			AimDirection = FVector::ForwardVector;
-		}
-
-		OutAimLocation = OutSourceLocation + AimDirection * 100.0f;
+		FRotator AnchorRotationOffset =
+			RevolverPresentationTransform.Rotator()
+			- AimDirection.Rotation()
+			- TargetShotRotationOffset;
+		AnchorRotationOffset.Normalize();
+		*OutRotationOffset = AnchorRotationOffset;
 	}
 
 	return true;
@@ -2171,6 +2210,15 @@ void ASDSelfShotGunActor::BroadcastPresentationFinishedIfIdle()
 	}
 
 	TryStartPendingMultiplayerRoulettePresentation();
+	if (bAmmoStatusClearPending
+		&& AnimState == EGunAnimState::Idle
+		&& !bMultiplayerRoulettePresentationActive
+		&& PendingMultiplayerRoulettePresentations.IsEmpty())
+	{
+		bAmmoStatusClearPending = false;
+		bAmmoStatusEmphasisLatched = false;
+		ApplyAmmoStatusDisplaySettings();
+	}
 }
 
 void ASDSelfShotGunActor::StartTinnitusSound()

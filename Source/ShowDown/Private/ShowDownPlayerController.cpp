@@ -5,6 +5,7 @@
 #include "ShowDownHubFlowManager.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "Math/TransformCalculus2D.h"
 #include "Misc/ConfigCacheIni.h"
 
 #include "Camera/CameraActor.h"
@@ -77,6 +78,8 @@ namespace
 	constexpr float BetActionNoticeSeconds = 2.6f;
 	constexpr float GameplayServerStatusSeconds = 3.5f;
 	constexpr float GameplayServerStatusFadeOutSeconds = 0.5f;
+	constexpr int32 DefaultGameplayHudLifeSlots = 3;
+	constexpr float GameplayLivesLostPulseDuration = 0.28f;
 
 	FSlateFontInfo MakeCardSelectionPromptFont(int32 Size)
 	{
@@ -88,6 +91,14 @@ namespace
 			Font.FontObject = FontObject;
 			Font.Size = Size;
 		}
+		return Font;
+	}
+
+	FSlateFontInfo MakeGameplayLivesFont()
+	{
+		FSlateFontInfo Font = MakeCardSelectionPromptFont(32);
+		Font.OutlineSettings.OutlineSize = 1;
+		Font.OutlineSettings.OutlineColor = FLinearColor(0.0f, 0.0f, 0.0f, 0.95f);
 		return Font;
 	}
 
@@ -162,13 +173,34 @@ namespace
 
 	TSharedRef<SWidget> BuildGameplayStatusHudWidget(
 		TSharedPtr<SBorder>& OutLivesPanel,
-		TSharedPtr<STextBlock>& OutLivesText,
+		TArray<TSharedPtr<STextBlock>>& OutLifeHeartTexts,
 		TSharedPtr<SBorder>& OutTimerPanel,
 		TSharedPtr<STextBlock>& OutTimerLabelText,
 		TSharedPtr<STextBlock>& OutTimerValueText,
 		TSharedPtr<SBorder>& OutServerStatusPanel,
 		TSharedPtr<STextBlock>& OutServerStatusText)
 	{
+		OutLifeHeartTexts.Reset();
+		TSharedRef<SHorizontalBox> LivesRow = SNew(SHorizontalBox);
+		for (int32 HeartIndex = 0; HeartIndex < DefaultGameplayHudLifeSlots; ++HeartIndex)
+		{
+			TSharedPtr<STextBlock> HeartText;
+			LivesRow->AddSlot()
+			.AutoWidth()
+			.Padding(FMargin(5.0f, 0.0f))
+			[
+				SAssignNew(HeartText, STextBlock)
+				.Text(FText::GetEmpty())
+				.Font(MakeGameplayLivesFont())
+				.ColorAndOpacity(FSlateColor(FLinearColor(0.96f, 0.10f, 0.19f, 1.0f)))
+				.ShadowOffset(FVector2D(0.0f, 2.0f))
+				.ShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.92f))
+				.Justification(ETextJustify::Center)
+				.RenderTransformPivot(FVector2D(0.5f, 0.5f))
+			];
+			OutLifeHeartTexts.Add(HeartText);
+		}
+
 		return SNew(SOverlay)
 			.Visibility(EVisibility::HitTestInvisible)
 			+ SOverlay::Slot()
@@ -176,30 +208,38 @@ namespace
 			.VAlign(VAlign_Top)
 			.Padding(FMargin(38.0f, 30.0f, 0.0f, 0.0f))
 			[
-				SAssignNew(OutLivesPanel, SBorder)
-					.BorderImage(FCoreStyle::Get().GetBrush("NoBrush"))
-					.BorderBackgroundColor(FLinearColor::Transparent)
-				.Padding(FMargin(16.0f, 9.0f, 18.0f, 10.0f))
+				SNew(SBox)
+				.WidthOverride(176.0f)
 				[
-					SNew(SVerticalBox)
-					+ SVerticalBox::Slot()
-					.AutoHeight()
+					SAssignNew(OutLivesPanel, SBorder)
+					.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+					.BorderBackgroundColor(FLinearColor(0.42f, 0.08f, 0.11f, 0.28f))
+					.Padding(FMargin(2.0f))
 					[
-						SNew(STextBlock)
-						.Text(FText::FromString(TEXT("LIFE")))
-						.Font(MakeCardSelectionPromptFont(11))
-						.ColorAndOpacity(FSlateColor(FLinearColor(0.78f, 0.82f, 0.88f, 0.92f)))
-					]
-					+ SVerticalBox::Slot()
-					.AutoHeight()
-					.Padding(FMargin(0.0f, 1.0f, 0.0f, 0.0f))
-					[
-						SAssignNew(OutLivesText, STextBlock)
-						.Text(FText::GetEmpty())
-						.Font(MakeCardSelectionPromptFont(25))
-						.ColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.23f, 0.35f, 1.0f)))
-						.ShadowOffset(FVector2D(0.0f, 1.0f))
-						.ShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.72f))
+						SNew(SBorder)
+						.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+						.BorderBackgroundColor(FLinearColor(0.012f, 0.016f, 0.024f, 0.72f))
+						.Padding(FMargin(14.0f, 7.0f, 14.0f, 9.0f))
+						[
+							SNew(SVerticalBox)
+							+ SVerticalBox::Slot()
+							.AutoHeight()
+							.HAlign(HAlign_Center)
+							[
+								SNew(STextBlock)
+								.Text(FText::FromString(TEXT("LIFE")))
+								.Font(MakeCardSelectionPromptFont(11))
+								.ColorAndOpacity(FSlateColor(FLinearColor(0.78f, 0.82f, 0.88f, 0.92f)))
+								.Justification(ETextJustify::Center)
+							]
+							+ SVerticalBox::Slot()
+							.AutoHeight()
+							.HAlign(HAlign_Center)
+							.Padding(FMargin(0.0f, 1.0f, 0.0f, 0.0f))
+							[
+								LivesRow
+							]
+						]
 					]
 				]
 			]
@@ -3404,7 +3444,7 @@ void AShowDownPlayerController::EnsureGameplayStatusHud()
 
 	GameplayStatusHudWidget = BuildGameplayStatusHudWidget(
 		GameplayLivesPanel,
-		GameplayLivesText,
+		GameplayLifeHeartTexts,
 		GameplayTimerPanel,
 		GameplayTimerLabelText,
 		GameplayTimerValueText,
@@ -3516,15 +3556,30 @@ void AShowDownPlayerController::UpdateGameplayStatusHud(float DeltaTime)
 	const AShowDownGameStateBase* ShowDownGameState = GetWorld()
 		? GetWorld()->GetGameState<AShowDownGameStateBase>()
 		: nullptr;
+	auto ResetGameplayLivesAnimation = [this]()
+	{
+		bGameplayLivesLostPulseActive = false;
+		GameplayLivesLostPulseElapsedTime = 0.0f;
+		GameplayLivesLostPulseHeartIndex = INDEX_NONE;
+		for (const TSharedPtr<STextBlock>& HeartText : GameplayLifeHeartTexts)
+		{
+			if (HeartText.IsValid())
+			{
+				HeartText->SetRenderTransform(FSlateRenderTransform(FScale2D(1.0f)));
+			}
+		}
+	};
 	UpdateGameplayStatusMessage(DeltaTime);
 	if (HasBlockingGameplayUi())
 	{
+		ResetGameplayLivesAnimation();
 		GameplayStatusHudWidget->SetVisibility(EVisibility::Collapsed);
 		return;
 	}
 	GameplayStatusHudWidget->SetVisibility(EVisibility::HitTestInvisible);
 
 	const int32 LocalLives = ResolveLocalLivesForHud();
+	const float SafeDeltaTime = FMath::Max(0.0f, DeltaTime);
 	const bool bShowLives = ShowDownGameState
 		&& LocalLives != INDEX_NONE
 		&& (bGameplayChatEnabled
@@ -3549,29 +3604,93 @@ void AShowDownPlayerController::UpdateGameplayStatusHud(float DeltaTime)
 		GameplayLivesPanel->SetRenderOpacity(GameplayLivesFadeOpacity);
 	}
 	bGameplayLivesWasVisible = bShowLives;
-	if (bShowLives && GameplayLivesText.IsValid() && LocalLives != LastRenderedGameplayHudLives)
+	if (!bShowLives)
 	{
-		FString Hearts;
-		if (LocalLives <= 0)
+		ResetGameplayLivesAnimation();
+	}
+	if (bShowLives && !GameplayLifeHeartTexts.IsEmpty() && LocalLives != LastRenderedGameplayHudLives)
+	{
+		if (LastRenderedGameplayHudLives != INDEX_NONE)
 		{
-			Hearts.AppendChar(static_cast<TCHAR>(0x2661));
-		}
-		else
-		{
-			for (int32 HeartIndex = 0; HeartIndex < LocalLives; ++HeartIndex)
+			if (LocalLives < LastRenderedGameplayHudLives)
 			{
-				if (HeartIndex > 0)
-				{
-					Hearts += TEXT("  ");
-				}
-				Hearts.AppendChar(static_cast<TCHAR>(0x2665));
+				bGameplayLivesLostPulseActive = true;
+				GameplayLivesLostPulseElapsedTime = 0.0f;
+				GameplayLivesLostPulseHeartIndex = FMath::Clamp(
+					LocalLives,
+					0,
+					GameplayLifeHeartTexts.Num() - 1);
+			}
+			else if (LocalLives > LastRenderedGameplayHudLives)
+			{
+				ResetGameplayLivesAnimation();
 			}
 		}
-		GameplayLivesText->SetText(FText::FromString(Hearts));
-		GameplayLivesText->SetColorAndOpacity(FSlateColor(LocalLives > 0
-			? FLinearColor(1.0f, 0.23f, 0.35f, 1.0f)
-			: FLinearColor(0.52f, 0.35f, 0.39f, 0.88f)));
+		for (int32 HeartIndex = 0; HeartIndex < GameplayLifeHeartTexts.Num(); ++HeartIndex)
+		{
+			if (!GameplayLifeHeartTexts[HeartIndex].IsValid())
+			{
+				continue;
+			}
+			FString Heart;
+			Heart.AppendChar(static_cast<TCHAR>(HeartIndex < LocalLives ? 0x2665 : 0x2661));
+			GameplayLifeHeartTexts[HeartIndex]->SetText(FText::FromString(Heart));
+		}
 		LastRenderedGameplayHudLives = LocalLives;
+	}
+	if (bShowLives && !GameplayLifeHeartTexts.IsEmpty())
+	{
+		GameplayLivesAnimationTime += SafeDeltaTime;
+		const float LostPulseAlpha = bGameplayLivesLostPulseActive
+			? FMath::Clamp(
+				GameplayLivesLostPulseElapsedTime / GameplayLivesLostPulseDuration,
+				0.0f,
+				1.0f)
+			: 0.0f;
+		for (int32 HeartIndex = 0; HeartIndex < GameplayLifeHeartTexts.Num(); ++HeartIndex)
+		{
+			const TSharedPtr<STextBlock>& HeartText = GameplayLifeHeartTexts[HeartIndex];
+			if (!HeartText.IsValid())
+			{
+				continue;
+			}
+
+			const bool bFilledHeart = HeartIndex < LocalLives;
+			const FLinearColor BaseHeartColor = bFilledHeart
+				? FLinearColor(0.96f, 0.10f, 0.19f, 1.0f)
+				: FLinearColor(0.34f, 0.16f, 0.19f, 0.72f);
+			FLinearColor DisplayHeartColor = BaseHeartColor;
+			float HeartScale = 1.0f;
+			if (bGameplayLivesLostPulseActive && HeartIndex == GameplayLivesLostPulseHeartIndex)
+			{
+				HeartScale += FMath::Sin(PI * LostPulseAlpha) * 0.14f;
+				DisplayHeartColor = FLinearColor::LerpUsingHSV(
+					FLinearColor::White,
+					BaseHeartColor,
+					LostPulseAlpha);
+			}
+			else if (!bGameplayLivesLostPulseActive && LocalLives == 1 && HeartIndex == 0)
+			{
+				const float LastLifePulse = 0.5f
+					+ 0.5f * FMath::Sin(GameplayLivesAnimationTime * 3.8f);
+				HeartScale += LastLifePulse * 0.02f;
+				DisplayHeartColor = FLinearColor::LerpUsingHSV(
+					BaseHeartColor,
+					FLinearColor(1.0f, 0.26f, 0.30f, 1.0f),
+					LastLifePulse * 0.12f);
+			}
+			HeartText->SetColorAndOpacity(FSlateColor(DisplayHeartColor));
+			HeartText->SetRenderTransform(FSlateRenderTransform(FScale2D(HeartScale)));
+		}
+		if (bGameplayLivesLostPulseActive)
+		{
+			GameplayLivesLostPulseElapsedTime += SafeDeltaTime;
+			if (GameplayLivesLostPulseElapsedTime >= GameplayLivesLostPulseDuration)
+			{
+				bGameplayLivesLostPulseActive = false;
+				GameplayLivesLostPulseHeartIndex = INDEX_NONE;
+			}
+		}
 	}
 
 	const bool bShowTimer = ShowDownGameState
@@ -3645,7 +3764,7 @@ void AShowDownPlayerController::RemoveGameplayStatusHud()
 	}
 	GameplayStatusHudWidget.Reset();
 	GameplayLivesPanel.Reset();
-	GameplayLivesText.Reset();
+	GameplayLifeHeartTexts.Reset();
 	GameplayTimerPanel.Reset();
 	GameplayTimerLabelText.Reset();
 	GameplayTimerValueText.Reset();
@@ -3655,7 +3774,11 @@ void AShowDownPlayerController::RemoveGameplayStatusHud()
 	LastRenderedGameplayHudTimerSecond = INDEX_NONE;
 	LastRenderedGameplayHudTimerKind = EShowDownDecisionTimerKind::None;
 	GameplayLivesFadeOpacity = 0.0f;
+	GameplayLivesAnimationTime = 0.0f;
+	GameplayLivesLostPulseElapsedTime = 0.0f;
 	GameplayTimerFadeOpacity = 0.0f;
+	GameplayLivesLostPulseHeartIndex = INDEX_NONE;
+	bGameplayLivesLostPulseActive = false;
 	bGameplayLivesWasVisible = false;
 	bGameplayTimerWasVisible = false;
 }

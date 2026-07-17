@@ -201,9 +201,6 @@ private:
 	TObjectPtr<UStaticMesh> BulletPreviewMeshAsset;
 
 	UPROPERTY()
-	TObjectPtr<UMaterialInterface> BulletPreviewNormalMaterial;
-
-	UPROPERTY()
 	TObjectPtr<UMaterialInterface> BulletPreviewTintMaterial;
 
 	int32 SelectedRaiseTarget = 1;

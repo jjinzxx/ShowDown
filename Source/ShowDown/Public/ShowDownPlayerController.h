@@ -579,7 +579,7 @@ private:
 	TSharedPtr<SWidget> GameplayPromptWidget;
 	TSharedPtr<SWidget> GameplayStatusHudWidget;
 	TSharedPtr<SBorder> GameplayLivesPanel;
-	TSharedPtr<STextBlock> GameplayLivesText;
+	TArray<TSharedPtr<STextBlock>> GameplayLifeHeartTexts;
 	TSharedPtr<SBorder> GameplayTimerPanel;
 	TSharedPtr<STextBlock> GameplayTimerLabelText;
 	TSharedPtr<STextBlock> GameplayTimerValueText;
@@ -596,7 +596,11 @@ private:
 	bool bGameplayHudIntroFadeStarted = false;
 	bool bGameplayHudIntroFadeActive = false;
 	float GameplayLivesFadeOpacity = 0.0f;
+	float GameplayLivesAnimationTime = 0.0f;
+	float GameplayLivesLostPulseElapsedTime = 0.0f;
 	float GameplayTimerFadeOpacity = 0.0f;
+	int32 GameplayLivesLostPulseHeartIndex = INDEX_NONE;
+	bool bGameplayLivesLostPulseActive = false;
 	bool bGameplayLivesWasVisible = false;
 	bool bGameplayTimerWasVisible = false;
 	TArray<FSDPrimitiveCustomDepthState> FocusedPrimitiveStates;

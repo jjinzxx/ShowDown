@@ -2,10 +2,7 @@
 
 #include "Components/PostProcessComponent.h"
 #include "Components/SceneComponent.h"
-#include "Components/SpotLightComponent.h"
-#include "Engine/SpotLight.h"
 #include "Engine/World.h"
-#include "EngineUtils.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 
@@ -71,7 +68,6 @@ void ASDVisionDirector::BeginPlay()
 	InitialDarknessStrength = 0.0f;
 	IntroWideVisionRadius = MatchEntryVisionRadius;
 	IntroWideVisionFeather = GameplayVisionFeather;
-	NormalizeAuthoredTableSpotLights();
 
 	// Establish one safe state before the first rendered game frame. Applying the
 	// focused preset first could briefly expose its (often fully black) darkness.
@@ -97,93 +93,6 @@ void ASDVisionDirector::BeginPlay()
 	ApplyCurrentState();
 	UpdateTickState();
 }
-
-void ASDVisionDirector::NormalizeAuthoredTableSpotLights()
-{
-	UWorld* World = GetWorld();
-	if (!bNormalizeAuthoredTableSpotLights
-		|| !World
-		|| World->GetNetMode() == NM_DedicatedServer)
-	{
-		return;
-	}
-
-	constexpr float MinimumLegacyIntensity = 50000.0f;
-	// Includes the table, both seats, and the tight gameplay staging around it.
-	// The authored spotlights aim at different points in this area, so testing
-	// only the exact vision-center point misses every real map light.
-	constexpr float TableGameplayAreaRadius = 800.0f;
-	const FVector TableCenter = GetVisionCenterWorldLocation();
-	const float SafeScale = FMath::Clamp(AuthoredTableSpotLightIntensityScale, 0.0f, 1.0f);
-	const float SafeMaximum = FMath::Max(0.0f, MaximumAuthoredTableSpotLightIntensity);
-	const FName RevealSpotlightName(TEXT("SpotLight6"));
-	const FName RevealSpotlightTag(TEXT("ShowDownTableSpotlight"));
-	const FName FullStageSpotlightName(TEXT("SpotLight7"));
-	const FName FullStageSpotlightTag(TEXT("ShowDownZeroDarknessSpotlight"));
-
-	for (TActorIterator<ASpotLight> It(World); It; ++It)
-	{
-		// SpotLight6 and SpotLight7 are deliberately authored cinematic lights.
-		// Their exact intensities belong to the level designer and must not be
-		// normalized as legacy always-on table lights.
-		bool bIsCinematicSpotlight = It->ActorHasTag(RevealSpotlightTag)
-			|| It->ActorHasTag(FullStageSpotlightTag)
-			|| It->GetFName() == RevealSpotlightName
-			|| It->GetFName() == FullStageSpotlightName;
-#if WITH_EDITOR
-		bIsCinematicSpotlight = bIsCinematicSpotlight
-			|| It->GetActorLabel() == RevealSpotlightName.ToString()
-			|| It->GetActorLabel() == FullStageSpotlightName.ToString();
-#endif
-		if (bIsCinematicSpotlight)
-		{
-			continue;
-		}
-
-		USpotLightComponent* Light = Cast<USpotLightComponent>(It->GetLightComponent());
-		if (!Light
-			|| !Light->IsRegistered()
-			|| !Light->IsVisible()
-			|| !Light->bAffectsWorld
-			|| Light->GetLightUnits() != ELightUnits::Unitless
-			|| Light->Intensity < MinimumLegacyIntensity)
-		{
-			continue;
-		}
-
-		const FVector ToTable = TableCenter - Light->GetComponentLocation();
-		const float Distance = ToTable.Size();
-		if (Distance <= KINDA_SMALL_NUMBER
-			|| Distance > Light->AttenuationRadius + TableGameplayAreaRadius)
-		{
-			continue;
-		}
-
-		const float AreaAngularRadius = FMath::RadiansToDegrees(FMath::Asin(
-			FMath::Clamp(TableGameplayAreaRadius / Distance, 0.0f, 1.0f)));
-		const float MaximumAreaAngle = FMath::Clamp(
-			Light->OuterConeAngle + AreaAngularRadius,
-			0.0f,
-			180.0f);
-		const float DirectionDot = FVector::DotProduct(
-			Light->GetForwardVector(),
-			ToTable / Distance);
-		if (DirectionDot < FMath::Cos(FMath::DegreesToRadians(MaximumAreaAngle)))
-		{
-			continue;
-		}
-
-		// Static lighting is disabled for this project, but several legacy actors
-		// are still authored Static. Promote only those; Stationary lights already
-		// accept dynamic intensity changes and should keep their cheaper mobility.
-		if (Light->Mobility == EComponentMobility::Static)
-		{
-			Light->SetMobility(EComponentMobility::Movable);
-		}
-		Light->SetIntensity(FMath::Min(Light->Intensity * SafeScale, SafeMaximum));
-	}
-}
-
 void ASDVisionDirector::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);

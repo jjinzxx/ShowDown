@@ -247,16 +247,6 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision|Intro", meta = (ClampMin = "1.0"))
 	float IntroWideVisionFeather = 100.0f;
 
-	/** Reduces only the legacy standalone spotlights aimed into the table. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision|Lighting Safety")
-	bool bNormalizeAuthoredTableSpotLights = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision|Lighting Safety", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float AuthoredTableSpotLightIntensityScale = 0.1f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision|Lighting Safety", meta = (ClampMin = "0.0"))
-	float MaximumAuthoredTableSpotLightIntensity = 10000.0f;
-
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Vision")
 	bool bTrackVisionCenterEveryTick = true;
 
@@ -271,7 +261,6 @@ private:
 	TObjectPtr<UPostProcessComponent> PostProcessComponent;
 
 	void EnsureDarknessMaterialInstance();
-	void NormalizeAuthoredTableSpotLights();
 	void ApplyCurrentState();
 	void ApplyPostProcessState();
 	void ApplyDarknessMaterialState();

@@ -634,6 +634,8 @@ private:
 	int32 MultiplayerRemainingChamberCount = 6;
 	int32 MultiplayerSharedChamberIndex = 0;
 	TArray<bool> MultiplayerSharedChambers;
+	int32 SingleRouletteLiveRoundCount = 0;
+	int32 SingleRemainingChamberCount = 6;
 	bool bHasBetBulletAction = false;
 	bool bBetBulletActionIsMultiplayer = false;
 	EShowDownSide BetBulletActionSide = EShowDownSide::Player;
@@ -782,6 +784,7 @@ private:
 	void RecordSingleBetBulletAction(EShowDownSide Side, EShowDownBetAction Action);
 	void RecordMultiplayerBetBulletAction(ASDPlayerState* Player, EShowDownBetAction Action);
 	void MarkSingleBetBulletRouletteTarget(EShowDownSide TargetSide, int32 BulletCount);
+	void ConsumeSingleRouletteChamber(bool bLiveRound);
 	void MarkMultiplayerBetBulletRouletteTarget(ASDPlayerState* TargetPlayer, int32 BulletCount);
 	void ClearBetBulletTransientState();
 	void ClearBetBulletActionHistory();
@@ -1006,5 +1009,7 @@ private:
 	void ApplyCardMotionForPlayerState(ASDPlayerState* Player, const TArray<ACard*>& Cards) const;
 	void ScheduleRevealAutoAdvanceIfNeeded(float MinimumDelaySeconds = 0.0f);
 	void ShowEventDebugMessage(const FString& Message) const;
+
+	friend class FShowDownSingleRouletteAmmoStatusTest;
 	
 };

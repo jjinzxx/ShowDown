@@ -18,6 +18,7 @@
 #include "SDPlayerState.h"
 #include "ShowDownCharacter.h"
 #include "ShowDownCharacterSkinCatalog.h"
+#include "ShowDownAmmoStatusWidget.h"
 #include "ShowDownGameModeBase.h"
 #include "ShowDownGameStateBase.h"
 #include "ShowDownPlayerController.h"
@@ -1190,6 +1191,40 @@ bool FShowDownGunShotCameraTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownAmmoStatusWidgetTest,
+	"ShowDown.Core.AmmoStatusWidget",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownAmmoStatusWidgetTest::RunTest(const FString& Parameters)
+{
+	TestEqual(
+		TEXT("Three live rounds fill the first three slots"),
+		UShowDownAmmoStatusWidget::ResolveSlotStateForCounts(2, 3, 6),
+		EShowDownAmmoSlotState::Live);
+	TestEqual(
+		TEXT("The next available chamber remains hollow"),
+		UShowDownAmmoStatusWidget::ResolveSlotStateForCounts(3, 3, 6),
+		EShowDownAmmoSlotState::Empty);
+	TestEqual(
+		TEXT("A blank shot marks the sixth chamber spent"),
+		UShowDownAmmoStatusWidget::ResolveSlotStateForCounts(5, 3, 5),
+		EShowDownAmmoSlotState::Spent);
+	TestEqual(
+		TEXT("A live shot leaves two live rounds and one spent chamber"),
+		UShowDownAmmoStatusWidget::ResolveSlotStateForCounts(1, 2, 5),
+		EShowDownAmmoSlotState::Live);
+	TestEqual(
+		TEXT("Live rounds are clamped to remaining chambers"),
+		UShowDownAmmoStatusWidget::ResolveSlotStateForCounts(4, 9, 5),
+		EShowDownAmmoSlotState::Live);
+	TestEqual(
+		TEXT("Out-of-range slots are treated as unavailable"),
+		UShowDownAmmoStatusWidget::ResolveSlotStateForCounts(6, 3, 6),
+		EShowDownAmmoSlotState::Spent);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FShowDownNetworkPresentationEventsTest,
 	"ShowDown.Core.NetworkPresentationEvents",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -1625,6 +1660,35 @@ bool FShowDownGunVisionSequenceTimingTest::RunTest(const FString& Parameters)
 		TEXT("Round-end phase replication cannot overtake and discard the delayed gun presentation"),
 		GunActor->PendingMultiplayerRoulettePresentations.Num(),
 		1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownSingleRouletteAmmoStatusTest,
+	"ShowDown.Core.SingleRouletteAmmoStatus",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownSingleRouletteAmmoStatusTest::RunTest(const FString& Parameters)
+{
+	AShowDownGameModeBase* GameMode = NewObject<AShowDownGameModeBase>();
+	TestNotNull(TEXT("A single-player game mode can be created"), GameMode);
+	if (!GameMode)
+	{
+		return false;
+	}
+
+	GameMode->MarkSingleBetBulletRouletteTarget(EShowDownSide::Player, 4);
+	TestEqual(TEXT("A single roulette starts with the loaded live rounds"), GameMode->SingleRouletteLiveRoundCount, 4);
+	TestEqual(TEXT("A single roulette starts with six remaining chambers"), GameMode->SingleRemainingChamberCount, 6);
+
+	GameMode->ConsumeSingleRouletteChamber(false);
+	TestEqual(TEXT("An empty click preserves the live-round count"), GameMode->SingleRouletteLiveRoundCount, 4);
+	TestEqual(TEXT("An empty click consumes one chamber"), GameMode->SingleRemainingChamberCount, 5);
+
+	GameMode->MarkSingleBetBulletRouletteTarget(EShowDownSide::Collector, 4);
+	GameMode->ConsumeSingleRouletteChamber(true);
+	TestEqual(TEXT("A live shot consumes one live round"), GameMode->SingleRouletteLiveRoundCount, 3);
+	TestEqual(TEXT("A live shot also consumes one chamber"), GameMode->SingleRemainingChamberCount, 5);
 	return true;
 }
 

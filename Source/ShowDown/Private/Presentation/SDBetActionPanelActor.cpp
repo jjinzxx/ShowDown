@@ -123,10 +123,9 @@ ASDBetActionPanelActor::ASDBetActionPanelActor()
 	Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 	SetRootComponent(Root);
 
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> BulletMeshFinder(TEXT("/Game/Fab/Revolver/bulletBetting.bulletBetting"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> BulletMeshFinder(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> BulletMaterialFinder(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
 	BulletPreviewMeshAsset = BulletMeshFinder.Succeeded() ? BulletMeshFinder.Object : nullptr;
-	BulletPreviewNormalMaterial = BulletPreviewMeshAsset ? BulletPreviewMeshAsset->GetMaterial(0) : nullptr;
 	BulletPreviewTintMaterial = BulletMaterialFinder.Succeeded() ? BulletMaterialFinder.Object : nullptr;
 	for (int32 BulletIndex = 0; BulletIndex < 6; ++BulletIndex)
 	{
@@ -134,15 +133,16 @@ ASDBetActionPanelActor::ASDBetActionPanelActor()
 			*FString::Printf(TEXT("RaiseBulletPreview%d"), BulletIndex + 1));
 		BulletMesh->SetupAttachment(Root);
 		BulletMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		BulletMesh->SetCanEverAffectNavigation(false);
 		BulletMesh->SetCastShadow(false);
 		BulletMesh->SetVisibility(false, true);
 		if (BulletPreviewMeshAsset)
 		{
 			BulletMesh->SetStaticMesh(BulletPreviewMeshAsset);
 		}
-		if (BulletPreviewNormalMaterial)
+		if (BulletPreviewTintMaterial)
 		{
-			BulletMesh->SetMaterial(0, BulletPreviewNormalMaterial);
+			BulletMesh->SetMaterial(0, BulletPreviewTintMaterial);
 		}
 		BulletPreviewMeshes.Add(BulletMesh);
 	}
@@ -288,6 +288,7 @@ void ASDBetActionPanelActor::EnsureBulletPreview()
 		if (BulletPreviewMeshes[BulletIndex] && !BulletPreviewMaterials[BulletIndex] && BulletPreviewTintMaterial)
 		{
 			BulletPreviewMaterials[BulletIndex] = UMaterialInstanceDynamic::Create(BulletPreviewTintMaterial, this);
+			BulletPreviewMeshes[BulletIndex]->SetMaterial(0, BulletPreviewMaterials[BulletIndex]);
 		}
 	}
 }
@@ -378,10 +379,10 @@ void ASDBetActionPanelActor::RefreshBulletPreview(bool bVisible)
 		const bool bAlreadyLoaded = BulletIndex < LoadedCount;
 		const bool bPendingRaise = BulletIndex >= LoadedCount && BulletIndex < RaiseTarget;
 		const FLinearColor BulletColor = bAlreadyLoaded
-			? FLinearColor(0.78f, 0.54f, 0.18f, 1.0f)
+			? FLinearColor(0.92f, 0.58f, 0.16f, 1.0f)
 			: (bPendingRaise
-				? FLinearColor(1.0f, 0.025f, 0.015f, 1.0f)
-				: FLinearColor(0.22f, 0.72f, 1.0f, 0.24f));
+				? FLinearColor(1.0f, 0.24f, 0.035f, 1.0f)
+				: FLinearColor(0.075f, 0.09f, 0.12f, 1.0f));
 
 		// The panel faces the viewer from the opposite side of its local right
 		// axis, so reverse the visual slot index to fill left-to-right on screen.
@@ -390,12 +391,8 @@ void ASDBetActionPanelActor::RefreshBulletPreview(bool bVisible)
 			CachedBulletPanelLocation
 				+ BulletRowWorldOffset
 				+ RightDirection * ((static_cast<float>(VisualSlotIndex) - 2.5f) * PanelState.BulletSpacing * LayoutScale),
-			PanelRotation + FRotator(-90.0f, 0.0f, 0.0f));
-		if (bAlreadyLoaded && BulletPreviewNormalMaterial)
-		{
-			BulletMesh->SetMaterial(0, BulletPreviewNormalMaterial);
-		}
-		else if (BulletPreviewMaterials.IsValidIndex(BulletIndex) && BulletPreviewMaterials[BulletIndex])
+			PanelRotation);
+		if (BulletPreviewMaterials.IsValidIndex(BulletIndex) && BulletPreviewMaterials[BulletIndex])
 		{
 			BulletMesh->SetMaterial(0, BulletPreviewMaterials[BulletIndex]);
 			BulletPreviewMaterials[BulletIndex]->SetVectorParameterValue(TEXT("Color"), BulletColor);
@@ -542,7 +539,11 @@ void ASDBetActionPanelActor::UpdateBulletAnimations(float DeltaSeconds)
 void ASDBetActionPanelActor::ApplyBulletAnimatedVisuals()
 {
 	const float LayoutScale = FMath::Max(0.1f, PanelState.PanelVisualScale);
-	const float BaseBulletScale = FMath::Max(0.001f, PanelState.BulletPreviewScale) * (LayoutScale / 0.35f);
+	// The old value was authored for the long bulletBetting mesh. Scale the
+	// engine sphere down to a compact dot that fits inside the existing spacing.
+	const float BaseBulletScale = FMath::Max(0.001f, PanelState.BulletPreviewScale)
+		* (LayoutScale / 0.35f)
+		* 0.36f;
 	const float Duration = FMath::Clamp(PanelState.BulletAnimationDuration, 0.05f, 1.0f);
 	const float BounceStrength = FMath::Clamp(PanelState.BulletBounceStrength, 0.0f, 0.5f);
 

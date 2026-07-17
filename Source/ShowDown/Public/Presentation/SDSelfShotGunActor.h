@@ -171,13 +171,24 @@ public:
 	FVector AmmoStatusWorldOffset = FVector(0.0f, 0.0f, 12.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Ammo Status Display", meta = (ClampMin = "32.0"))
-	FVector2D AmmoStatusDrawSize = FVector2D(260.0f, 100.0f);
+	FVector2D AmmoStatusDrawSize = FVector2D(360.0f, 140.0f);
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Ammo Status Display", meta = (ClampMin = "8", ClampMax = "160"))
-	int32 AmmoStatusFontSize = 48;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Ammo Status Display", meta = (ClampMin = "12.0", ClampMax = "48.0"))
+	float AmmoStatusSlotDiameter = 28.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Ammo Status Display", meta = (ClampMin = "0.0", ClampMax = "24.0"))
+	float AmmoStatusSlotSpacing = 8.0f;
+
+	/** One color per loaded-round count. Index 0 is one live round; index 5 is six. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Ammo Status Display")
-	FLinearColor AmmoStatusTextColor = FLinearColor(1.0f, 0.82f, 0.25f, 1.0f);
+	TArray<FLinearColor> AmmoStatusRiskColors = {
+		FLinearColor(0.95f, 0.95f, 0.93f, 1.0f),
+		FLinearColor(1.00f, 0.72f, 0.32f, 1.0f),
+		FLinearColor(1.00f, 0.47f, 0.10f, 1.0f),
+		FLinearColor(1.00f, 0.25f, 0.04f, 1.0f),
+		FLinearColor(1.00f, 0.08f, 0.025f, 1.0f),
+		FLinearColor(1.00f, 0.01f, 0.02f, 1.0f)
+	};
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Self Shot Gun|Ammo Status Display")
 	FLinearColor AmmoStatusBackgroundColor = FLinearColor(0.0f, 0.0f, 0.0f, 0.68f);
@@ -230,6 +241,7 @@ protected:
 
 	void ApplyAmmoStatusDisplaySettings();
 	void UpdateAmmoStatusAnchorLocation();
+	FLinearColor ResolveAmmoStatusRiskColor(int32 LiveRounds) const;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<USceneComponent> SceneRoot;
@@ -849,6 +861,8 @@ private:
 	bool bTinnitusFadeOutStarted = false;
 	bool bHitSequenceBlackoutActive = false;
 	bool bMultiplayerRoulettePresentationActive = false;
+	bool bAmmoStatusEmphasisLatched = false;
+	bool bAmmoStatusClearPending = false;
 	bool bRaiseBulletLoadActive = false;
 	bool bRaiseBulletLoadPending = false;
 	UPROPERTY(Transient)
