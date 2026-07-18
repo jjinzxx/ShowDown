@@ -101,6 +101,13 @@ public:
 	/** Returns to the local pawn and reports readiness only after that exact blend completes. */
 	void EnsureSinglePlayerGameplayCameraReady();
 
+	// Session delegates historically used bSuccess=false for both progress and
+	// failures. Keep only actionable failures in the persistent screen status.
+	static bool ShouldDisplayEosSessionStatus(
+		bool bSuccess,
+		bool bSessionOperationInProgress,
+		const FString& Message);
+
 	// [연출 파트용 훅] 게임이 끝나면(승/패) 호출되는 블루프린트 이벤트입니다.
 	// 여기서 결과 카메라 연출, 승/패 결과 위젯, 사운드 등을 재생하면 됩니다.
 	// 연출 카메라 컷은 Level Sequence가 담당하고, 인게임 시점은 플레이어 카메라를 사용합니다.

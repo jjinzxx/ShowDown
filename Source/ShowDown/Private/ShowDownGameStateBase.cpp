@@ -442,7 +442,7 @@ void AShowDownGameStateBase::EventStart(EShowDownPhase Phase)
 	}
 
 	const bool bHasPresentationEvent = OnPresentationStarted.IsBound();
-	OnPresentationStarted.Broadcast(Phase);
+	MulticastPresentationStarted(Phase);
 
 	if (!bHasPresentationEvent)
 	{
@@ -466,12 +466,12 @@ void AShowDownGameStateBase::EventEnd(EShowDownPhase Phase)
 		: Phase;
 
 	bPresentationPlaying = false;
-	OnPresentationFinished.Broadcast(FinishedPhase);
+	MulticastPresentationFinished(FinishedPhase);
+	CurrentPresentationPhase = EShowDownPhase::None;
 	if (bShowPresentationDebugMessages)
 	{
 		ShowPresentationDebugMessage(TEXT("호출종료"), FinishedPhase, FColor::Green);
 	}
-	CurrentPresentationPhase = EShowDownPhase::None;
 }
 
 void AShowDownGameStateBase::StartPresentation(EShowDownPhase Phase)
@@ -577,13 +577,68 @@ void AShowDownGameStateBase::BroadcastMultiplayerRoulettePresentation(
 	int32 BulletCount,
 	bool bHit)
 {
+	BroadcastMultiplayerRoulettePresentationWithContext(
+		TargetSlot,
+		TargetName,
+		BulletCount,
+		bHit,
+		MultiplayerMatchSequence,
+		MultiplayerRoundSequence);
+}
+
+void AShowDownGameStateBase::BroadcastMultiplayerRoulettePresentationWithContext(
+	EShowDownPlayerSlot TargetSlot,
+	const FString& TargetName,
+	int32 BulletCount,
+	bool bHit,
+	int32 MatchSequence,
+	int32 RoundSequence)
+{
 	if (HasAuthority())
 	{
-		MulticastMultiplayerRoulettePresentation(TargetSlot, TargetName, BulletCount, bHit);
+		MulticastMultiplayerRoulettePresentation(
+			TargetSlot,
+			TargetName,
+			BulletCount,
+			bHit,
+			MatchSequence,
+			RoundSequence);
 		return;
 	}
 
 	OnMultiplayerRoulettePresentation.Broadcast(TargetSlot, TargetName, BulletCount, bHit);
+	OnMultiplayerRoulettePresentationContext.Broadcast(
+		TargetSlot,
+		TargetName,
+		BulletCount,
+		bHit,
+		MatchSequence,
+		RoundSequence);
+}
+
+void AShowDownGameStateBase::SetMultiplayerPresentationContext(
+	int32 MatchSequence,
+	int32 RoundSequence)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	const int32 SafeMatchSequence = FMath::Max(0, MatchSequence);
+	const int32 SafeRoundSequence = FMath::Max(0, RoundSequence);
+	if (MultiplayerMatchSequence == SafeMatchSequence
+		&& MultiplayerRoundSequence == SafeRoundSequence)
+	{
+		return;
+	}
+
+	MultiplayerMatchSequence = SafeMatchSequence;
+	MultiplayerRoundSequence = SafeRoundSequence;
+	ForceNetUpdate();
+	MulticastMultiplayerPresentationContext(
+		MultiplayerMatchSequence,
+		MultiplayerRoundSequence);
 }
 
 void AShowDownGameStateBase::BroadcastMultiplayerRouletteResult(
@@ -659,9 +714,53 @@ void AShowDownGameStateBase::MulticastMultiplayerRoulettePresentation_Implementa
 	EShowDownPlayerSlot TargetSlot,
 	const FString& TargetName,
 	int32 BulletCount,
-	bool bHit)
+	bool bHit,
+	int32 MatchSequence,
+	int32 RoundSequence)
 {
 	OnMultiplayerRoulettePresentation.Broadcast(TargetSlot, TargetName, BulletCount, bHit);
+	OnMultiplayerRoulettePresentationContext.Broadcast(
+		TargetSlot,
+		TargetName,
+		BulletCount,
+		bHit,
+		MatchSequence,
+		RoundSequence);
+}
+
+void AShowDownGameStateBase::MulticastMultiplayerPresentationContext_Implementation(
+	int32 MatchSequence,
+	int32 RoundSequence)
+{
+	MultiplayerMatchSequence = FMath::Max(0, MatchSequence);
+	MultiplayerRoundSequence = FMath::Max(0, RoundSequence);
+	OnMultiplayerPresentationContextChanged.Broadcast(
+		MultiplayerMatchSequence,
+		MultiplayerRoundSequence);
+}
+
+void AShowDownGameStateBase::MulticastPresentationStarted_Implementation(EShowDownPhase Phase)
+{
+	if (!HasAuthority())
+	{
+		CurrentPresentationPhase = Phase;
+		bPresentationPlaying = true;
+	}
+	OnPresentationStarted.Broadcast(Phase);
+}
+
+void AShowDownGameStateBase::MulticastPresentationFinished_Implementation(EShowDownPhase Phase)
+{
+	if (!HasAuthority())
+	{
+		bPresentationPlaying = false;
+		CurrentPresentationPhase = Phase;
+	}
+	OnPresentationFinished.Broadcast(Phase);
+	if (!HasAuthority())
+	{
+		CurrentPresentationPhase = EShowDownPhase::None;
+	}
 }
 
 void AShowDownGameStateBase::MulticastMultiplayerRouletteResult_Implementation(
@@ -690,6 +789,8 @@ void AShowDownGameStateBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 	DOREPLIFETIME(AShowDownGameStateBase, bPresentationPlaying);
 	DOREPLIFETIME(AShowDownGameStateBase, CurrentStage);
 	DOREPLIFETIME(AShowDownGameStateBase, CurrentRound);
+	DOREPLIFETIME(AShowDownGameStateBase, MultiplayerMatchSequence);
+	DOREPLIFETIME(AShowDownGameStateBase, MultiplayerRoundSequence);
 	DOREPLIFETIME(AShowDownGameStateBase, MatchMode);
 	DOREPLIFETIME(AShowDownGameStateBase, PlayerSlots);
 	DOREPLIFETIME(AShowDownGameStateBase, NameTagLoadedBulletCount);

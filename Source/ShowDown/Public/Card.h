@@ -12,6 +12,7 @@ class USceneComponent;
 class UStaticMeshComponent;
 class UTextRenderComponent;
 class FLifetimeProperty;
+class ASDPlayerState;
 
 USTRUCT()
 struct FSDCardMovementTarget
@@ -78,8 +79,16 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	UBoxComponent* InteractionBounds;
 
-	UPROPERTY(ReplicatedUsing = OnRep_CardVisual, EditAnywhere, BlueprintReadWrite, Category = "Card", meta = (ClampMin = "1", ClampMax = "7"))
+	// Server-authoritative secret. Never replicate this value on the globally
+	// relevant card actor. On clients it is only a compatibility mirror of the
+	// currently authorized display rank (or zero while concealed), so existing
+	// BP_Card reads cannot recover a hidden server value.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Card", meta = (ClampMin = "1", ClampMax = "7"))
 	int32 Rank = 1;
+
+	// Zero while concealed. Set only once a card is legitimately public.
+	UPROPERTY(ReplicatedUsing = OnRep_CardVisual, BlueprintReadOnly, Category = "Card")
+	int32 RevealedRank = 0;
 
 	UPROPERTY(ReplicatedUsing = OnRep_Selectable, EditAnywhere, BlueprintReadWrite, Category = "Card")
 	bool bSelectable = true;
@@ -140,6 +149,12 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Card")
 	void SetCard(int32 NewRank);
+
+	UFUNCTION(BlueprintCallable, Category = "Card")
+	void RevealRankToAll();
+
+	UFUNCTION(BlueprintCallable, Category = "Card")
+	void ConcealRankFromAll();
 
 	UFUNCTION(BlueprintCallable, Category = "Card")
 	void SetFaceUp(bool bNewFaceUp);
@@ -227,6 +242,7 @@ public:
 
 private:
 	void ConfigureInteractionComponents();
+	int32 ResolveDisplayRankForLocalViewer(const ASDPlayerState* LocalPlayerState) const;
 	void ScheduleVisualRefreshRetry();
 	void HandleVisualRefreshRetry();
 	void UpdateTargetTransform();

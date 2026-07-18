@@ -661,7 +661,7 @@ void AShowDownPlayerController::ClientEnterMultiplayerGameplay_Implementation()
 	{
 		MultiplayerLoadingWidget->SetTransitionText(
 			TEXT("플레이 준비 중"),
-			TEXT("좌석과 카메라를 안전하게 연결하고 있습니다."));
+			TEXT("게임 화면을 불러오고 있습니다."));
 		MultiplayerLoadingWidget->AddToViewport(10000);
 	}
 	MultiplayerLoadingElapsedTime = 0.0f;
@@ -681,7 +681,6 @@ void AShowDownPlayerController::ClientEnterMultiplayerGameplay_Implementation()
 	PawnCameraBaseRotation = GetControlRotation();
 	bHasPawnCameraBaseRotation = true;
 	UpdateCenterCrosshairVisibility();
-	ClientShowStatusMessage(TEXT("로딩 중... 멀티플레이 좌석과 카메라를 확인하는 중입니다."));
 }
 
 void AShowDownPlayerController::ClientSetInitialCardDealInputLocked_Implementation(bool bLocked)
@@ -810,7 +809,6 @@ void AShowDownPlayerController::ClientUseMultiplayerSeatCamera_Implementation(
 		SetViewTarget(ControlledPawn);
 	}
 	UpdateCenterCrosshairVisibility();
-	ClientShowStatusMessage(TEXT("로딩 중... 멀티플레이 좌석 카메라를 기다리는 중입니다."));
 }
 
 void AShowDownPlayerController::ClientLeaveMultiplayerRoomToHub_Implementation()
@@ -839,6 +837,20 @@ void AShowDownPlayerController::ClientLeaveMultiplayerRoomToHub_Implementation()
 void AShowDownPlayerController::ClientWasKicked_Implementation(const FText& KickReason)
 {
 	UE_LOG(LogTemp, Warning, TEXT("Removed from multiplayer lobby: %s"), *KickReason.ToString());
+	ClientReturnToHubWithReason_Implementation(KickReason.ToString());
+}
+
+void AShowDownPlayerController::ClientReturnToHubWithReason_Implementation(const FString& Reason)
+{
+	const FString UserFacingReason = Reason.TrimStartAndEnd().IsEmpty()
+		? TEXT("멀티플레이 방에서 나왔습니다.")
+		: Reason;
+	if (UShowDownEosSubsystem* EosSubsystem = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<UShowDownEosSubsystem>()
+		: nullptr)
+	{
+		EosSubsystem->QueuePendingHubError(UserFacingReason);
+	}
 	ClientLeaveMultiplayerRoomToHub_Implementation();
 }
 
@@ -939,7 +951,6 @@ bool AShowDownPlayerController::TryApplyPendingMultiplayerCharacterCamera()
 		// the subsystem owns the requested one-second dramatic beat from here.
 		VisionSequence->QueueMatchEntryPresentation();
 	}
-	ClientShowStatusMessage(TEXT("Multiplayer character head camera ready."));
 	UE_LOG(
 		LogTemp,
 		Log,
@@ -972,7 +983,7 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 			bMultiplayerLoadingDelayMessageShown = true;
 			MultiplayerLoadingWidget->SetTransitionText(
 				TEXT("플레이 준비가 지연되는 중"),
-				TEXT("좌석과 캐릭터 동기화를 다시 확인하고 있습니다."));
+				TEXT("연결을 확인하고 있습니다. 잠시만 기다려주세요."));
 		}
 	}
 
@@ -1014,9 +1025,11 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 		UpdateCharacterPlayerCamera(DeltaTime);
 	}
 
+	const bool bGunShotUiEntryBlocked = bGunShotCameraOverrideActive;
 	if (WasInputKeyJustPressed(LeaveMatchKey)
 		&& (bHandleShowDownGameplayInput || bPauseMenuOpen)
 		&& !bChatOpen
+		&& ShouldAllowGameplayUiToggleDuringGunShot(bGunShotUiEntryBlocked, bPauseMenuOpen)
 		&& (!LeaveConfirmWidget || LeaveConfirmWidget->GetVisibility() != ESlateVisibility::Visible))
 	{
 		TogglePauseMenu();
@@ -1034,9 +1047,11 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 		return;
 	}
 
-	// Chat is intentionally independent from the gameplay-input gate so it stays
-	// available during deal/camera presentations and other non-interactive beats.
-	const bool bChatInputAvailable = bGameplayChatEnabled && !HasBlockingGameplayUi();
+	// Chat stays available during non-interactive deal/camera beats, but a live
+	// gun-shot camera may only close an input UI that was already open.
+	const bool bChatInputAvailable = bGameplayChatEnabled
+		&& !HasBlockingGameplayUi()
+		&& ShouldAllowGameplayUiToggleDuringGunShot(bGunShotUiEntryBlocked, bChatOpen);
 	if (bChatInputAvailable && bChatOpen)
 	{
 		CancelPressedBetActionButton();
@@ -1816,6 +1831,11 @@ void AShowDownPlayerController::SubmitSelectedCard(ACard* SelectedCard)
 
 void AShowDownPlayerController::ToggleChat()
 {
+	if (!ShouldAllowGameplayUiToggleDuringGunShot(bGunShotCameraOverrideActive, bChatOpen))
+	{
+		return;
+	}
+
 	if (bChatOpen)
 	{
 		CloseChat();
@@ -1828,6 +1848,11 @@ void AShowDownPlayerController::ToggleChat()
 
 void AShowDownPlayerController::OpenChat()
 {
+	if (!ShouldAllowGameplayUiToggleDuringGunShot(bGunShotCameraOverrideActive, bChatOpen))
+	{
+		return;
+	}
+
 	SetFocusedInteractable(nullptr);
 	SetHoveredCard(nullptr);
 	EnsureChatWidget();
@@ -2271,6 +2296,27 @@ bool AShowDownPlayerController::BeginGunShotCameraOverride(
 		CancelGunShotCameraOverride();
 	}
 
+	// A multiplayer shot does not pause the world, so UI focus opened immediately
+	// before the server cue can otherwise keep consuming keyboard/mouse input over
+	// the cinematic. Close those transient gameplay UIs before the camera owns
+	// input; the active override below also prevents reopening them.
+	if (bChatOpen)
+	{
+		CloseChat();
+	}
+	if (bPauseMenuOpen)
+	{
+		ResumeFromPauseMenu();
+	}
+	if (LeaveConfirmWidget
+		&& LeaveConfirmWidget->GetVisibility() == ESlateVisibility::Visible)
+	{
+		CancelLeaveMultiplayerMatch();
+	}
+	CancelPressedBetActionButton();
+	SetFocusedInteractable(nullptr);
+	SetHoveredCard(nullptr);
+
 	if (!bGunShotCameraOverrideActive)
 	{
 		AActor* CurrentViewTarget = GetViewTarget();
@@ -2438,6 +2484,15 @@ bool AShowDownPlayerController::ShouldBlockGameplayInputForGunShot(
 	bool bEliminatedSpectatorActive)
 {
 	return bGunShotCameraActive || bEliminatedSpectatorActive;
+}
+
+bool AShowDownPlayerController::ShouldAllowGameplayUiToggleDuringGunShot(
+	bool bGunShotCameraActive,
+	bool bUiAlreadyOpen)
+{
+	// An already-open menu/chat must remain closable. Only creating a new UI
+	// focus path is rejected while the cinematic camera owns input.
+	return !bGunShotCameraActive || bUiAlreadyOpen;
 }
 
 bool AShowDownPlayerController::IsGunShotPresentationInputBlocked() const
@@ -4682,6 +4737,7 @@ void AShowDownPlayerController::HandleMultiRankMainMenuRequested()
 void AShowDownPlayerController::TogglePauseMenu()
 {
 	if (!CanCreateLocalPlayerWidgets()) return;
+	if (!ShouldAllowGameplayUiToggleDuringGunShot(bGunShotCameraOverrideActive, bPauseMenuOpen)) return;
 	if (bPauseMenuOpen) { ResumeFromPauseMenu(); return; }
 	if (!PauseMenuWidgetClass) PauseMenuWidgetClass = LoadClass<UShowDownPauseMenuWidget>(nullptr, TEXT("/Game/UI/WBP_PauseMenu.WBP_PauseMenu_C"));
 	if (!PauseMenuWidgetClass) return;

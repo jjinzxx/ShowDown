@@ -400,9 +400,8 @@ void ASDSelfShotGunActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		ShowDownGameState->OnTableCinematicCue.RemoveDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleTableCinematicCue);
-		ShowDownGameState->OnMultiplayerRoulettePresentation.RemoveDynamic(
-			this,
-			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
+		ShowDownGameState->OnMultiplayerRoulettePresentationContext.RemoveAll(this);
+		ShowDownGameState->OnMultiplayerPresentationContextChanged.RemoveAll(this);
 	}
 	BoundShowDownGameState.Reset();
 
@@ -2861,7 +2860,7 @@ void ASDSelfShotGunActor::UpdateRaiseBulletLoadAnimation(float DeltaSeconds)
 		AnimatedBulletCount,
 		BulletDuration,
 		StaggerDelay);
-	if (RaiseBulletLoadElapsedTime >= SequenceDuration)
+	if (RaiseBulletLoadElapsedTime + KINDA_SMALL_NUMBER >= SequenceDuration)
 	{
 		SetBulletPresentationImmediate(TargetCount);
 		ApplyAmmoStatusDisplaySettings();
@@ -3161,9 +3160,30 @@ void ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation(
 	EShowDownPlayerSlot TargetSlot,
 	const FString& TargetName,
 	int32 BulletCount,
-	bool bHit)
+	bool bHit,
+	int32 MatchSequence,
+	int32 RoundSequence)
 {
-	PlayMultiplayerRoulettePresentation(TargetSlot, bHit);
+	PlayMultiplayerRoulettePresentation(
+		TargetSlot,
+		bHit,
+		MatchSequence,
+		RoundSequence);
+}
+
+void ASDSelfShotGunActor::HandleMultiplayerPresentationContextChanged(
+	int32 MatchSequence,
+	int32 RoundSequence)
+{
+	PendingMultiplayerRoulettePresentations.RemoveAll(
+		[MatchSequence, RoundSequence](const FPendingMultiplayerRoulettePresentation& PendingPresentation)
+		{
+			return PendingPresentation.MatchSequence < MatchSequence
+				|| (PendingPresentation.MatchSequence == MatchSequence
+					&& PendingPresentation.RoundSequence < RoundSequence);
+		});
+	TryStartPendingMultiplayerRoulettePresentation();
+	ApplyAmmoStatusDisplaySettings();
 }
 
 void ASDSelfShotGunActor::HandleGameStateSet(AGameStateBase* GameState)
@@ -3182,9 +3202,8 @@ void ASDSelfShotGunActor::HandleGameStateSet(AGameStateBase* GameState)
 		PreviousGameState->OnTableCinematicCue.RemoveDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleTableCinematicCue);
-		PreviousGameState->OnMultiplayerRoulettePresentation.RemoveDynamic(
-			this,
-			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
+		PreviousGameState->OnMultiplayerRoulettePresentationContext.RemoveAll(this);
+		PreviousGameState->OnMultiplayerPresentationContextChanged.RemoveAll(this);
 	}
 
 	BoundShowDownGameState = ShowDownGameState;
@@ -3196,9 +3215,15 @@ void ASDSelfShotGunActor::HandleGameStateSet(AGameStateBase* GameState)
 		ShowDownGameState->OnTableCinematicCue.AddUniqueDynamic(
 			this,
 			&ASDSelfShotGunActor::HandleTableCinematicCue);
-		ShowDownGameState->OnMultiplayerRoulettePresentation.AddUniqueDynamic(
+		ShowDownGameState->OnMultiplayerRoulettePresentationContext.AddUObject(
 			this,
 			&ASDSelfShotGunActor::HandleMultiplayerRoulettePresentation);
+		ShowDownGameState->OnMultiplayerPresentationContextChanged.AddUObject(
+			this,
+			&ASDSelfShotGunActor::HandleMultiplayerPresentationContextChanged);
+		HandleMultiplayerPresentationContextChanged(
+			ShowDownGameState->MultiplayerMatchSequence,
+			ShowDownGameState->MultiplayerRoundSequence);
 		HandleGamePhaseChanged(ShowDownGameState->CurrentPhase);
 	}
 }
@@ -3230,19 +3255,40 @@ AActor* ASDSelfShotGunActor::FindMultiplayerShotTarget(EShowDownPlayerSlot Targe
 	return nullptr;
 }
 
-void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(EShowDownPlayerSlot TargetSlot, bool bHit)
+void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(
+	EShowDownPlayerSlot TargetSlot,
+	bool bHit,
+	int32 MatchSequence,
+	int32 RoundSequence)
 {
-	if (!CanStartPresentation())
+	const EMultiplayerPresentationContextRelation ContextRelation =
+		CompareMultiplayerPresentationContext(MatchSequence, RoundSequence);
+	if (ContextRelation == EMultiplayerPresentationContextRelation::Past)
+	{
+		UE_LOG(
+			LogTemp,
+			Verbose,
+			TEXT("Discarded stale multiplayer roulette presentation. Match=%d Round=%d"),
+			MatchSequence,
+			RoundSequence);
+		return;
+	}
+
+	if (ContextRelation == EMultiplayerPresentationContextRelation::Future
+		|| !CanStartPresentation())
 	{
 		if (GetNetMode() != NM_DedicatedServer)
 		{
-			PendingMultiplayerRoulettePresentations.Add({ TargetSlot, bHit });
+			PendingMultiplayerRoulettePresentations.Add(
+				{ TargetSlot, bHit, MatchSequence, RoundSequence });
 			UE_LOG(
 				LogTemp,
-				Warning,
-				TEXT("Queued multiplayer roulette presentation while the local gun was busy. Slot=%d Hit=%s Pending=%d"),
+				Verbose,
+				TEXT("Queued multiplayer roulette presentation. Slot=%d Hit=%s Match=%d Round=%d Pending=%d"),
 				static_cast<int32>(TargetSlot),
 				bHit ? TEXT("true") : TEXT("false"),
+				MatchSequence,
+				RoundSequence,
 				PendingMultiplayerRoulettePresentations.Num());
 		}
 		return;
@@ -3293,16 +3339,72 @@ void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(EShowDownPlayerSlo
 void ASDSelfShotGunActor::TryStartPendingMultiplayerRoulettePresentation()
 {
 	if (GetNetMode() == NM_DedicatedServer
-		|| PendingMultiplayerRoulettePresentations.IsEmpty()
-		|| !CanStartPresentation())
+		|| PendingMultiplayerRoulettePresentations.IsEmpty())
 	{
 		return;
 	}
 
-	const FPendingMultiplayerRoulettePresentation PendingPresentation =
-		PendingMultiplayerRoulettePresentations[0];
-	PendingMultiplayerRoulettePresentations.RemoveAt(0);
-	PlayMultiplayerRoulettePresentation(PendingPresentation.TargetSlot, PendingPresentation.bHit);
+	while (!PendingMultiplayerRoulettePresentations.IsEmpty())
+	{
+		const FPendingMultiplayerRoulettePresentation& PendingPresentation =
+			PendingMultiplayerRoulettePresentations[0];
+		const EMultiplayerPresentationContextRelation ContextRelation =
+			CompareMultiplayerPresentationContext(
+				PendingPresentation.MatchSequence,
+				PendingPresentation.RoundSequence);
+		if (ContextRelation == EMultiplayerPresentationContextRelation::Past)
+		{
+			PendingMultiplayerRoulettePresentations.RemoveAt(0);
+			continue;
+		}
+		if (ContextRelation == EMultiplayerPresentationContextRelation::Future
+			|| !CanStartPresentation())
+		{
+			return;
+		}
+
+		const FPendingMultiplayerRoulettePresentation PresentationToStart =
+			PendingPresentation;
+		PendingMultiplayerRoulettePresentations.RemoveAt(0);
+		PlayMultiplayerRoulettePresentation(
+			PresentationToStart.TargetSlot,
+			PresentationToStart.bHit,
+			PresentationToStart.MatchSequence,
+			PresentationToStart.RoundSequence);
+		return;
+	}
+}
+
+ASDSelfShotGunActor::EMultiplayerPresentationContextRelation
+ASDSelfShotGunActor::CompareMultiplayerPresentationContext(
+	int32 MatchSequence,
+	int32 RoundSequence) const
+{
+	const AShowDownGameStateBase* ShowDownGameState = BoundShowDownGameState.Get();
+	if (!ShowDownGameState)
+	{
+		const UWorld* World = GetWorld();
+		ShowDownGameState = World ? World->GetGameState<AShowDownGameStateBase>() : nullptr;
+	}
+	if (!ShowDownGameState)
+	{
+		return EMultiplayerPresentationContextRelation::Future;
+	}
+
+	const int32 CurrentMatchSequence = ShowDownGameState->MultiplayerMatchSequence;
+	const int32 CurrentRoundSequence = ShowDownGameState->MultiplayerRoundSequence;
+	if (MatchSequence == CurrentMatchSequence
+		&& RoundSequence == CurrentRoundSequence)
+	{
+		return EMultiplayerPresentationContextRelation::Current;
+	}
+	if (MatchSequence < CurrentMatchSequence
+		|| (MatchSequence == CurrentMatchSequence
+			&& RoundSequence < CurrentRoundSequence))
+	{
+		return EMultiplayerPresentationContextRelation::Past;
+	}
+	return EMultiplayerPresentationContextRelation::Future;
 }
 
 bool ASDSelfShotGunActor::ShouldTreatSlotAsLocalPlayer(EShowDownPlayerSlot TargetSlot) const

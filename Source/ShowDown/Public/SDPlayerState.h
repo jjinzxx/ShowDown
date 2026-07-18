@@ -8,6 +8,18 @@
 class ACard;
 class FLifetimeProperty;
 
+USTRUCT()
+struct FSDPrivateCardRank
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	TObjectPtr<ACard> Card = nullptr;
+
+	UPROPERTY()
+	int32 Rank = 0;
+};
+
 UCLASS()
 class SHOWDOWN_API ASDPlayerState : public APlayerState
 {
@@ -56,6 +68,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Card")
 	void ClearHand();
 
+	// Authority-only card knowledge sent exclusively to this PlayerState's owning
+	// connection. Physical card actors remain globally relevant, but concealed
+	// ranks never travel on those actors.
+	void SetPrivateCardRank(ACard* Card, int32 Rank);
+	void RemovePrivateCardRank(const ACard* Card);
+	void ClearPrivateCardRanks();
+	bool TryGetPrivateCardRank(const ACard* Card, int32& OutRank) const;
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Multiplayer")
 	void SetShowDownSlot(EShowDownPlayerSlot NewSlot);
 
@@ -74,7 +94,17 @@ public:
 
 protected:
 	UFUNCTION()
+	void OnRep_PrivateCardRanks();
+
+	UFUNCTION()
 	void OnRep_EquippedCharacterSkinId();
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
+private:
+	UPROPERTY(ReplicatedUsing = OnRep_PrivateCardRanks, Transient)
+	TArray<FSDPrivateCardRank> PrivateCardRanks;
+
+	TArray<TWeakObjectPtr<ACard>> CachedPrivateRankCards;
+	void RefreshPrivateCardRankVisuals();
 };

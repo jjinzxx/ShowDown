@@ -136,6 +136,12 @@ public:
 
 	void MarkEnteredMultiplayerGame();
 
+	// Keeps a one-shot, user-facing failure across map travel. This is used for
+	// server-side lobby rejection/kick reasons, which would otherwise disappear
+	// with the gameplay HUD before the hub map finishes loading.
+	void QueuePendingHubError(const FString& Message);
+	bool ConsumePendingHubError(FString& OutMessage);
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|EOS")
 	bool IsInMultiplayerLobby() const;
 
@@ -212,6 +218,7 @@ private:
 	FDelegateHandle VoiceTalkingUpdatedDelegateHandle;
 	bool bLocalVoiceTalking = false;
 	bool bVoiceTransmissionRequested = false;
+	FString PendingHubError;
 
 	class IOnlineSubsystem* GetEosSubsystem() const;
 	IOnlineIdentityPtr GetIdentityInterface() const;

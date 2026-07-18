@@ -92,6 +92,7 @@ void UShowDownEosSubsystem::Deinitialize()
 	bInMultiplayerLobby = false;
 	bLobbyHost = false;
 	bHostedGameRosterLocked = false;
+	PendingHubError.Empty();
 
 	Super::Deinitialize();
 }
@@ -1045,7 +1046,7 @@ void UShowDownEosSubsystem::LeaveLobby(FName HubMapName)
 			{
 				if (AShowDownPlayerController* ShowDownController = Cast<AShowDownPlayerController>(PlayerController))
 				{
-					ShowDownController->ClientLeaveMultiplayerRoomToHub();
+					ShowDownController->ClientReturnToHubWithReason(TEXT("방장이 방을 종료했습니다."));
 				}
 				else
 				{
@@ -1126,6 +1127,22 @@ void UShowDownEosSubsystem::MarkEnteredMultiplayerGame()
 	PendingJoinCode.Empty();
 	ClearTransientSearchState(true);
 	PendingSessionFlow = ESessionFlow::None;
+}
+
+void UShowDownEosSubsystem::QueuePendingHubError(const FString& Message)
+{
+	const FString SanitizedMessage = Message.TrimStartAndEnd().Left(220);
+	if (!SanitizedMessage.IsEmpty())
+	{
+		PendingHubError = SanitizedMessage;
+	}
+}
+
+bool UShowDownEosSubsystem::ConsumePendingHubError(FString& OutMessage)
+{
+	OutMessage = MoveTemp(PendingHubError);
+	PendingHubError.Empty();
+	return !OutMessage.IsEmpty();
 }
 
 void UShowDownEosSubsystem::FindAndJoinFirstSession()

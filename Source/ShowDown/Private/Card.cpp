@@ -104,6 +104,13 @@ void ACard::OnConstruction(const FTransform& Transform)
 
 void ACard::BeginPlay()
 {
+	// Blueprint ReceiveBeginPlay is dispatched by Super::BeginPlay. Clear the
+	// authored/default rank first on remote clients so an existing BP_Card graph
+	// cannot observe a fake-but-plausible value before private knowledge arrives.
+	if (!HasAuthority())
+	{
+		Rank = 0;
+	}
 	Super::BeginPlay();
 
 	ConfigureInteractionComponents();
@@ -249,6 +256,30 @@ void ACard::SetCard(int32 NewRank)
 	ForceNetUpdate();
 }
 
+void ACard::RevealRankToAll()
+{
+	if (!HasAuthority() || RevealedRank == Rank)
+	{
+		return;
+	}
+
+	RevealedRank = Rank;
+	RefreshVisual();
+	ForceNetUpdate();
+}
+
+void ACard::ConcealRankFromAll()
+{
+	if (!HasAuthority() || RevealedRank == 0)
+	{
+		return;
+	}
+
+	RevealedRank = 0;
+	RefreshVisual();
+	ForceNetUpdate();
+}
+
 void ACard::SetFaceUp(bool bNewFaceUp)
 {
 	if (bFaceUp == bNewFaceUp && bHasCachedVisual)
@@ -289,7 +320,7 @@ void ACard::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimePro
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
-	DOREPLIFETIME(ACard, Rank);
+	DOREPLIFETIME(ACard, RevealedRank);
 	DOREPLIFETIME(ACard, bSelectable);
 	DOREPLIFETIME(ACard, bFaceUp);
 	DOREPLIFETIME(ACard, HiddenFromSlot);
@@ -379,26 +410,54 @@ void ACard::RefreshVisual()
 	{
 		// Multiplayer hands are spawned face-up so their owner can read them.
 		// HandOwnerSlot is therefore also a visual information boundary: every other
-		// client may see the physical card, but never its replicated rank text.
+		// client may see the physical card, but never its authorized rank text.
 		bVisibleToLocalPlayer = bVisibleToLocalPlayer
 			&& LocalPlayerState
 			&& LocalPlayerState->ShowDownSlot == HandOwnerSlot;
 	}
 
-	const bool bShouldShowText = bFaceUp && bVisibleToLocalPlayer;
+	const int32 DisplayRank = ResolveDisplayRankForLocalViewer(LocalPlayerState);
+	if (!HasAuthority())
+	{
+		// Keep direct Blueprint reads backward-compatible without retaining secret
+		// state: remote Rank is always exactly the value this viewer may display.
+		Rank = DisplayRank;
+	}
+	const bool bShouldShowText = bFaceUp && bVisibleToLocalPlayer && DisplayRank > 0;
 	if (!bHasCachedVisual || bCachedVisualVisible != bShouldShowText)
 	{
 		CardText->SetVisibility(bShouldShowText);
 		bCachedVisualVisible = bShouldShowText;
 	}
 
-	if (!bHasCachedVisual || CachedVisualRank != Rank)
+	if (DisplayRank > 0 && (!bHasCachedVisual || CachedVisualRank != DisplayRank))
 	{
-		CardText->SetText(FText::AsNumber(Rank));
-		CachedVisualRank = Rank;
+		CardText->SetText(FText::AsNumber(DisplayRank));
+		CachedVisualRank = DisplayRank;
 	}
 
 	bHasCachedVisual = true;
+}
+
+int32 ACard::ResolveDisplayRankForLocalViewer(const ASDPlayerState* LocalPlayerState) const
+{
+	if (RevealedRank > 0)
+	{
+		return RevealedRank;
+	}
+
+	// Standalone and listen-server rendering share the authoritative actor. The
+	// slot visibility checks above still prevent the host UI from showing cards
+	// that player is not meant to see.
+	if (HasAuthority())
+	{
+		return Rank;
+	}
+
+	int32 PrivateRank = 0;
+	return LocalPlayerState && LocalPlayerState->TryGetPrivateCardRank(this, PrivateRank)
+		? PrivateRank
+		: 0;
 }
 
 void ACard::ScheduleVisualRefreshRetry()
@@ -556,6 +615,7 @@ void ACard::MoveToRevealTransform(const FTransform& RevealTransform, float Visua
 	bSelected = false;
 	bHovered = false;
 	SetSelectable(false);
+	RevealRankToAll();
 	SetHiddenFromSlot(EShowDownPlayerSlot::None);
 	SetFaceUp(true);
 	SetTargetVisualScaleMultiplier(VisualScaleMultiplier);

@@ -56,6 +56,18 @@ AShowDownHubFlowManager::AShowDownHubFlowManager()
 	if (SettingsWidgetBlueprint.Succeeded()) SettingsWidgetClass = SettingsWidgetBlueprint.Class;
 }
 
+bool AShowDownHubFlowManager::ShouldDisplayEosSessionStatus(
+	bool bSuccess,
+	bool bSessionOperationInProgress,
+	const FString& Message)
+{
+	const FString SanitizedMessage = Message.TrimStartAndEnd();
+	return !bSuccess
+		&& !bSessionOperationInProgress
+		&& !SanitizedMessage.IsEmpty()
+		&& !SanitizedMessage.EndsWith(TEXT("..."));
+}
+
 void AShowDownHubFlowManager::BeginPlay()
 {
 	Super::BeginPlay();
@@ -297,6 +309,15 @@ void AShowDownHubFlowManager::ShowMainMenu()
 
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
+		if (UShowDownEosSubsystem* EosSubsystem = GameInstance->GetSubsystem<UShowDownEosSubsystem>())
+		{
+			FString PendingHubError;
+			if (EosSubsystem->ConsumePendingHubError(PendingHubError))
+			{
+				MainMenuWidget->ShowStatusMessage(PendingHubError, FLinearColor::Red);
+			}
+		}
+
 		if (USupabaseSubsystem* SupabaseSubsystem = GameInstance->GetSubsystem<USupabaseSubsystem>())
 		{
 			SupabaseSubsystem->EnsureCosmeticDataLoaded();
@@ -1145,10 +1166,6 @@ void AShowDownHubFlowManager::HandleMultiplayerRequested()
 		{
 			if (EosSubsystem->IsEosLoggedIn())
 			{
-				if (MainMenuWidget)
-				{
-					MainMenuWidget->ShowStatusMessage(TEXT("EOS login ready."), FLinearColor::Green);
-				}
 				ShowMultiplayerMenu();
 				return;
 			}
@@ -1156,10 +1173,6 @@ void AShowDownHubFlowManager::HandleMultiplayerRequested()
 			bPendingMultiplayerOpenAfterEosLogin = true;
 			EosSubsystem->OnEosLoginResult.RemoveDynamic(this, &AShowDownHubFlowManager::HandleEosLoginForMultiplayer);
 			EosSubsystem->OnEosLoginResult.AddDynamic(this, &AShowDownHubFlowManager::HandleEosLoginForMultiplayer);
-			if (MainMenuWidget)
-			{
-				MainMenuWidget->ShowStatusMessage(TEXT("Logging in to EOS..."), FLinearColor::Yellow);
-			}
 			EosSubsystem->LoginWithSupabaseSession();
 			return;
 		}
@@ -1178,10 +1191,6 @@ void AShowDownHubFlowManager::HandleEosLoginForMultiplayer(bool bSuccess, const 
 
 	if (Message == TEXT("Logging in to EOS..."))
 	{
-		if (MainMenuWidget)
-		{
-			MainMenuWidget->ShowStatusMessage(Message, FLinearColor::Yellow);
-		}
 		return;
 	}
 
@@ -1202,10 +1211,6 @@ void AShowDownHubFlowManager::HandleEosLoginForMultiplayer(bool bSuccess, const 
 
 	if (bSuccess)
 	{
-		if (MainMenuWidget)
-		{
-			MainMenuWidget->ShowStatusMessage(TEXT("EOS login success."), FLinearColor::Green);
-		}
 		ShowMultiplayerMenu();
 		return;
 	}
@@ -1383,7 +1388,7 @@ void AShowDownHubFlowManager::HandleEosSessionResult(bool bSuccess, const FStrin
 		ShowTransitionOverlay(
 			EShowDownHubTransitionOperation::StartGame,
 			TEXT("게임을 준비하는 중"),
-			TEXT("참가자 상태와 플레이 좌석을 동기화하고 있습니다."));
+			TEXT("게임 화면을 불러오고 있습니다."));
 		LobbyWidget = nullptr;
 		MultiplayerWidget = nullptr;
 
@@ -1405,18 +1410,18 @@ void AShowDownHubFlowManager::HandleEosSessionResult(bool bSuccess, const FStrin
 		return;
 	}
 
-	if (MultiplayerWidget)
+	const bool bDisplayStatus = ShouldDisplayEosSessionStatus(
+		bSuccess,
+		bSessionOperationInProgress,
+		Message);
+	if (bDisplayStatus && MultiplayerWidget)
 	{
-		MultiplayerWidget->ShowStatusMessage(
-			Message,
-			bSuccess ? FLinearColor::Green : (bSessionOperationInProgress ? FLinearColor::Yellow : FLinearColor::Red));
+		MultiplayerWidget->ShowStatusMessage(Message, FLinearColor::Red);
 	}
 
-	if (LobbyWidget)
+	if (bDisplayStatus && LobbyWidget)
 	{
-		LobbyWidget->ShowStatusMessage(
-			Message,
-			bSuccess ? FLinearColor::Green : (bSessionOperationInProgress ? FLinearColor::Yellow : FLinearColor::Red));
+		LobbyWidget->ShowStatusMessage(Message, FLinearColor::Red);
 	}
 
 	if (!bSuccess
@@ -1451,7 +1456,7 @@ void AShowDownHubFlowManager::HandleLobbyStartRequested()
 	ShowTransitionOverlay(
 		EShowDownHubTransitionOperation::StartGame,
 		TEXT("게임을 시작하는 중"),
-		TEXT("모든 참가자의 상태와 카메라를 준비하고 있습니다."));
+		TEXT("모든 참가자의 연결을 확인하고 있습니다."));
 
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{

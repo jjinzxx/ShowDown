@@ -603,6 +603,7 @@ private:
 	bool bMultiplayerMatchStarted = false;
 	bool bMultiplayerRoundResolving = false;
 	bool bMultiplayerBetTransitionInProgress = false;
+	int32 MultiplayerMatchSequence = 0;
 	uint32 MultiplayerRoundSequence = 0;
 	double MultiplayerRoundProgressBlockedUntilSeconds = 0.0;
 	TWeakObjectPtr<ASDPlayerState> MultiplayerFoldPresentationTarget;
@@ -929,6 +930,9 @@ private:
 		EShowDownPlayerSlot CurrentLeaderSlot) const;
 	ASDPlayerState* GetMultiplayerOpponent(ASDPlayerState* Player) const;
 	void DealMultiplayerHands();
+	void ConfigureMultiplayerHandCardPrivacy(ASDPlayerState* HandOwner, ACard* Card);
+	void ConfigureMultiplayerForeheadCardPrivacy(ASDPlayerState* HiddenPlayer, ACard* Card);
+	void ForgetMultiplayerCardRank(ACard* Card);
 	void ClearMultiplayerHands();
 	void RetireEliminatedMultiplayerHands();
 	void ClearMultiplayerForeheadCards();
@@ -986,6 +990,7 @@ private:
 	FRotator GetForeheadCardRotationOffsetForPlayerState(const ASDPlayerState* Player, const USceneComponent* HeadSlot) const;
 	FRotator GetForeheadCardRotationOffsetForSide(EShowDownSide Side, const USceneComponent* HeadSlot) const;
 	void NotifyMultiplayerStatus(const FString& Message) const;
+	void NotifyMultiplayerPlayerStatus(const ASDPlayerState* Player, const FString& Message) const;
 	void StartStage(int32 StageIndex);
 	void AdvanceStage();
 	const FShowDownStageRule* GetCurrentStageRule() const;

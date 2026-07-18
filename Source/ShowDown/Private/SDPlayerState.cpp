@@ -35,6 +35,118 @@ void ASDPlayerState::ClearHand()
 	HandCards.Reset();
 }
 
+void ASDPlayerState::SetPrivateCardRank(ACard* Card, int32 Rank)
+{
+	if (!HasAuthority() || !IsValid(Card))
+	{
+		return;
+	}
+
+	const int32 ClampedRank = FMath::Clamp(Rank, 1, 7);
+	FSDPrivateCardRank* ExistingEntry = PrivateCardRanks.FindByPredicate([Card](const FSDPrivateCardRank& Entry)
+	{
+		return Entry.Card == Card;
+	});
+	if (ExistingEntry)
+	{
+		if (ExistingEntry->Rank == ClampedRank)
+		{
+			return;
+		}
+		ExistingEntry->Rank = ClampedRank;
+	}
+	else
+	{
+		FSDPrivateCardRank& NewEntry = PrivateCardRanks.AddDefaulted_GetRef();
+		NewEntry.Card = Card;
+		NewEntry.Rank = ClampedRank;
+	}
+
+	RefreshPrivateCardRankVisuals();
+	ForceNetUpdate();
+}
+
+void ASDPlayerState::RemovePrivateCardRank(const ACard* Card)
+{
+	if (!HasAuthority() || !Card)
+	{
+		return;
+	}
+
+	const int32 RemovedCount = PrivateCardRanks.RemoveAll([Card](const FSDPrivateCardRank& Entry)
+	{
+		return Entry.Card == Card;
+	});
+	if (RemovedCount <= 0)
+	{
+		return;
+	}
+
+	RefreshPrivateCardRankVisuals();
+	ForceNetUpdate();
+}
+
+void ASDPlayerState::ClearPrivateCardRanks()
+{
+	if (!HasAuthority() || PrivateCardRanks.IsEmpty())
+	{
+		return;
+	}
+
+	PrivateCardRanks.Reset();
+	RefreshPrivateCardRankVisuals();
+	ForceNetUpdate();
+}
+
+bool ASDPlayerState::TryGetPrivateCardRank(const ACard* Card, int32& OutRank) const
+{
+	if (!Card)
+	{
+		return false;
+	}
+
+	const FSDPrivateCardRank* Entry = PrivateCardRanks.FindByPredicate([Card](const FSDPrivateCardRank& Candidate)
+	{
+		return Candidate.Card == Card;
+	});
+	if (!Entry || Entry->Rank <= 0)
+	{
+		return false;
+	}
+
+	OutRank = Entry->Rank;
+	return true;
+}
+
+void ASDPlayerState::OnRep_PrivateCardRanks()
+{
+	RefreshPrivateCardRankVisuals();
+}
+
+void ASDPlayerState::RefreshPrivateCardRankVisuals()
+{
+	TArray<TWeakObjectPtr<ACard>> CardsToRefresh = MoveTemp(CachedPrivateRankCards);
+	CachedPrivateRankCards.Reset();
+
+	for (const FSDPrivateCardRank& Entry : PrivateCardRanks)
+	{
+		if (IsValid(Entry.Card))
+		{
+			const TWeakObjectPtr<ACard> WeakCard(Entry.Card.Get());
+			CardsToRefresh.AddUnique(WeakCard);
+			CachedPrivateRankCards.AddUnique(WeakCard);
+		}
+	}
+
+	for (const TWeakObjectPtr<ACard>& WeakCard : CardsToRefresh)
+	{
+		if (ACard* Card = WeakCard.Get())
+		{
+			Card->RefreshVisual();
+		}
+	}
+}
+
 void ASDPlayerState::SetShowDownSlot(EShowDownPlayerSlot NewSlot)
 {
 	if (HasAuthority())
@@ -108,6 +220,7 @@ void ASDPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 
 	DOREPLIFETIME(ASDPlayerState, HandCards);
 	DOREPLIFETIME(ASDPlayerState, ForeheadCard);
+	DOREPLIFETIME_CONDITION(ASDPlayerState, PrivateCardRanks, COND_OwnerOnly);
 	DOREPLIFETIME(ASDPlayerState, Lives);
 	DOREPLIFETIME(ASDPlayerState, CurrentBet);
 	DOREPLIFETIME(ASDPlayerState, ShowDownSlot);

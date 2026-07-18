@@ -172,6 +172,9 @@ public:
 	static bool ShouldBlockGameplayInputForGunShot(
 		bool bGunShotCameraActive,
 		bool bEliminatedSpectatorActive);
+	static bool ShouldAllowGameplayUiToggleDuringGunShot(
+		bool bGunShotCameraActive,
+		bool bUiAlreadyOpen);
 	EShowDownPlayerSlot ResolveLocalShowDownPlayerSlot() const;
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Camera")
@@ -413,6 +416,9 @@ public:
 
 	UFUNCTION(Client, Reliable)
 	void ClientLeaveMultiplayerRoomToHub();
+
+	UFUNCTION(Client, Reliable)
+	void ClientReturnToHubWithReason(const FString& Reason);
 
 private:
 	bool bInitialCardDealInputLocked = false;

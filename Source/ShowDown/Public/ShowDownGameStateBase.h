@@ -32,6 +32,18 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FShowDownMultiplayerRoulettePresen
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FiveParams(FShowDownMultiplayerRouletteResultSignature, EShowDownPlayerSlot, TargetSlot, const FString&, TargetName, int32, BulletCount, bool, bHit, int32, RemainingLives);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FShowDownNameTagRoundStatusChangedSignature);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FShowDownTableCinematicCueSignature, ESDTableCinematicCue, Cue, uint8, PlayerSlotMask);
+DECLARE_MULTICAST_DELEGATE_SixParams(
+	FShowDownMultiplayerRoulettePresentationContextSignature,
+	EShowDownPlayerSlot,
+	const FString&,
+	int32,
+	bool,
+	int32,
+	int32);
+DECLARE_MULTICAST_DELEGATE_TwoParams(
+	FShowDownMultiplayerPresentationContextChangedSignature,
+	int32,
+	int32);
 
 USTRUCT(BlueprintType)
 struct FShowDownNameTagPlayerBetState
@@ -211,6 +223,12 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Events|Multiplayer")
 	FShowDownMultiplayerRoulettePresentationSignature OnMultiplayerRoulettePresentation;
 
+	/** Native presentation event that also carries the authoritative match/round identity. */
+	FShowDownMultiplayerRoulettePresentationContextSignature OnMultiplayerRoulettePresentationContext;
+
+	/** Native boundary used by local presentation actors to expire delayed work. */
+	FShowDownMultiplayerPresentationContextChangedSignature OnMultiplayerPresentationContextChanged;
+
 	UPROPERTY(BlueprintAssignable, Category = "ShowDown|Events|Multiplayer")
 	FShowDownMultiplayerRouletteResultSignature OnMultiplayerRouletteResult;
 
@@ -239,6 +257,14 @@ public:
 	//현재 라운드 번호
 	UPROPERTY(Replicated, BlueprintReadOnly, Category = "ShowDown|State")
 	int32 CurrentRound = 1;
+
+	/** Monotonic identity for the currently active multiplayer match. */
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "ShowDown|Multiplayer|Presentation")
+	int32 MultiplayerMatchSequence = 0;
+
+	/** Monotonic identity for the currently active multiplayer round/duel. */
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "ShowDown|Multiplayer|Presentation")
+	int32 MultiplayerRoundSequence = 0;
 
 	UPROPERTY(ReplicatedUsing = OnRep_MatchMode, BlueprintReadOnly, Category = "ShowDown|Multiplayer")
 	EShowDownMatchMode MatchMode = EShowDownMatchMode::SinglePlayer;
@@ -367,6 +393,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Multiplayer|Presentation")
 	void BroadcastMultiplayerRoulettePresentation(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount, bool bHit);
 
+	void BroadcastMultiplayerRoulettePresentationWithContext(
+		EShowDownPlayerSlot TargetSlot,
+		const FString& TargetName,
+		int32 BulletCount,
+		bool bHit,
+		int32 MatchSequence,
+		int32 RoundSequence);
+
+	/** Advances the reliable presentation boundary. Server only. */
+	void SetMultiplayerPresentationContext(int32 MatchSequence, int32 RoundSequence);
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Multiplayer|Presentation")
 	void BroadcastMultiplayerRouletteResult(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount, bool bHit, int32 RemainingLives);
 
@@ -396,7 +433,22 @@ public:
 	void MulticastMultiplayerRouletteStarted(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount);
 
 	UFUNCTION(NetMulticast, Reliable)
-	void MulticastMultiplayerRoulettePresentation(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount, bool bHit);
+	void MulticastMultiplayerRoulettePresentation(
+		EShowDownPlayerSlot TargetSlot,
+		const FString& TargetName,
+		int32 BulletCount,
+		bool bHit,
+		int32 MatchSequence,
+		int32 RoundSequence);
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastMultiplayerPresentationContext(int32 MatchSequence, int32 RoundSequence);
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastPresentationStarted(EShowDownPhase Phase);
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastPresentationFinished(EShowDownPhase Phase);
 
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastMultiplayerRouletteResult(EShowDownPlayerSlot TargetSlot, const FString& TargetName, int32 BulletCount, bool bHit, int32 RemainingLives);

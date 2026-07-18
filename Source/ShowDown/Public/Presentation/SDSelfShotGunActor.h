@@ -717,17 +717,34 @@ private:
 		float StepInterval);
 	void UpdateCinematicCameraSteppedShake(float DeltaSeconds);
 
-	UFUNCTION()
 	void HandleMultiplayerRoulettePresentation(
 		EShowDownPlayerSlot TargetSlot,
 		const FString& TargetName,
 		int32 BulletCount,
-		bool bHit);
+		bool bHit,
+		int32 MatchSequence,
+		int32 RoundSequence);
+	void HandleMultiplayerPresentationContextChanged(int32 MatchSequence, int32 RoundSequence);
 	void HandleGameStateSet(AGameStateBase* GameState);
 
 	AActor* FindMultiplayerShotTarget(EShowDownPlayerSlot TargetSlot) const;
-	void PlayMultiplayerRoulettePresentation(EShowDownPlayerSlot TargetSlot, bool bHit);
+	void PlayMultiplayerRoulettePresentation(
+		EShowDownPlayerSlot TargetSlot,
+		bool bHit,
+		int32 MatchSequence,
+		int32 RoundSequence);
 	void TryStartPendingMultiplayerRoulettePresentation();
+
+	enum class EMultiplayerPresentationContextRelation : uint8
+	{
+		Past,
+		Current,
+		Future
+	};
+
+	EMultiplayerPresentationContextRelation CompareMultiplayerPresentationContext(
+		int32 MatchSequence,
+		int32 RoundSequence) const;
 	bool ShouldTreatSlotAsLocalPlayer(EShowDownPlayerSlot TargetSlot) const;
 	bool ShouldTreatTargetAsLocalPlayer(AActor* TargetActor) const;
 	bool UpdateRevolverPlacementDevPreview();
@@ -887,6 +904,8 @@ private:
 	{
 		EShowDownPlayerSlot TargetSlot = EShowDownPlayerSlot::None;
 		bool bHit = false;
+		int32 MatchSequence = 0;
+		int32 RoundSequence = 0;
 	};
 
 	TArray<FPendingMultiplayerRoulettePresentation> PendingMultiplayerRoulettePresentations;

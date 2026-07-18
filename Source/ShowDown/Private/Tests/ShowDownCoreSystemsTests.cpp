@@ -5,6 +5,7 @@
 #include "Audio/ShowDownAudioConfig.h"
 #include "Audio/ShowDownAudioSubsystem.h"
 #include "BettingSystem.h"
+#include "Card.h"
 #include "CardSystem.h"
 #include "CollectorAISystem.h"
 #include "Misc/AutomationTest.h"
@@ -21,14 +22,60 @@
 #include "ShowDownAmmoStatusWidget.h"
 #include "ShowDownGameModeBase.h"
 #include "ShowDownGameStateBase.h"
+#include "ShowDownHubFlowManager.h"
 #include "ShowDownPlayerController.h"
+#include "ShowDownEosSubsystem.h"
 #include "ShowDownShopWidget.h"
 #include "ShowDownTypes.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/GameInstance.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMesh.h"
 #include "Sound/SoundWave.h"
 #include "UObject/UnrealType.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownCardRankNetworkPrivacyTest,
+	"ShowDown.Core.CardRankNetworkPrivacy",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownCardRankNetworkPrivacyTest::RunTest(const FString& Parameters)
+{
+	const FIntProperty* SecretRankProperty = FindFProperty<FIntProperty>(ACard::StaticClass(), TEXT("Rank"));
+	const FIntProperty* RevealedRankProperty = FindFProperty<FIntProperty>(ACard::StaticClass(), TEXT("RevealedRank"));
+	const FArrayProperty* PrivateRanksProperty = FindFProperty<FArrayProperty>(
+		ASDPlayerState::StaticClass(),
+		TEXT("PrivateCardRanks"));
+
+	TestNotNull(TEXT("The authoritative secret rank property exists"), SecretRankProperty);
+	TestNotNull(TEXT("The public reveal rank property exists"), RevealedRankProperty);
+	TestNotNull(TEXT("The owner-private rank collection exists"), PrivateRanksProperty);
+	if (!SecretRankProperty || !RevealedRankProperty || !PrivateRanksProperty)
+	{
+		return false;
+	}
+
+	TestFalse(
+		TEXT("The authoritative card rank never replicates on the globally relevant card actor"),
+		SecretRankProperty->HasAnyPropertyFlags(CPF_Net));
+	TestTrue(
+		TEXT("Only the explicitly revealed rank replicates on the card actor"),
+		RevealedRankProperty->HasAnyPropertyFlags(CPF_Net));
+	TestTrue(
+		TEXT("Allowed concealed ranks use the PlayerState owner-only replication channel"),
+		PrivateRanksProperty->HasAnyPropertyFlags(CPF_Net));
+
+	const FStructProperty* PrivateRankEntryProperty = CastField<FStructProperty>(PrivateRanksProperty->Inner);
+	TestNotNull(TEXT("Private rank entries use the dedicated card-rank structure"), PrivateRankEntryProperty);
+	if (PrivateRankEntryProperty)
+	{
+		TestTrue(
+			TEXT("The private replication payload is the expected structure"),
+			PrivateRankEntryProperty->Struct == FSDPrivateCardRank::StaticStruct());
+	}
+
+	return true;
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FShowDownBettingSystemTest,
@@ -1040,6 +1087,15 @@ bool FShowDownGunShotCameraTest::RunTest(const FString& Parameters)
 	TestTrue(
 		TEXT("An eliminated spectator view keeps gameplay input blocked"),
 		AShowDownPlayerController::ShouldBlockGameplayInputForGunShot(false, true));
+	TestFalse(
+		TEXT("A gun-shot camera blocks opening a new chat or pause UI"),
+		AShowDownPlayerController::ShouldAllowGameplayUiToggleDuringGunShot(true, false));
+	TestTrue(
+		TEXT("An already-open UI remains closable during a gun-shot camera"),
+		AShowDownPlayerController::ShouldAllowGameplayUiToggleDuringGunShot(true, true));
+	TestTrue(
+		TEXT("Normal gameplay allows chat and pause UI toggles"),
+		AShowDownPlayerController::ShouldAllowGameplayUiToggleDuringGunShot(false, false));
 
 	TestTrue(
 		TEXT("Any shot targeting the local player enables the third-person camera"),
@@ -1191,6 +1247,43 @@ bool FShowDownGunShotCameraTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownUserFacingStatusRoutingTest,
+	"ShowDown.Core.UserFacingStatusRouting",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownUserFacingStatusRoutingTest::RunTest(const FString& Parameters)
+{
+	TestFalse(
+		TEXT("Successful session progress is not shown as a persistent status"),
+		AShowDownHubFlowManager::ShouldDisplayEosSessionStatus(true, false, TEXT("EOS lobby joined.")));
+	TestFalse(
+		TEXT("An active session operation keeps progress in the transition UI"),
+		AShowDownHubFlowManager::ShouldDisplayEosSessionStatus(false, true, TEXT("Searching room...")));
+	TestFalse(
+		TEXT("Passive progress messages are not mistaken for failures"),
+		AShowDownHubFlowManager::ShouldDisplayEosSessionStatus(false, false, TEXT("공개방 목록을 불러오는 중...")));
+	TestTrue(
+		TEXT("An actionable session failure remains visible"),
+		AShowDownHubFlowManager::ShouldDisplayEosSessionStatus(false, false, TEXT("방이 가득 찼습니다.")));
+
+	UGameInstance* TestGameInstance = NewObject<UGameInstance>();
+	UShowDownEosSubsystem* EosSubsystem = NewObject<UShowDownEosSubsystem>(TestGameInstance);
+	TestNotNull(TEXT("EOS subsystem can store a travel-persistent user error"), EosSubsystem);
+	if (!EosSubsystem)
+	{
+		return false;
+	}
+
+	EosSubsystem->QueuePendingHubError(TEXT("  게임이 이미 시작되어 입장할 수 없습니다.  "));
+	FString ConsumedError;
+	TestTrue(TEXT("Queued hub error is available after travel"), EosSubsystem->ConsumePendingHubError(ConsumedError));
+	TestEqual(TEXT("Queued hub error is sanitized"), ConsumedError, FString(TEXT("게임이 이미 시작되어 입장할 수 없습니다.")));
+	TestFalse(TEXT("Queued hub error is consumed exactly once"), EosSubsystem->ConsumePendingHubError(ConsumedError));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FShowDownAmmoStatusWidgetTest,
 	"ShowDown.Core.AmmoStatusWidget",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -1247,6 +1340,10 @@ bool FShowDownNetworkPresentationEventsTest::RunTest(const FString& Parameters)
 	TestReliableMulticast(TEXT("MulticastCardsRevealed"));
 	TestReliableMulticast(TEXT("MulticastRoundResolved"));
 	TestReliableMulticast(TEXT("MulticastGameOver"));
+	TestReliableMulticast(TEXT("MulticastPresentationStarted"));
+	TestReliableMulticast(TEXT("MulticastPresentationFinished"));
+	TestReliableMulticast(TEXT("MulticastMultiplayerPresentationContext"));
+	TestReliableMulticast(TEXT("MulticastMultiplayerRoulettePresentation"));
 	return true;
 }
 
@@ -1644,8 +1741,11 @@ bool FShowDownGunVisionSequenceTimingTest::RunTest(const FString& Parameters)
 		SequenceSubsystem->DesiredDarknessStrength,
 		0.0f);
 
+	GameState->MultiplayerMatchSequence = 3;
+	GameState->MultiplayerRoundSequence = 7;
+	GunActor->BoundShowDownGameState = GameState;
 	GunActor->PendingMultiplayerRoulettePresentations.Add(
-		{ EShowDownPlayerSlot::Player3, false });
+		{ EShowDownPlayerSlot::Player3, false, 3, 7 });
 	GunActor->HandleTableCinematicCue(ESDTableCinematicCue::Reset, 0);
 	TestTrue(
 		TEXT("A reliable reset preserves the active multiplayer gun presentation"),
@@ -1660,6 +1760,31 @@ bool FShowDownGunVisionSequenceTimingTest::RunTest(const FString& Parameters)
 		TEXT("Round-end phase replication cannot overtake and discard the delayed gun presentation"),
 		GunActor->PendingMultiplayerRoulettePresentations.Num(),
 		1);
+
+	GameState->MultiplayerRoundSequence = 8;
+	GunActor->HandleMultiplayerPresentationContextChanged(3, 8);
+	TestTrue(
+		TEXT("Advancing the authoritative round context discards delayed shots from the previous round"),
+		GunActor->PendingMultiplayerRoulettePresentations.IsEmpty());
+	GunActor->PlayMultiplayerRoulettePresentation(
+		EShowDownPlayerSlot::Player3,
+		false,
+		3,
+		7);
+	TestTrue(
+		TEXT("A stale roulette RPC cannot recreate a discarded previous-round queue entry"),
+		GunActor->PendingMultiplayerRoulettePresentations.IsEmpty());
+
+	GameState->MultiplayerMatchSequence = 4;
+	GameState->MultiplayerRoundSequence = 1;
+	TestEqual(
+		TEXT("A delayed shot from an earlier match is classified as stale"),
+		GunActor->CompareMultiplayerPresentationContext(3, 99),
+		ASDSelfShotGunActor::EMultiplayerPresentationContextRelation::Past);
+	TestEqual(
+		TEXT("A shot that outruns its context boundary waits instead of being discarded"),
+		GunActor->CompareMultiplayerPresentationContext(4, 2),
+		ASDSelfShotGunActor::EMultiplayerPresentationContextRelation::Future);
 	return true;
 }
 
@@ -1721,11 +1846,11 @@ bool FShowDownRaiseBulletLoadingTest::RunTest(const FString& Parameters)
 	const float ThreeBulletSequenceDuration =
 		ASDSelfShotGunActor::CalculateRaiseBulletLoadSequenceDuration(3, 0.48f, 0.12f);
 	TestTrue(
-		TEXT("Six bullets use the configured visible 1.08 second cascade"),
-		FMath::IsNearlyEqual(SixBulletSequenceDuration, 1.08f));
+		TEXT("Six bullets include one travel duration and five stagger intervals"),
+		FMath::IsNearlyEqual(SixBulletSequenceDuration, 1.08f, KINDA_SMALL_NUMBER));
 	TestTrue(
-		TEXT("A one-to-four raise inserts three bullets over 0.72 seconds"),
-		FMath::IsNearlyEqual(ThreeBulletSequenceDuration, 0.72f));
+		TEXT("A three-bullet raise includes one travel duration and two stagger intervals"),
+		FMath::IsNearlyEqual(ThreeBulletSequenceDuration, 0.72f, KINDA_SMALL_NUMBER));
 	TestTrue(
 		TEXT("The next multiplayer turn reserves a safety margin after the cascade"),
 		FMath::IsNearlyEqual(
@@ -1761,11 +1886,22 @@ bool FShowDownRaiseBulletLoadingTest::RunTest(const FString& Parameters)
 	TestTrue(
 		TEXT("Incoming bullets pause briefly at their visible spawn point"),
 		GunActor->RaiseBulletLoadStartHoldTime > 0.0f);
+	const float ConfiguredSixBulletSequenceDuration =
+		ASDSelfShotGunActor::CalculateRaiseBulletLoadSequenceDuration(
+			6,
+			GunActor->RaiseBulletLoadDuration,
+			GunActor->RaiseBulletLoadStaggerDelay);
+	const float ConfiguredThreeBulletSequenceDuration =
+		ASDSelfShotGunActor::CalculateRaiseBulletLoadSequenceDuration(
+			3,
+			GunActor->RaiseBulletLoadDuration,
+			GunActor->RaiseBulletLoadStaggerDelay);
 	TestTrue(
 		TEXT("The runtime duration reflects the complete configured six-bullet load"),
 		FMath::IsNearlyEqual(
 			GunActor->GetRaiseBulletLoadPresentationDuration(0, 6),
-			SixBulletSequenceDuration));
+			ConfiguredSixBulletSequenceDuration,
+			KINDA_SMALL_NUMBER));
 
 	const UFunction* RaiseMulticastFunction = ASDSelfShotGunActor::StaticClass()
 		->FindFunctionByName(TEXT("MulticastPlayRaiseBulletLoadPresentation"));
@@ -1799,17 +1935,17 @@ bool FShowDownRaiseBulletLoadingTest::RunTest(const FString& Parameters)
 	TestTrue(
 		TEXT("The current raise remembers which player's hand is the source"),
 		GunActor->ActiveRaiseBulletSourceSlot == EShowDownPlayerSlot::Player1);
-	GunActor->UpdateRaiseBulletLoadAnimation(0.48f);
+	GunActor->UpdateRaiseBulletLoadAnimation(GunActor->RaiseBulletLoadDuration);
 	TestEqual(
 		TEXT("The counter reaches 2/6 when the first new bullet seats"),
 		GunActor->DisplayedBulletCount,
 		2);
-	GunActor->UpdateRaiseBulletLoadAnimation(0.12f);
+	GunActor->UpdateRaiseBulletLoadAnimation(GunActor->RaiseBulletLoadStaggerDelay);
 	TestEqual(
 		TEXT("The counter reaches 3/6 when the second new bullet seats"),
 		GunActor->DisplayedBulletCount,
 		3);
-	GunActor->UpdateRaiseBulletLoadAnimation(0.12f);
+	GunActor->UpdateRaiseBulletLoadAnimation(GunActor->RaiseBulletLoadStaggerDelay);
 	TestFalse(TEXT("The three-bullet cascade reaches a stable final state"), GunActor->bRaiseBulletLoadActive);
 	TestEqual(TEXT("The final display reaches 4/6"), GunActor->DisplayedBulletCount, 4);
 	TestTrue(TEXT("The fourth raised bulletBetting round is visible"), GunActor->BettingBulletMeshes[3]->IsVisible());
@@ -1826,7 +1962,7 @@ bool FShowDownRaiseBulletLoadingTest::RunTest(const FString& Parameters)
 		TEXT("Target status replication does not snap an active cascade"),
 		GunActor->bRaiseBulletLoadActive);
 	TestEqual(TEXT("The active counter remains at the previous bet"), GunActor->DisplayedBulletCount, 1);
-	GunActor->UpdateRaiseBulletLoadAnimation(ThreeBulletSequenceDuration);
+	GunActor->UpdateRaiseBulletLoadAnimation(ConfiguredThreeBulletSequenceDuration);
 	TestEqual(TEXT("RPC-first delivery also settles at 4/6"), GunActor->DisplayedBulletCount, 4);
 
 	GunActor->StatusPhase = EShowDownPhase::Betting;
