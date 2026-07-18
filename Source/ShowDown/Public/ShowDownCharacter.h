@@ -233,6 +233,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Voice")
 	void SetVoiceTalking(bool bNewVoiceTalking);
 
+	UFUNCTION(BlueprintPure, Category = "ShowDown|Voice")
+	bool IsVoiceTalking() const { return bVoiceTalking; }
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Bet Status")
 	void SetBetStatusPresentation(
 		bool bVisible,

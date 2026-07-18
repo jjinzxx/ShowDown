@@ -17,11 +17,13 @@
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
 #include "Layout/Clipping.h"
 #include "Misc/ConfigCacheIni.h"
 #include "PlayerPawn.h"
+#include "ShowDownCharacter.h"
 #include "ShowDownPlayerController.h"
 #include "ShowDownGameStateBase.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
@@ -31,6 +33,13 @@
 
 namespace
 {
+	constexpr float ChatUiScale = 0.8f;
+
+	constexpr float ScaleChatUi(float Value)
+	{
+		return Value * ChatUiScale;
+	}
+
 	constexpr int32 MaxRenderedChatLines = 60;
 	constexpr float ChatLineIntroSeconds = 0.13f;
 	constexpr float ChatHighlightSweepSeconds = 0.24f;
@@ -40,14 +49,27 @@ namespace
 	constexpr float ChatInputAnimationSeconds = 0.22f;
 	constexpr float ChatRecentVisibleSeconds = 6.0f;
 	constexpr float ChatVisualInterpSpeed = 9.0f;
-	constexpr float ChatRootWidth = 540.0f;
-	constexpr float ChatHistoryHeight = 228.0f;
-	constexpr float ChatInputHeight = 40.0f;
-	constexpr float ChatInputGap = 8.0f;
-	constexpr float ChatMessageFontSize = 18.0f;
-	constexpr float ChatMessageWrapWidth = 420.0f;
+	constexpr float ChatRootWidth = ScaleChatUi(540.0f);
+	constexpr float ChatHistoryHeight = ScaleChatUi(228.0f);
+	constexpr float ChatInputHeight = ScaleChatUi(40.0f);
+	constexpr float ChatInputGap = ScaleChatUi(8.0f);
+	constexpr float ChatMessageFontSize = ScaleChatUi(18.0f);
+	constexpr float ChatInputFontSize = ScaleChatUi(14.0f);
+	constexpr float ChatStatusFontSize = ScaleChatUi(11.0f);
+	constexpr float ChatMessageWrapWidth = ScaleChatUi(420.0f);
+	constexpr float ChatHistoryHorizontalPadding = ScaleChatUi(16.0f);
+	constexpr float ChatHistoryVerticalPadding = ScaleChatUi(11.0f);
 	constexpr float ChatClosedRootOffsetY = ChatInputHeight + ChatInputGap;
-	constexpr float SpeakingIndicatorInterpSpeed = 11.0f;
+	constexpr float ChatExpandedRootHeight = ChatHistoryHeight
+		+ ChatHistoryVerticalPadding * 2.0f
+		+ ChatInputGap
+		+ ChatInputHeight;
+	constexpr float VoiceSpeakerStackGap = ScaleChatUi(8.0f);
+	constexpr float VoiceSpeakerEntryGap = ScaleChatUi(4.0f);
+	constexpr float VoiceSpeakerFontSize = ScaleChatUi(16.0f);
+	constexpr float ChatHistoryIdleOpacity = 0.82f;
+	constexpr float ChatHistoryRecentOpacity = 0.90f;
+	constexpr float ChatHistoryOpenOpacity = 0.96f;
 
 	const FLinearColor LocalSpeakerColor(0.20f, 0.78f, 1.00f, 1.0f);
 	const FLinearColor OpponentSpeakerColor(1.00f, 0.55f, 0.14f, 1.0f);
@@ -55,7 +77,7 @@ namespace
 	const FLinearColor SystemSpeakerColor(0.88f, 0.78f, 0.46f, 1.0f);
 	const FLinearColor ChatMessageColor(1.0f, 1.0f, 1.0f, 1.0f);
 	const FLinearColor ChatPanelColor(0.0f, 0.0f, 0.0f, 1.0f);
-	const FLinearColor InputPanelColor(0.0f, 0.0f, 0.0f, 0.90f);
+	const FLinearColor InputPanelColor(0.0f, 0.0f, 0.0f, 0.96f);
 	const FLinearColor InputAccentColor(0.20f, 0.78f, 1.0f, 0.95f);
 	const TCHAR* PretendardRegularFontPath = TEXT("/Script/Engine.Font'/Game/UI/Font/Pretendard/static/alternative/Pretendard-Regular_Font.Pretendard-Regular_Font'");
 
@@ -175,10 +197,6 @@ bool UShowDownChatWidget::IsChatInputFocused() const
 void UShowDownChatWidget::SetLocalSpeakingIndicatorVisible(bool bVisible)
 {
 	bLocalSpeakingIndicatorVisible = bVisible;
-	if (bVisible && Text_LocalSpeakingIndicator)
-	{
-		Text_LocalSpeakingIndicator->SetVisibility(ESlateVisibility::HitTestInvisible);
-	}
 }
 
 TSharedRef<SWidget> UShowDownChatWidget::RebuildWidget()
@@ -213,7 +231,7 @@ void UShowDownChatWidget::NativeConstruct()
 	{
 		EditableTextBox_ChatInput->SetHintText(FText::FromString(TEXT("메시지 입력...")));
 		EditableTextBox_ChatInput->SetForegroundColor(ChatMessageColor);
-		EditableTextBox_ChatInput->WidgetStyle.SetFont(MakePretendardFont(14.0f));
+		EditableTextBox_ChatInput->WidgetStyle.SetFont(MakePretendardFont(ChatInputFontSize));
 		EditableTextBox_ChatInput->OnTextCommitted.AddUniqueDynamic(this, &UShowDownChatWidget::HandleInputCommitted);
 	}
 
@@ -227,10 +245,14 @@ void UShowDownChatWidget::NativeConstruct()
 
 	if (Border_ChatHistoryBackground)
 	{
-		Border_ChatHistoryBackground->SetBrushColor(FLinearColor(ChatPanelColor.R, ChatPanelColor.G, ChatPanelColor.B, 0.68f));
+		Border_ChatHistoryBackground->SetBrushColor(FLinearColor(
+			ChatPanelColor.R,
+			ChatPanelColor.G,
+			ChatPanelColor.B,
+			ChatHistoryIdleOpacity));
 	}
 
-	CurrentHistoryBackgroundAlpha = 0.68f;
+	CurrentHistoryBackgroundAlpha = ChatHistoryIdleOpacity;
 	CurrentHistoryOpacity = 1.0f;
 	LastChatLineTimeSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
 	SetChatInputOpen(false);
@@ -264,6 +286,7 @@ void UShowDownChatWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaT
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
 
+	UpdateVoiceSpeakerList();
 	UpdateChatVisualState(InDeltaTime);
 }
 
@@ -330,24 +353,18 @@ void UShowDownChatWidget::BuildNativeChatLayout()
 		RootSlot->SetAutoSize(true);
 	}
 
-	Text_LocalSpeakingIndicator = WidgetTree->ConstructWidget<UTextBlock>(
-		UTextBlock::StaticClass(),
-		TEXT("Text_LocalSpeakingIndicator"));
-	Text_LocalSpeakingIndicator->SetText(FText::FromString(TEXT("말 하는 중...")));
-	Text_LocalSpeakingIndicator->SetFont(MakePretendardFont(12.0f));
-	Text_LocalSpeakingIndicator->SetColorAndOpacity(FSlateColor(FLinearColor(0.70f, 0.92f, 1.0f, 1.0f)));
-	Text_LocalSpeakingIndicator->SetShadowOffset(FVector2D(0.0f, 1.0f));
-	Text_LocalSpeakingIndicator->SetShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.65f));
-	Text_LocalSpeakingIndicator->SetVisibility(ESlateVisibility::Collapsed);
-	Text_LocalSpeakingIndicator->SetRenderOpacity(0.0f);
-	if (UCanvasPanelSlot* SpeakingSlot = RootCanvas->AddChildToCanvas(Text_LocalSpeakingIndicator))
+	VoiceSpeakerStack = WidgetTree->ConstructWidget<UVerticalBox>(
+		UVerticalBox::StaticClass(),
+		TEXT("VerticalBox_VoiceSpeakers"));
+	VoiceSpeakerStack->SetVisibility(ESlateVisibility::Collapsed);
+	if (UCanvasPanelSlot* VoiceStackSlot = RootCanvas->AddChildToCanvas(VoiceSpeakerStack))
 	{
-		SpeakingSlot->SetAnchors(FAnchors(0.0f, 1.0f, 0.0f, 1.0f));
-		SpeakingSlot->SetAlignment(FVector2D(0.0f, 0.5f));
-		SpeakingSlot->SetPosition(FVector2D(
-			44.0f + ChatRootWidth + 12.0f,
-			-48.0f - ChatInputHeight - ChatInputGap - ChatHistoryHeight * 0.5f));
-		SpeakingSlot->SetAutoSize(true);
+		VoiceStackSlot->SetAnchors(FAnchors(0.0f, 1.0f, 0.0f, 1.0f));
+		VoiceStackSlot->SetAlignment(FVector2D(0.0f, 1.0f));
+		VoiceStackSlot->SetPosition(FVector2D(
+			44.0f,
+			-48.0f - ChatExpandedRootHeight - VoiceSpeakerStackGap));
+		VoiceStackSlot->SetAutoSize(true);
 	}
 
 	VerticalBox_ChatRoot = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("VerticalBox_ChatRoot"));
@@ -357,11 +374,15 @@ void UShowDownChatWidget::BuildNativeChatLayout()
 		UBorder::StaticClass(),
 		TEXT("Border_ChatHistoryBackground"));
 	Border_ChatHistoryBackground->SetBrush(FSlateRoundedBoxBrush(
-		FLinearColor(ChatPanelColor.R, ChatPanelColor.G, ChatPanelColor.B, 0.68f),
+		FLinearColor(ChatPanelColor.R, ChatPanelColor.G, ChatPanelColor.B, ChatHistoryIdleOpacity),
 		2.0f,
 		FLinearColor::Transparent,
 		0.0f));
-	Border_ChatHistoryBackground->SetPadding(FMargin(16.0f, 11.0f, 16.0f, 11.0f));
+	Border_ChatHistoryBackground->SetPadding(FMargin(
+		ChatHistoryHorizontalPadding,
+		ChatHistoryVerticalPadding,
+		ChatHistoryHorizontalPadding,
+		ChatHistoryVerticalPadding));
 	Border_ChatHistoryBackground->SetClipping(EWidgetClipping::ClipToBoundsAlways);
 
 	ScrollBox_ChatHistory = WidgetTree->ConstructWidget<UScrollBox>(
@@ -424,7 +445,7 @@ void UShowDownChatWidget::BuildNativeChatLayout()
 	FSlateBrush TransparentInputBrush;
 	TransparentInputBrush.DrawAs = ESlateBrushDrawType::NoDrawType;
 	FEditableTextBoxStyle InputStyle = FEditableTextBoxStyle::GetDefault();
-	FSlateFontInfo InputFont = MakePretendardFont(14.0f);
+	FSlateFontInfo InputFont = MakePretendardFont(ChatInputFontSize);
 	InputStyle.SetFont(InputFont);
 	InputStyle.SetBackgroundImageNormal(TransparentInputBrush);
 	InputStyle.SetBackgroundImageHovered(TransparentInputBrush);
@@ -434,7 +455,7 @@ void UShowDownChatWidget::BuildNativeChatLayout()
 	InputStyle.SetFocusedForegroundColor(FSlateColor(ChatMessageColor));
 	InputStyle.SetReadOnlyForegroundColor(FSlateColor(ChatMessageColor));
 	InputStyle.SetBackgroundColor(FSlateColor(FLinearColor::Transparent));
-	InputStyle.SetPadding(FMargin(12.0f, 0.0f, 10.0f, 0.0f));
+	InputStyle.SetPadding(FMargin(ScaleChatUi(12.0f), 0.0f, ScaleChatUi(10.0f), 0.0f));
 	InputStyle.TextStyle.SetColorAndOpacity(FSlateColor(ChatMessageColor));
 	EditableTextBox_ChatInput->WidgetStyle = InputStyle;
 
@@ -449,7 +470,7 @@ void UShowDownChatWidget::BuildNativeChatLayout()
 	USizeBox* AccentSizeBox = WidgetTree->ConstructWidget<USizeBox>(
 		USizeBox::StaticClass(),
 		TEXT("SizeBox_ChatInputAccent"));
-	AccentSizeBox->SetWidthOverride(4.0f);
+	AccentSizeBox->SetWidthOverride(ScaleChatUi(4.0f));
 	AccentSizeBox->SetContent(Border_ChatInputAccent);
 	if (UHorizontalBoxSlot* AccentSlot = InputContentBox->AddChildToHorizontalBox(AccentSizeBox))
 	{
@@ -476,7 +497,7 @@ void UShowDownChatWidget::BuildNativeChatLayout()
 	}
 
 	Text_Status = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Text_Status"));
-	Text_Status->SetFont(MakePretendardFont(11.0f));
+	Text_Status->SetFont(MakePretendardFont(ChatStatusFontSize));
 	Text_Status->SetText(FText::GetEmpty());
 	Text_Status->SetColorAndOpacity(FSlateColor(FLinearColor(1.0f, 1.0f, 1.0f, 0.72f)));
 	Text_Status->SetVisibility(ESlateVisibility::Collapsed);
@@ -711,14 +732,145 @@ void UShowDownChatWidget::ScrollChatHistoryToEnd()
 	}
 }
 
+void UShowDownChatWidget::UpdateVoiceSpeakerList()
+{
+	if (!VoiceSpeakerStack)
+	{
+		return;
+	}
+
+	TArray<FString> ActiveSpeakerNames;
+	if (bLocalSpeakingIndicatorVisible)
+	{
+		const FString LocalSpeakerName = ResolveLocalSpeakerName().TrimStartAndEnd();
+		ActiveSpeakerNames.AddUnique(LocalSpeakerName.IsEmpty() ? TEXT("Player") : LocalSpeakerName.Left(32));
+	}
+
+	if (UWorld* World = GetWorld())
+	{
+		for (TActorIterator<AShowDownCharacter> It(World); It; ++It)
+		{
+			const AShowDownCharacter* Character = *It;
+			if (!IsValid(Character)
+				|| !Character->IsCharacterSceneActive()
+				|| !Character->IsVoiceTalking()
+				|| Character->IsLocalPlayerCharacter())
+			{
+				continue;
+			}
+
+			const FString SpeakerName = ResolveCharacterVoiceSpeakerName(Character);
+			if (!SpeakerName.IsEmpty())
+			{
+				ActiveSpeakerNames.AddUnique(SpeakerName);
+			}
+		}
+	}
+
+	TArray<FString> OrderedSpeakerNames;
+	for (const FString& ExistingSpeakerName : DisplayedVoiceSpeakerNames)
+	{
+		if (ActiveSpeakerNames.Contains(ExistingSpeakerName))
+		{
+			OrderedSpeakerNames.Add(ExistingSpeakerName);
+		}
+	}
+	for (const FString& ActiveSpeakerName : ActiveSpeakerNames)
+	{
+		if (!OrderedSpeakerNames.Contains(ActiveSpeakerName))
+		{
+			OrderedSpeakerNames.Add(ActiveSpeakerName);
+		}
+	}
+
+	if (OrderedSpeakerNames != DisplayedVoiceSpeakerNames)
+	{
+		RebuildVoiceSpeakerList(OrderedSpeakerNames);
+	}
+}
+
+void UShowDownChatWidget::RebuildVoiceSpeakerList(const TArray<FString>& SpeakerNames)
+{
+	if (!VoiceSpeakerStack || !WidgetTree)
+	{
+		return;
+	}
+
+	VoiceSpeakerStack->ClearChildren();
+	DisplayedVoiceSpeakerNames = SpeakerNames;
+	VoiceSpeakerStack->SetVisibility(SpeakerNames.IsEmpty()
+		? ESlateVisibility::Collapsed
+		: ESlateVisibility::HitTestInvisible);
+
+	for (const FString& SpeakerName : SpeakerNames)
+	{
+		UBorder* SpeakerBackground = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+		UTextBlock* SpeakerText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+		if (!SpeakerBackground || !SpeakerText)
+		{
+			continue;
+		}
+
+		const FString HonorificName = SpeakerName.EndsWith(TEXT("님"))
+			? SpeakerName
+			: SpeakerName + TEXT("님");
+		SpeakerText->SetText(FText::FromString(FString::Printf(TEXT("%s이 말하는 중..."), *HonorificName)));
+		SpeakerText->SetFont(MakePretendardFont(VoiceSpeakerFontSize));
+		SpeakerText->SetColorAndOpacity(FSlateColor(FLinearColor(0.70f, 0.92f, 1.0f, 1.0f)));
+		SpeakerText->SetShadowOffset(FVector2D(0.0f, ScaleChatUi(1.0f)));
+		SpeakerText->SetShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.65f));
+		SpeakerText->SetAutoWrapText(false);
+
+		SpeakerBackground->SetBrush(FSlateRoundedBoxBrush(
+			FLinearColor(0.0f, 0.0f, 0.0f, 0.82f),
+			ScaleChatUi(3.0f),
+			FLinearColor(0.20f, 0.78f, 1.0f, 0.72f),
+			ScaleChatUi(1.0f)));
+		SpeakerBackground->SetPadding(FMargin(ScaleChatUi(10.0f), ScaleChatUi(5.0f)));
+		SpeakerBackground->SetContent(SpeakerText);
+
+		if (UVerticalBoxSlot* SpeakerSlot = VoiceSpeakerStack->AddChildToVerticalBox(SpeakerBackground))
+		{
+			SpeakerSlot->SetPadding(FMargin(0.0f, VoiceSpeakerEntryGap, 0.0f, 0.0f));
+			SpeakerSlot->SetHorizontalAlignment(HAlign_Left);
+		}
+	}
+}
+
+FString UShowDownChatWidget::ResolveCharacterVoiceSpeakerName(const AShowDownCharacter* Character) const
+{
+	if (!Character)
+	{
+		return FString();
+	}
+
+	const FString DisplayName = Character->GetCharacterDisplayName().TrimStartAndEnd();
+	if (!DisplayName.IsEmpty())
+	{
+		return DisplayName.Left(32);
+	}
+
+	if (Character->GetCharacterRole() == EShowDownCharacterRole::Opponent)
+	{
+		return ResolveDisplaySpeakerName(TEXT("Collector"));
+	}
+
+	if (Character->GetPlayerSlot() != EShowDownPlayerSlot::None)
+	{
+		return FString::Printf(TEXT("Player %d"), static_cast<int32>(Character->GetPlayerSlot()));
+	}
+
+	return FString();
+}
+
 void UShowDownChatWidget::UpdateChatVisualState(float InDeltaTime)
 {
 	const float CurrentTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
 	const bool bRecentMessage = (CurrentTime - LastChatLineTimeSeconds) <= ChatRecentVisibleSeconds;
 
 	const float TargetBackgroundAlpha = bChatInputOpen
-		? 0.92f
-		: (bRecentMessage ? 0.80f : 0.68f);
+		? ChatHistoryOpenOpacity
+		: (bRecentMessage ? ChatHistoryRecentOpacity : ChatHistoryIdleOpacity);
 	const float TargetHistoryOpacity = 1.0f;
 	const float InputAnimationRaw = (CurrentTime - ChatInputStateChangedTimeSeconds) / ChatInputAnimationSeconds;
 	const float InputAnimationAlpha = EaseOut(InputAnimationRaw);
@@ -735,6 +887,10 @@ void UShowDownChatWidget::UpdateChatVisualState(float InDeltaTime)
 	{
 		SizeBox_ChatRoot->SetRenderTranslation(FVector2D(0.0f, ChatRootOffsetY));
 	}
+	if (VoiceSpeakerStack)
+	{
+		VoiceSpeakerStack->SetRenderTranslation(FVector2D(0.0f, ChatRootOffsetY));
+	}
 	if (Border_ChatHistoryBackground)
 	{
 		Border_ChatHistoryBackground->SetBrushColor(FLinearColor(0.0f, 0.0f, 0.0f, CurrentHistoryBackgroundAlpha));
@@ -750,23 +906,6 @@ void UShowDownChatWidget::UpdateChatVisualState(float InDeltaTime)
 	{
 		Text_ChatHistory->SetRenderOpacity(CurrentHistoryOpacity);
 	}
-	if (Text_LocalSpeakingIndicator)
-	{
-		const float TargetOpacity = bLocalSpeakingIndicatorVisible ? 1.0f : 0.0f;
-		CurrentLocalSpeakingIndicatorOpacity = InDeltaTime > 0.0f
-			? FMath::FInterpTo(CurrentLocalSpeakingIndicatorOpacity, TargetOpacity, InDeltaTime, SpeakingIndicatorInterpSpeed)
-			: TargetOpacity;
-
-		const bool bShouldShowSpeakingIndicator = bLocalSpeakingIndicatorVisible || CurrentLocalSpeakingIndicatorOpacity > 0.02f;
-		Text_LocalSpeakingIndicator->SetVisibility(bShouldShowSpeakingIndicator
-			? ESlateVisibility::HitTestInvisible
-			: ESlateVisibility::Collapsed);
-		Text_LocalSpeakingIndicator->SetRenderOpacity(CurrentLocalSpeakingIndicatorOpacity);
-		Text_LocalSpeakingIndicator->SetRenderTranslation(FVector2D(
-			0.0f,
-			ChatRootOffsetY + (1.0f - CurrentLocalSpeakingIndicatorOpacity) * 4.0f));
-	}
-
 	for (FRenderedChatLine& RenderedLine : RenderedChatLines)
 	{
 		const float LineAgeSeconds = FMath::Max(0.0f, CurrentTime - RenderedLine.SpawnTimeSeconds);

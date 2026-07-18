@@ -75,6 +75,9 @@ private:
 	TObjectPtr<UTextBlock> SpeakingIndicatorText;
 
 	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> SpeakingIndicatorLayoutSpacer;
+
+	UPROPERTY(Transient)
 	TObjectPtr<UBorder> NameBackground;
 
 	UPROPERTY(Transient)

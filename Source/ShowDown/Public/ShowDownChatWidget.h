@@ -6,6 +6,7 @@
 #include "ShowDownChatWidget.generated.h"
 
 class APlayerPawn;
+class AShowDownCharacter;
 class AShowDownPlayerController;
 class SWidget;
 class UBorder;
@@ -81,9 +82,6 @@ private:
 	UPROPERTY(meta = (BindWidgetOptional))
 	UTextBlock* Text_Status = nullptr;
 
-	UPROPERTY()
-	UTextBlock* Text_LocalSpeakingIndicator = nullptr;
-
 	UPROPERTY(meta = (BindWidgetOptional))
 	UBorder* Border_ChatHistoryBackground = nullptr;
 
@@ -100,6 +98,9 @@ private:
 	UVerticalBox* VerticalBox_ChatRoot = nullptr;
 
 	UPROPERTY()
+	UVerticalBox* VoiceSpeakerStack = nullptr;
+
+	UPROPERTY()
 	FString ChatHistory;
 
 	TArray<FRenderedChatLine> RenderedChatLines;
@@ -111,8 +112,8 @@ private:
 	float LastChatLineTimeSeconds = -1000.0f;
 	float CurrentHistoryBackgroundAlpha = 0.0f;
 	float CurrentHistoryOpacity = 1.0f;
-	float CurrentLocalSpeakingIndicatorOpacity = 0.0f;
 	bool bLocalSpeakingIndicatorVisible = false;
+	TArray<FString> DisplayedVoiceSpeakerNames;
 
 	UFUNCTION()
 	void HandleSendClicked();
@@ -139,6 +140,9 @@ private:
 	void TrimRenderedChatLines();
 	void ScrollChatHistoryToEnd();
 	void UpdateChatVisualState(float InDeltaTime);
+	void UpdateVoiceSpeakerList();
+	void RebuildVoiceSpeakerList(const TArray<FString>& SpeakerNames);
+	FString ResolveCharacterVoiceSpeakerName(const AShowDownCharacter* Character) const;
 	void ApplyInputVisibility(ESlateVisibility NewVisibility);
 	void SetStatusMessage(const FString& Message, const FLinearColor& Color);
 	bool SubmitCurrentText();

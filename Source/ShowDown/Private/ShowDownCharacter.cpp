@@ -2327,7 +2327,7 @@ void AShowDownCharacter::ApplyNameTagWidgetContent()
 		NameTagWidget->SetDisplayName(FText::FromString(ResolveNameTagDisplayName()));
 		NameTagWidget->SetStatusText(FText::GetEmpty());
 		NameTagWidget->SetTurnActive(IsNameTagTurnActive());
-		NameTagWidget->SetSpeakingIndicatorVisible(bVoiceTalking);
+		NameTagWidget->SetSpeakingIndicatorVisible(false);
 	}
 }
 

@@ -13,13 +13,24 @@
 
 namespace
 {
-	constexpr float OverheadChatVisibleSeconds = 3.2f;
+	constexpr float NameTagUiScale = 1.2f;
+
+	constexpr float ScaleNameTagUi(float Value)
+	{
+		return Value * NameTagUiScale;
+	}
+
+	constexpr float OverheadChatVisibleSeconds = 3.2f * 2.0f;
 	constexpr float OverheadChatIntroSeconds = 0.18f;
 	constexpr float OverheadChatFadeSeconds = 0.32f;
 	constexpr float OverheadChatPushSeconds = 0.16f;
 	constexpr float OverheadChatAnimationInterval = 1.0f / 30.0f;
-	constexpr float OverheadChatMaxWidth = 260.0f;
-	constexpr float OverheadChatPushDistance = 34.0f;
+	constexpr float OverheadChatMaxWidth = ScaleNameTagUi(260.0f);
+	constexpr float OverheadChatPushDistance = ScaleNameTagUi(34.0f);
+	constexpr float OverheadChatFontSize = ScaleNameTagUi(15.0f);
+	constexpr float NameTagFontSize = ScaleNameTagUi(18.0f);
+	constexpr float NameTagSpeakingFontSize = ScaleNameTagUi(12.0f);
+	constexpr float NameTagStatusFontSize = ScaleNameTagUi(15.0f);
 	constexpr float SpeakingIndicatorInterpSpeed = 10.0f;
 	constexpr int32 MaxOverheadChatBubbleCount = 3;
 
@@ -92,7 +103,7 @@ void UShowDownNameTagWidget::ShowOverheadChatMessage(const FText& NewChatText)
 	NewBubble.StartTimeSeconds = CurrentTimeSeconds;
 
 	NewBubble.Background = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
-	NewBubble.Background->SetPadding(FMargin(10.0f, 5.0f));
+	NewBubble.Background->SetPadding(FMargin(ScaleNameTagUi(10.0f), ScaleNameTagUi(5.0f)));
 	NewBubble.Background->SetBrushColor(FLinearColor(0.0f, 0.0f, 0.0f, 0.68f));
 	NewBubble.Background->SetVisibility(ESlateVisibility::HitTestInvisible);
 	NewBubble.Background->SetRenderTransformPivot(FVector2D(0.5f, 1.0f));
@@ -103,14 +114,14 @@ void UShowDownNameTagWidget::ShowOverheadChatMessage(const FText& NewChatText)
 	NewBubble.Text->SetJustification(ETextJustify::Center);
 	NewBubble.Text->SetAutoWrapText(true);
 	NewBubble.Text->SetWrapTextAt(OverheadChatMaxWidth);
-	NewBubble.Text->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), 15));
-	NewBubble.Text->SetShadowOffset(FVector2D(0.0f, 1.0f));
+	NewBubble.Text->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), OverheadChatFontSize));
+	NewBubble.Text->SetShadowOffset(FVector2D(0.0f, ScaleNameTagUi(1.0f)));
 	NewBubble.Text->SetShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.5f));
 	NewBubble.Background->SetContent(NewBubble.Text);
 
 	if (UVerticalBoxSlot* ChatSlot = ChatStack->AddChildToVerticalBox(NewBubble.Background))
 	{
-		ChatSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 4.0f));
+		ChatSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, ScaleNameTagUi(4.0f)));
 		ChatSlot->SetHorizontalAlignment(HAlign_Center);
 	}
 
@@ -126,6 +137,10 @@ void UShowDownNameTagWidget::SetSpeakingIndicatorVisible(bool bVisible)
 	if (bVisible && SpeakingIndicatorText)
 	{
 		SpeakingIndicatorText->SetVisibility(ESlateVisibility::HitTestInvisible);
+		if (SpeakingIndicatorLayoutSpacer)
+		{
+			SpeakingIndicatorLayoutSpacer->SetVisibility(ESlateVisibility::HitTestInvisible);
+		}
 	}
 }
 
@@ -176,55 +191,62 @@ void UShowDownNameTagWidget::BuildDefaultWidget()
 	ChatStack = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("OverheadChatStack"));
 
 	NameBackground = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("NameTagBackground"));
-	NameBackground->SetPadding(FMargin(10.0f, 4.0f));
+	NameBackground->SetPadding(FMargin(ScaleNameTagUi(10.0f), ScaleNameTagUi(4.0f)));
 
 	NameText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("NameText"));
 	NameText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
 	NameText->SetJustification(ETextJustify::Center);
-	NameText->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), 18));
-	NameText->SetShadowOffset(FVector2D(0.0f, 1.0f));
+	NameText->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), NameTagFontSize));
+	NameText->SetShadowOffset(FVector2D(0.0f, ScaleNameTagUi(1.0f)));
 	NameText->SetShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.55f));
 
 	SpeakingIndicatorText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("SpeakingIndicatorText"));
 	SpeakingIndicatorText->SetText(FText::FromString(TEXT("말 하는 중...")));
 	SpeakingIndicatorText->SetColorAndOpacity(FSlateColor(FLinearColor(0.70f, 0.92f, 1.0f, 1.0f)));
 	SpeakingIndicatorText->SetJustification(ETextJustify::Center);
-	SpeakingIndicatorText->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), 12));
-	SpeakingIndicatorText->SetShadowOffset(FVector2D(0.0f, 1.0f));
+	SpeakingIndicatorText->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), NameTagSpeakingFontSize));
+	SpeakingIndicatorText->SetShadowOffset(FVector2D(0.0f, ScaleNameTagUi(1.0f)));
 	SpeakingIndicatorText->SetShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.55f));
 	SpeakingIndicatorText->SetVisibility(ESlateVisibility::Collapsed);
 	SpeakingIndicatorText->SetRenderOpacity(0.0f);
 
+	SpeakingIndicatorLayoutSpacer = WidgetTree->ConstructWidget<UTextBlock>(
+		UTextBlock::StaticClass(),
+		TEXT("SpeakingIndicatorLayoutSpacer"));
+	SpeakingIndicatorLayoutSpacer->SetText(SpeakingIndicatorText->GetText());
+	SpeakingIndicatorLayoutSpacer->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), NameTagSpeakingFontSize));
+	SpeakingIndicatorLayoutSpacer->SetVisibility(ESlateVisibility::Collapsed);
+	SpeakingIndicatorLayoutSpacer->SetRenderOpacity(0.0f);
+
 	StatusText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("StatusText"));
 	StatusText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
 	StatusText->SetJustification(ETextJustify::Center);
-	StatusText->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), 15));
-	StatusText->SetShadowOffset(FVector2D(0.0f, 1.0f));
+	StatusText->SetFont(FSlateFontInfo(FCoreStyle::GetDefaultFont(), NameTagStatusFontSize));
+	StatusText->SetShadowOffset(FVector2D(0.0f, ScaleNameTagUi(1.0f)));
 	StatusText->SetShadowColorAndOpacity(FLinearColor(0.0f, 0.0f, 0.0f, 0.55f));
 
-	UHorizontalBox* NameRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("NameRow"));
-	if (UHorizontalBoxSlot* NameTextSlot = NameRow->AddChildToHorizontalBox(NameText))
-	{
-		NameTextSlot->SetVerticalAlignment(VAlign_Center);
-	}
-	if (UHorizontalBoxSlot* SpeakingSlot = NameRow->AddChildToHorizontalBox(SpeakingIndicatorText))
-	{
-		SpeakingSlot->SetPadding(FMargin(7.0f, 0.0f, 0.0f, 0.0f));
-		SpeakingSlot->SetVerticalAlignment(VAlign_Center);
-	}
-
-	NameBackground->SetContent(NameRow);
+	NameBackground->SetContent(NameText);
 
 	UHorizontalBox* NameTagLine = WidgetTree->ConstructWidget<UHorizontalBox>(
 		UHorizontalBox::StaticClass(),
 		TEXT("NameTagLine"));
+	if (UHorizontalBoxSlot* SpacerSlot = NameTagLine->AddChildToHorizontalBox(SpeakingIndicatorLayoutSpacer))
+	{
+		SpacerSlot->SetPadding(FMargin(0.0f, 0.0f, ScaleNameTagUi(7.0f), 0.0f));
+		SpacerSlot->SetVerticalAlignment(VAlign_Center);
+	}
 	if (UHorizontalBoxSlot* NameBackgroundSlot = NameTagLine->AddChildToHorizontalBox(NameBackground))
 	{
 		NameBackgroundSlot->SetVerticalAlignment(VAlign_Center);
 	}
+	if (UHorizontalBoxSlot* SpeakingSlot = NameTagLine->AddChildToHorizontalBox(SpeakingIndicatorText))
+	{
+		SpeakingSlot->SetPadding(FMargin(ScaleNameTagUi(7.0f), 0.0f, 0.0f, 0.0f));
+		SpeakingSlot->SetVerticalAlignment(VAlign_Center);
+	}
 	if (UVerticalBoxSlot* ChatStackSlot = Root->AddChildToVerticalBox(ChatStack))
 	{
-		ChatStackSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 2.0f));
+		ChatStackSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, ScaleNameTagUi(2.0f)));
 		ChatStackSlot->SetHorizontalAlignment(HAlign_Center);
 	}
 
@@ -235,7 +257,7 @@ void UShowDownNameTagWidget::BuildDefaultWidget()
 
 	if (UVerticalBoxSlot* StatusSlot = Root->AddChildToVerticalBox(StatusText))
 	{
-		StatusSlot->SetPadding(FMargin(0.0f, 2.0f, 0.0f, 0.0f));
+		StatusSlot->SetPadding(FMargin(0.0f, ScaleNameTagUi(2.0f), 0.0f, 0.0f));
 		StatusSlot->SetHorizontalAlignment(HAlign_Center);
 	}
 
@@ -260,8 +282,16 @@ void UShowDownNameTagWidget::UpdateSpeakingIndicatorAnimation(float InDeltaTime)
 	SpeakingIndicatorText->SetVisibility(bShouldShow
 		? ESlateVisibility::HitTestInvisible
 		: ESlateVisibility::Collapsed);
+	if (SpeakingIndicatorLayoutSpacer)
+	{
+		SpeakingIndicatorLayoutSpacer->SetVisibility(bShouldShow
+			? ESlateVisibility::HitTestInvisible
+			: ESlateVisibility::Collapsed);
+	}
 	SpeakingIndicatorText->SetRenderOpacity(CurrentSpeakingIndicatorOpacity);
-	SpeakingIndicatorText->SetRenderTranslation(FVector2D((1.0f - CurrentSpeakingIndicatorOpacity) * -4.0f, 0.0f));
+	SpeakingIndicatorText->SetRenderTranslation(FVector2D(
+		(1.0f - CurrentSpeakingIndicatorOpacity) * ScaleNameTagUi(-4.0f),
+		0.0f));
 }
 
 void UShowDownNameTagWidget::RefreshNameBackgroundColor()
@@ -323,8 +353,10 @@ void UShowDownNameTagWidget::UpdateChatBubbleAnimation()
 		}
 
 		const float Opacity = FMath::Clamp(IntroAlpha * FadeAlpha, 0.0f, 1.0f);
-		const float IntroOffset = (1.0f - IntroAlpha) * 8.0f;
-		const float FadeOffset = ElapsedSeconds >= FadeStartSeconds ? -(1.0f - FadeAlpha) * 5.0f : 0.0f;
+		const float IntroOffset = (1.0f - IntroAlpha) * ScaleNameTagUi(8.0f);
+		const float FadeOffset = ElapsedSeconds >= FadeStartSeconds
+			? -(1.0f - FadeAlpha) * ScaleNameTagUi(5.0f)
+			: 0.0f;
 		const float Scale = 0.96f + 0.04f * IntroAlpha;
 
 		Bubble.Background->SetRenderOpacity(Opacity);
