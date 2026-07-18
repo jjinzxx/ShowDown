@@ -401,8 +401,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.0", DisplayName = "Multiplayer Reveal Card Gap"))
 	float MultiplayerCardRevealGap = 20.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.1"))
-	float CardRevealVisualScale = 1.12f;
+	// Kept under a new property name so legacy Blueprint defaults authored at
+	// 1.12 cannot silently override the new 1.0 reveal scale.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (ClampMin = "0.1", DisplayName = "Card Reveal Visual Scale"))
+	float CardRevealVisualScaleMultiplier = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Card Reveal", meta = (DisplayName = "Rotation Offset"))
 	FRotator CardRevealRotationOffset = FRotator(-90.0f, 0.0f, 0.0f);

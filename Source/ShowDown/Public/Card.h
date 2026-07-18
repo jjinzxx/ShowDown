@@ -117,6 +117,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Card|Slot Attach Motion", meta = (ClampMin = "0.05"))
 	float SlotAttachDuration = 0.85f;
 
+	// Card reveals use the same flight shape as slot attachment, but complete the
+	// travel independently so forehead placement timing remains unchanged.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Card|Reveal Motion", meta = (ClampMin = "0.05"))
+	float RevealMotionDurationMultiplier = 0.5f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Card|Slot Attach Motion", meta = (ClampMin = "0.0"))
 	float SlotAttachArcHeight = 55.0f;
 

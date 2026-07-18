@@ -619,13 +619,19 @@ void ACard::MoveToRevealTransform(const FTransform& RevealTransform, float Visua
 	SetHiddenFromSlot(EShowDownPlayerSlot::None);
 	SetFaceUp(true);
 	SetTargetVisualScaleMultiplier(VisualScaleMultiplier);
-	ApplyMovementTarget(RevealTransform, bUseSlotAttachMotion);
-	PublishMovementTarget(RevealTransform, bUseSlotAttachMotion);
+	const float RevealMotionDuration = FMath::Max(
+		0.05f,
+		SlotAttachDuration * FMath::Max(0.05f, RevealMotionDurationMultiplier));
+	ApplyMovementTarget(RevealTransform, bUseSlotAttachMotion, RevealMotionDuration);
+	PublishMovementTarget(RevealTransform, bUseSlotAttachMotion, RevealMotionDuration);
 }
 
 float ACard::GetRevealMotionTotalSeconds() const
 {
-	return GetSlotAttachMotionTotalSeconds();
+	return bUseSlotAttachMotion
+		? FMath::Max(0.05f, SlotAttachDuration * FMath::Max(0.05f, RevealMotionDurationMultiplier))
+			+ FMath::Max(0.0f, SlotAttachSettleDuration)
+		: 0.0f;
 }
 
 void ACard::MoveToHandTransform(const FTransform& NewTransform)

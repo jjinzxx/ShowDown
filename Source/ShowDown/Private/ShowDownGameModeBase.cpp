@@ -6656,7 +6656,7 @@ float AShowDownGameModeBase::PlayCardRevealPresentation(const TArray<ACard*>& Ca
 				CardIndex,
 				CardCount,
 				MultiplayerCenterDistance);
-			RevealCardActor->MoveToRevealTransform(RevealTransform, CardRevealVisualScale);
+			RevealCardActor->MoveToRevealTransform(RevealTransform, CardRevealVisualScaleMultiplier);
 		};
 
 		if (RevealDelay <= KINDA_SMALL_NUMBER)

@@ -18,6 +18,8 @@ namespace
 	constexpr TCHAR AudioConfigAssetPath[] =
 		TEXT("/Game/Audio/DA_ShowDownAudioConfig.DA_ShowDownAudioConfig");
 	constexpr TCHAR UserSettingsSection[] = TEXT("ShowDown.UserSettings");
+	constexpr float GunshotVolumeMultiplier = 0.8f;
+	constexpr float CrowdCheerVolumeMultiplier = 0.8f;
 
 	float ClampUserVolume(float Volume)
 	{
@@ -119,7 +121,9 @@ void UShowDownAudioSubsystem::NotifyGunFired()
 		UGameplayStatics::PlaySound2D(
 			World,
 			AudioConfig->GunHitLayerSound,
-			FMath::Max(0.0f, AudioConfig->GunHitLayerVolume) * UserEffectVolume);
+			FMath::Max(0.0f, AudioConfig->GunHitLayerVolume)
+				* GunshotVolumeMultiplier
+				* UserEffectVolume);
 	}
 
 	const float ShockDelay = FMath::Max(0.0f, AudioConfig->CrowdShockDelay);
@@ -849,7 +853,9 @@ void UShowDownAudioSubsystem::HandleCrowdShockDelayElapsed()
 	UGameplayStatics::PlaySound2D(
 		World,
 		AudioConfig->CrowdShockedSound,
-		FMath::Max(0.0f, AudioConfig->CrowdShockedVolume) * UserEffectVolume);
+		FMath::Max(0.0f, AudioConfig->CrowdShockedVolume)
+			* CrowdCheerVolumeMultiplier
+			* UserEffectVolume);
 }
 
 void UShowDownAudioSubsystem::HandleCardRevealDelayElapsed()

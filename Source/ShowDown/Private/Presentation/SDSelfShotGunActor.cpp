@@ -30,6 +30,7 @@
 namespace
 {
 	constexpr float MinimumCinematicCameraHoldTime = 1.8f;
+	constexpr float GunshotVolumeMultiplier = 0.8f;
 	constexpr int32 RevolverBulletSlotCount = 6;
 
 	bool IsRaiseBulletLoadTerminalPhase(EShowDownPhase Phase)
@@ -1366,7 +1367,11 @@ void ASDSelfShotGunActor::FireLiveRound()
 	MuzzleFlashLight->SetIntensity(
 		FMath::Max(0.0f, MuzzleFlashIntensity));
 
-	PlayConfiguredSound(GunshotSound, bPlayGunshotSound2D, GetActorLocation());
+	PlayConfiguredSound(
+		GunshotSound,
+		bPlayGunshotSound2D,
+		GetActorLocation(),
+		GunshotVolumeMultiplier);
 	if (UShowDownAudioSubsystem* AudioSubsystem = FindShowDownAudioSubsystem(this))
 	{
 		AudioSubsystem->NotifyGunFired();
@@ -3139,7 +3144,11 @@ void ASDSelfShotGunActor::SetChamberLive(int32 ChamberIndex, bool bLive)
 	}
 }
 
-void ASDSelfShotGunActor::PlayConfiguredSound(USoundBase* Sound, bool bPlay2D, const FVector& Location) const
+void ASDSelfShotGunActor::PlayConfiguredSound(
+	USoundBase* Sound,
+	bool bPlay2D,
+	const FVector& Location,
+	float VolumeMultiplier) const
 {
 	if (!Sound)
 	{
@@ -3148,11 +3157,15 @@ void ASDSelfShotGunActor::PlayConfiguredSound(USoundBase* Sound, bool bPlay2D, c
 
 	if (bPlay2D)
 	{
-		UGameplayStatics::PlaySound2D(this, Sound);
+		UGameplayStatics::PlaySound2D(this, Sound, FMath::Max(0.0f, VolumeMultiplier));
 	}
 	else
 	{
-		UGameplayStatics::PlaySoundAtLocation(this, Sound, Location);
+		UGameplayStatics::PlaySoundAtLocation(
+			this,
+			Sound,
+			Location,
+			FMath::Max(0.0f, VolumeMultiplier));
 	}
 }
 

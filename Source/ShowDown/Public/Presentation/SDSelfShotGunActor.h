@@ -809,7 +809,11 @@ private:
 	void AdvanceCurrentChamberIndex();
 	bool IsChamberLive(int32 ChamberIndex) const;
 	void SetChamberLive(int32 ChamberIndex, bool bLive);
-	void PlayConfiguredSound(USoundBase* Sound, bool bPlay2D, const FVector& Location) const;
+	void PlayConfiguredSound(
+		USoundBase* Sound,
+		bool bPlay2D,
+		const FVector& Location,
+		float VolumeMultiplier = 1.0f) const;
 	FTransform GetPresentationGunTransform() const;
 	void SetActorTransformAlpha(const FTransform& FromTransform, const FTransform& ToTransform, float Alpha);
 
