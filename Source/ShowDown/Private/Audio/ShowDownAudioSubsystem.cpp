@@ -18,7 +18,7 @@ namespace
 	constexpr TCHAR AudioConfigAssetPath[] =
 		TEXT("/Game/Audio/DA_ShowDownAudioConfig.DA_ShowDownAudioConfig");
 	constexpr TCHAR UserSettingsSection[] = TEXT("ShowDown.UserSettings");
-	constexpr float GunshotVolumeMultiplier = 0.8f;
+	constexpr float GunHitLayerVolumeMultiplier = 0.8f;
 	constexpr float CrowdCheerVolumeMultiplier = 0.8f;
 
 	float ClampUserVolume(float Volume)
@@ -122,7 +122,7 @@ void UShowDownAudioSubsystem::NotifyGunFired()
 			World,
 			AudioConfig->GunHitLayerSound,
 			FMath::Max(0.0f, AudioConfig->GunHitLayerVolume)
-				* GunshotVolumeMultiplier
+				* GunHitLayerVolumeMultiplier
 				* UserEffectVolume);
 	}
 

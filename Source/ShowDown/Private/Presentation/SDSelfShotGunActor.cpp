@@ -30,7 +30,7 @@
 namespace
 {
 	constexpr float MinimumCinematicCameraHoldTime = 1.8f;
-	constexpr float GunshotVolumeMultiplier = 0.8f;
+	constexpr float SelfShotGunshotVolumeMultiplier = 0.8f;
 	constexpr int32 RevolverBulletSlotCount = 6;
 
 	bool IsRaiseBulletLoadTerminalPhase(EShowDownPhase Phase)
@@ -1371,7 +1371,7 @@ void ASDSelfShotGunActor::FireLiveRound()
 		GunshotSound,
 		bPlayGunshotSound2D,
 		GetActorLocation(),
-		GunshotVolumeMultiplier);
+		SelfShotGunshotVolumeMultiplier);
 	if (UShowDownAudioSubsystem* AudioSubsystem = FindShowDownAudioSubsystem(this))
 	{
 		AudioSubsystem->NotifyGunFired();

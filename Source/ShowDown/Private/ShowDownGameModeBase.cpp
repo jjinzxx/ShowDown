@@ -2857,7 +2857,7 @@ void AShowDownGameModeBase::BroadcastBetActionCommitted(
 	int32 RaiseAmount,
 	bool bWasAutomatic) const
 {
-	const FString ActorName = Side == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector");
+	const FString ActorName = GetSideDisplayText(Side);
 	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 	{
 		ShowDownGameState->OnBetActionCommitted.Broadcast(Side, Action, TargetBet);
@@ -2871,25 +2871,11 @@ void AShowDownGameModeBase::BroadcastBetActionCommitted(
 			bWasAutomatic);
 	}
 
-	switch (Action)
+	// Routine betting actions are already presented by the world-space action
+	// panel. Keep chat reserved for decisions that materially end participation.
+	if (Action == EShowDownBetAction::Fold)
 	{
-	case EShowDownBetAction::Check:
-		BroadcastSystemChatMessage(FString::Printf(TEXT("%s님이 %d발 장전 상태로 체크했습니다."), *ActorName, TargetBet));
-		break;
-	case EShowDownBetAction::Call:
-		BroadcastSystemChatMessage(FString::Printf(TEXT("%s님이 %d발로 콜했습니다."), *ActorName, TargetBet));
-		break;
-	case EShowDownBetAction::Raise:
-		BroadcastSystemChatMessage(FString::Printf(
-			TEXT("%s님이 %d발 레이즈했습니다."),
-			*ActorName,
-			FMath::Max(1, RaiseAmount)));
-		break;
-	case EShowDownBetAction::Fold:
 		BroadcastSystemChatMessage(FString::Printf(TEXT("%s님이 폴드했습니다."), *ActorName));
-		break;
-	default:
-		break;
 	}
 }
 
@@ -5279,7 +5265,32 @@ FString AShowDownGameModeBase::GetSideText(EShowDownSide Side) const
 
 FString AShowDownGameModeBase::GetSideDisplayText(EShowDownSide Side) const
 {
-	return Side == EShowDownSide::Player ? TEXT("플레이어") : TEXT("콜렉터");
+	if (Side == EShowDownSide::Player)
+	{
+		if (const UWorld* World = GetWorld())
+		{
+			if (const AShowDownPlayerController* PlayerController =
+				Cast<AShowDownPlayerController>(World->GetFirstPlayerController()))
+			{
+				const FString PlayerName = PlayerController->GetChatSenderName().TrimStartAndEnd().Left(32);
+				if (!IsPlaceholderNetworkPlayerName(PlayerName))
+				{
+					return PlayerName;
+				}
+			}
+		}
+
+		return TEXT("플레이어");
+	}
+
+	FString OpponentName = TEXT("상대");
+	GConfig->GetString(
+		TEXT("ShowDown.UserSettings"),
+		TEXT("CharacterName"),
+		OpponentName,
+		GGameUserSettingsIni);
+	OpponentName = OpponentName.TrimStartAndEnd().Left(32);
+	return OpponentName.IsEmpty() ? TEXT("상대") : OpponentName;
 }
 
 FString AShowDownGameModeBase::GetRoundResultText(EShowDownRoundResult Result) const
@@ -6922,7 +6933,7 @@ void AShowDownGameModeBase::ApplyRouletteResult(EShowDownSide TargetSide, int32 
 		{
 			BroadcastSystemChatMessage(FString::Printf(
 				TEXT("%s님이 %d발 룰렛을 피했습니다."),
-				TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
+				*GetSideDisplayText(TargetSide),
 				ClampedBulletCount));
 			ShowEventDebugMessage(FString::Printf(TEXT("룰렛: %s %d발 / 안 맞음"),
 				*GetSideDisplayText(TargetSide),
@@ -6944,16 +6955,18 @@ void AShowDownGameModeBase::ApplyRouletteResult(EShowDownSide TargetSide, int32 
 		{
 			ShowDownGameState->OnLifeChanged.Broadcast(TargetSide, TargetState.Lives);
 		}
-		BroadcastSystemChatMessage(FString::Printf(
-			TEXT("%s님이 %d발 룰렛에 맞았습니다. 남은 목숨: %d"),
-			TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector"),
-			ClampedBulletCount,
-			TargetState.Lives));
 		if (TargetState.Lives <= 0)
 		{
 			BroadcastSystemChatMessage(FString::Printf(
-				TEXT("%s님이 사망했습니다."),
-				TargetSide == EShowDownSide::Player ? TEXT("Player") : TEXT("Collector")));
+				TEXT("%s님이 탈락했습니다."),
+				*GetSideDisplayText(TargetSide)));
+		}
+		else
+		{
+			BroadcastSystemChatMessage(FString::Printf(
+				TEXT("%s님이 %d발 룰렛에 맞았습니다."),
+				*GetSideDisplayText(TargetSide),
+				ClampedBulletCount));
 		}
 		ShowEventDebugMessage(FString::Printf(TEXT("룰렛: %s %d발 / 총 맞음 / 목숨 %d"),
 			*GetSideDisplayText(TargetSide),
@@ -8177,6 +8190,7 @@ void AShowDownGameModeBase::HandleMultiplayerPlayerDisconnected(ASDPlayerState* 
 	}
 
 	const EShowDownPlayerSlot LeavingSlot = LeavingPlayer->ShowDownSlot;
+	const FString LeavingPlayerName = GetNetworkPlayerDisplayName(LeavingPlayer);
 	for (ACard* Card : LeavingPlayer->HandCards)
 	{
 		if (IsValid(Card))
@@ -8259,9 +8273,11 @@ void AShowDownGameModeBase::HandleMultiplayerPlayerDisconnected(ASDPlayerState* 
 	}
 
 	RefreshMultiplayerCharacterVisibility();
-	NotifyMultiplayerStatus(FString::Printf(
+	const FString LeaveMessage = FString::Printf(
 		TEXT("%s님이 게임에서 나갔습니다."),
-		*LeavingPlayer->GetPlayerName()));
+		*LeavingPlayerName);
+	NotifyMultiplayerStatus(LeaveMessage);
+	BroadcastSystemChatMessage(LeaveMessage);
 
 	AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState();
 	const EShowDownPhase CurrentPhase = ShowDownGameState
@@ -9059,17 +9075,6 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 		if (SubmittingPlayer->CurrentBet < CurrentBet)
 		{
 			SubmittingPlayer->CurrentBet = CurrentBet;
-			BroadcastSystemChatMessage(FString::Printf(
-				TEXT("%s님이 %d발로 콜했습니다."),
-				*SubmittingPlayer->GetPlayerName(),
-				CurrentBet));
-		}
-		else
-		{
-			BroadcastSystemChatMessage(FString::Printf(
-				TEXT("%s님이 %d발 장전 상태로 체크했습니다."),
-				*SubmittingPlayer->GetPlayerName(),
-				CurrentBet));
 		}
 
 		BroadcastMultiplayerBetActionCommitted(
@@ -9118,10 +9123,6 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 		BettingRaisesLeft = FMath::Max(0, BettingRaisesLeft - 1);
 		MultiplayerPlayersActed.Reset();
 		MultiplayerPlayersActed.Add(SubmittingPlayer);
-		BroadcastSystemChatMessage(FString::Printf(
-			TEXT("%s님이 %d발 레이즈했습니다."),
-			*SubmittingPlayer->GetPlayerName(),
-			NewBet - CurrentBet));
 		BroadcastMultiplayerBetActionCommitted(
 			SubmittingPlayer,
 			EShowDownBetAction::Raise,
@@ -9799,13 +9800,18 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 				RemainingLives);
 		}
 		ResolvedTargetPlayer->ForceNetUpdate();
-		if (bHit)
+		if (bEliminated)
 		{
 			BroadcastSystemChatMessage(FString::Printf(
-				TEXT("%s님이 %d발 룰렛에 맞았습니다. 남은 목숨: %d"),
+				TEXT("%s님이 탈락했습니다."),
+				*TargetName));
+		}
+		else if (bHit)
+		{
+			BroadcastSystemChatMessage(FString::Printf(
+				TEXT("%s님이 %d발 룰렛에 맞았습니다."),
 				*TargetName,
-				ClampedBulletCount,
-				RemainingLives));
+				ClampedBulletCount));
 		}
 		else
 		{
@@ -9813,12 +9819,6 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 				TEXT("%s님이 %d발 룰렛을 피했습니다."),
 				*TargetName,
 				ClampedBulletCount));
-		}
-		if (bEliminated)
-		{
-			BroadcastSystemChatMessage(FString::Printf(
-				TEXT("%s님이 사망했습니다."),
-				*TargetName));
 		}
 		UE_LOG(LogTemp, Verbose, TEXT("%s roulette %d/6: %s (lives: %d)"),
 			*TargetName,
