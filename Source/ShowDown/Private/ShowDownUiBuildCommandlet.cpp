@@ -1454,7 +1454,7 @@ void BuildSettings(UWidgetBlueprint* BP)
 	AddCanvas(General, NicknameStatus, 620.0f, 218.0f, 485.0f, 64.0f);
 	AddCanvas(General, Text(T, TEXT("Text_LlmModel_Label"), TEXT("LLM 모델 선택"), 18), 70.0f, 120.0f, 420.0f, 34.0f);
 	AddValueBackground(General, TEXT("LlmModelBackground"), 70.0f, 160.0f, 420.0f, 46.0f);
-	AddCanvas(General, Text(T, TEXT("Text_LlmModel"), TEXT("gpt-5.4-mini"), 18), 85.0f, 168.0f, 390.0f, 32.0f);
+	AddCanvas(General, Text(T, TEXT("Text_LlmModel"), TEXT("gpt-5.6-terra"), 18), 85.0f, 168.0f, 390.0f, 32.0f);
 	AddCanvas(General, Text(T, TEXT("EditableTextBox_CharacterName_Label"), TEXT("싱글플레이 적 이름"), 18), 70.0f, 235.0f, 420.0f, 34.0f);
 	UEditableTextBox* CharacterName = T->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass(), TEXT("EditableTextBox_CharacterName"));
 	CharacterName->SetHintText(FText::FromString(TEXT("상대 이름")));

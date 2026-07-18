@@ -74,6 +74,18 @@ struct FShowDownStageRule
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Stage")
 	float CollectorBluffRate = 0.15f;
 
+	// 플레이어 이마 카드에 관해 거짓 숫자를 끝까지 주장할 확률
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Stage|Dialogue", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float CollectorCardClaimBluffRate = 0.45f;
+
+	// 정확한 숫자를 말하지 않고 회피하는 확률. 남은 확률은 진실 모드다.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Stage|Dialogue", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float CollectorCardClaimEvasiveRate = 0.25f;
+
+	// 진실/블러프 라운드 중 정확한 숫자를 직접 말할 수 있는 비율
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Stage|Dialogue", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float CollectorCardClaimExactRate = 0.50f;
+
 	//콜렉터 공격성
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Stage")
 	float CollectorAggression = 0.5f;
@@ -81,6 +93,13 @@ struct FShowDownStageRule
 	//자신이 7일 때 폴드하면 6발 장전할지 여부
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Stage")
 	bool bSevenFoldLoadsSix = true;
+};
+
+enum class ECollectorCardClaimMode : uint8
+{
+	Evasive,
+	Honest,
+	Bluff
 };
 
 UCLASS()
@@ -549,6 +568,9 @@ private:
 	FString PendingBossChatReplyDialogue;
 	int32 CurrentRoundPlayerGaveRank = 0;
 	int32 CurrentRoundCollectorGaveRank = 0;
+	ECollectorCardClaimMode CurrentCollectorCardClaimMode = ECollectorCardClaimMode::Evasive;
+	int32 CurrentCollectorClaimedPlayerRank = 0;
+	bool bCurrentCollectorExactClaimAllowed = false;
 	int32 LastRoundPlayerCardRank = 0;
 	int32 LastRoundCollectorCardRank = 0;
 	bool bCurrentRoundSummaryRecorded = false;
@@ -744,6 +766,9 @@ private:
 	void QueueSinglePlayerOpeningGreeting();
 	void AppendRecentDialogueLine(const FString& Speaker, const FString& Message);
 	void ResetCurrentRoundMemory();
+	void InitializeCollectorCardClaimState(int32 ActualPlayerRank);
+	FString GetCollectorCardClaimModeText() const;
+	FString GetCollectorCardClaimDetailText() const;
 	void RecordCurrentRoundAction(const FString& ActionText);
 	void AppendRecentRoundSummary(EShowDownRoundResult Result, const FString& Reason);
 	FString GetSideText(EShowDownSide Side) const;

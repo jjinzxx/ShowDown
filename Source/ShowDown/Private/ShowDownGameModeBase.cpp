@@ -1019,7 +1019,8 @@ void AShowDownGameModeBase::PlayerSelectedCardFromController(AController* Submit
 	}
 
 	CurrentRoundPlayerGaveRank = SelectedCard->Rank;
-	RecordCurrentRoundAction(FString::Printf(TEXT("Player gave Collector forehead card rank %d."), CurrentRoundPlayerGaveRank));
+	// The Collector cannot see its own forehead card before reveal.
+	RecordCurrentRoundAction(TEXT("Player gave Collector a forehead card."));
 	UE_LOG(LogTemp, Log, TEXT("GameMode received selected card: %s"), *SelectedCard->GetName());
 	ClearDecisionTimer();
 	BroadcastCardSelectedAction(EShowDownSide::Player);
@@ -1891,6 +1892,7 @@ bool AShowDownGameModeBase::PrepareSinglePlayerRedealHands(
 		CardSystem->ResetDeck(ParticipantCount);
 		CardSystem->ShuffleDeck();
 		ActiveCardDeckCopies = ParticipantCount;
+		DiscardedCardsSummary.Reset();
 	}
 	InitialCardDealDeckCopies = ParticipantCount;
 	OutDeckRemainingBeforeDeal = CardSystem->GetRemainingCardCount();
@@ -3986,6 +3988,7 @@ void AShowDownGameModeBase::CollectorGiveCardToPlayer()
 
 	PlayerState.ForeheadCard = ChosenCard;
 	CurrentRoundCollectorGaveRank = ChosenCard->Rank;
+	InitializeCollectorCardClaimState(ChosenCard->Rank);
 	RecordCurrentRoundAction(FString::Printf(TEXT("Collector gave Player forehead card rank %d."), CurrentRoundCollectorGaveRank));
 	BroadcastCardSelectedAction(EShowDownSide::Collector);
 
@@ -4982,6 +4985,9 @@ FSDLLMBossContext AShowDownGameModeBase::BuildLLMBossContext(int32 CurrentBet, i
 	FSDLLMBossContext Context;
 	Context.PlayerForeheadRank = GivenCardRank;
 	Context.CollectorForeheadRank = CollectorState.ForeheadCard ? CollectorState.ForeheadCard->Rank : 0;
+	Context.PlayerCardClaimMode = GetCollectorCardClaimModeText();
+	Context.PlayerCardClaimRank = CurrentCollectorClaimedPlayerRank;
+	Context.PlayerCardClaimDetail = GetCollectorCardClaimDetailText();
 	Context.CurrentBet = CurrentBet;
 	Context.PlayerCommittedBet = PlayerState.CurrentBet;
 	Context.CollectorCommittedBet = CollectorState.CurrentBet;
@@ -5024,6 +5030,18 @@ FSDLLMBossContext AShowDownGameModeBase::BuildLLMChatContext(const FString& Play
 	FSDLLMBossContext Context = BuildLLMBossContext(CurrentBet, GivenCardRank);
 	Context.PlayerDialogue = PlayerDialogue;
 	Context.RecentDialogue = RecentDialogueHistory;
+	// SubmitPlayerDialogueInputFromPlayer appends the latest player line before
+	// building this context. Keep that line only in PlayerDialogue so the model
+	// sees it once instead of treating the duplicate as extra emphasis.
+	int32 LastLineBreak = INDEX_NONE;
+	if (Context.RecentDialogue.FindLastChar(TEXT('\n'), LastLineBreak))
+	{
+		Context.RecentDialogue.LeftInline(LastLineBreak);
+	}
+	else
+	{
+		Context.RecentDialogue.Reset();
+	}
 	return Context;
 }
 
@@ -5035,12 +5053,18 @@ void AShowDownGameModeBase::AppendRecentDialogueLine(const FString& Speaker, con
 		return;
 	}
 
-	if (!RecentDialogueHistory.IsEmpty())
+	TArray<FString> DialogueEntries;
+	RecentDialogueHistory.ParseIntoArrayLines(DialogueEntries, false);
+	DialogueEntries.Add(FString::Printf(TEXT("%s: %s"), *Speaker.Left(32), *TrimmedMessage.Left(160)));
+
+	// Keep roughly twenty player/Collector exchanges instead of truncating the
+	// history in the middle of a line by character count.
+	constexpr int32 MaxDialogueEntries = 40;
+	if (DialogueEntries.Num() > MaxDialogueEntries)
 	{
-		RecentDialogueHistory += TEXT("\n");
+		DialogueEntries.RemoveAt(0, DialogueEntries.Num() - MaxDialogueEntries);
 	}
-	RecentDialogueHistory += FString::Printf(TEXT("%s: %s"), *Speaker.Left(32), *TrimmedMessage.Left(160));
-	RecentDialogueHistory = RecentDialogueHistory.Right(900);
+	RecentDialogueHistory = FString::Join(DialogueEntries, TEXT("\n"));
 }
 
 void AShowDownGameModeBase::ResetCurrentRoundMemory()
@@ -5048,9 +5072,87 @@ void AShowDownGameModeBase::ResetCurrentRoundMemory()
 	CurrentRoundActionHistory.Reset();
 	CurrentRoundPlayerGaveRank = 0;
 	CurrentRoundCollectorGaveRank = 0;
+	CurrentCollectorCardClaimMode = ECollectorCardClaimMode::Evasive;
+	CurrentCollectorClaimedPlayerRank = 0;
+	bCurrentCollectorExactClaimAllowed = false;
 	LastRoundPlayerCardRank = 0;
 	LastRoundCollectorCardRank = 0;
 	bCurrentRoundSummaryRecorded = false;
+}
+
+void AShowDownGameModeBase::InitializeCollectorCardClaimState(int32 ActualPlayerRank)
+{
+	if (ActualPlayerRank < 1 || ActualPlayerRank > 7)
+	{
+		CurrentCollectorCardClaimMode = ECollectorCardClaimMode::Evasive;
+		CurrentCollectorClaimedPlayerRank = 0;
+		bCurrentCollectorExactClaimAllowed = false;
+		return;
+	}
+
+	const FShowDownStageRule* StageRule = GetCurrentStageRule();
+	const float BluffChance = FMath::Clamp(
+		StageRule ? StageRule->CollectorCardClaimBluffRate : 0.45f,
+		0.0f,
+		1.0f);
+	const float EvasiveChance = FMath::Clamp(
+		StageRule ? StageRule->CollectorCardClaimEvasiveRate : 0.25f,
+		0.0f,
+		1.0f - BluffChance);
+	const float Roll = FMath::FRand();
+
+	if (Roll < BluffChance)
+	{
+		CurrentCollectorCardClaimMode = ECollectorCardClaimMode::Bluff;
+		int32 FalseRank = FMath::RandRange(1, 6);
+		if (FalseRank >= ActualPlayerRank)
+		{
+			++FalseRank;
+		}
+		CurrentCollectorClaimedPlayerRank = FalseRank;
+	}
+	else if (Roll < BluffChance + EvasiveChance)
+	{
+		CurrentCollectorCardClaimMode = ECollectorCardClaimMode::Evasive;
+		CurrentCollectorClaimedPlayerRank = 0;
+		bCurrentCollectorExactClaimAllowed = false;
+		return;
+	}
+	else
+	{
+		CurrentCollectorCardClaimMode = ECollectorCardClaimMode::Honest;
+		CurrentCollectorClaimedPlayerRank = ActualPlayerRank;
+	}
+
+	const float ExactChance = FMath::Clamp(
+		StageRule ? StageRule->CollectorCardClaimExactRate : 0.50f,
+		0.0f,
+		1.0f);
+	bCurrentCollectorExactClaimAllowed = FMath::FRand() < ExactChance;
+}
+
+FString AShowDownGameModeBase::GetCollectorCardClaimDetailText() const
+{
+	if (CurrentCollectorCardClaimMode == ECollectorCardClaimMode::Evasive)
+	{
+		return TEXT("evasive");
+	}
+
+	return bCurrentCollectorExactClaimAllowed ? TEXT("exact") : TEXT("vague");
+}
+
+FString AShowDownGameModeBase::GetCollectorCardClaimModeText() const
+{
+	switch (CurrentCollectorCardClaimMode)
+	{
+	case ECollectorCardClaimMode::Honest:
+		return TEXT("honest");
+	case ECollectorCardClaimMode::Bluff:
+		return TEXT("bluff");
+	case ECollectorCardClaimMode::Evasive:
+	default:
+		return TEXT("evasive");
+	}
 }
 
 void AShowDownGameModeBase::RecordCurrentRoundAction(const FString& ActionText)
