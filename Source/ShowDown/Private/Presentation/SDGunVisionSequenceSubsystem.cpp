@@ -905,7 +905,8 @@ void USDGunVisionSequenceSubsystem::RefreshTurnSpotlightSoundState()
 
 	const bool bTurnPhase = GameState->CurrentPhase == EShowDownPhase::Betting
 		|| GameState->CurrentPhase == EShowDownPhase::SelectCard;
-	const bool bVisible = bTurnPhase
+	const bool bVisible = !bInitialDealPresentationActive
+		&& bTurnPhase
 		&& GameState->NameTagTurnSlot != EShowDownPlayerSlot::None;
 	const bool bChanged = bTurnSpotlightStateInitialized
 		&& (bVisible != bLastTurnSpotlightVisible
@@ -1085,11 +1086,18 @@ void USDGunVisionSequenceSubsystem::HandleGunFired(ASDSelfShotGunActor* GunActor
 	SequenceElapsedTime = 0.0f;
 	SequenceStageDuration = 0.0f;
 	bPostShotBrightHoldActive = true;
-	ActiveTargetSpotlightMask = 0;
-	SetDarknessImmediate(0.0f);
-	// The red loser light and SpotLight7 switch on the firing frame without the
-	// generic spotlight transition sound; the gun's own live-shot sound owns it.
-	SetZeroDarknessSpotlightEnabled(true);
+	if (ActiveTargetSpotlightMask == 0)
+	{
+		SetDarknessImmediate(0.0f);
+		// The final target switches SpotLight7 on without the generic transition
+		// sound; the gun's own live-shot sound owns this frame.
+		SetZeroDarknessSpotlightEnabled(true);
+	}
+	else
+	{
+		SetDarknessImmediate(TensionDarknessStrength);
+		SetZeroDarknessSpotlightEnabled(false);
+	}
 }
 
 void USDGunVisionSequenceSubsystem::HandleGunEmptyFired(ASDSelfShotGunActor* GunActor)
@@ -1111,11 +1119,18 @@ void USDGunVisionSequenceSubsystem::HandleGunEmptyFired(ASDSelfShotGunActor* Gun
 	SequenceElapsedTime = 0.0f;
 	SequenceStageDuration = 0.0f;
 	bPostShotBrightHoldActive = true;
-	ActiveTargetSpotlightMask = 0;
-	SetDarknessImmediate(0.0f);
-	// Empty chambers use their dedicated click sound and likewise suppress the
-	// generic spotlight transition sound on the full-pull frame.
-	SetZeroDarknessSpotlightEnabled(true);
+	if (ActiveTargetSpotlightMask == 0)
+	{
+		SetDarknessImmediate(0.0f);
+		// Empty chambers use their dedicated click sound and likewise suppress the
+		// generic spotlight transition sound on the final full-pull frame.
+		SetZeroDarknessSpotlightEnabled(true);
+	}
+	else
+	{
+		SetDarknessImmediate(TensionDarknessStrength);
+		SetZeroDarknessSpotlightEnabled(false);
+	}
 }
 
 void USDGunVisionSequenceSubsystem::HandleGunPresentationFinished(ASDSelfShotGunActor* GunActor)
@@ -1284,19 +1299,31 @@ void USDGunVisionSequenceSubsystem::HandleTableCinematicCue(
 		break;
 
 	case ESDTableCinematicCue::TriggerPullCompleted:
-		// The gun emits this local cue on the exact full-pull frame. Clear the red
-		// target light silently; HandleGunFired/HandleGunEmptyFired owns darkness
-		// and SpotLight7 on that same frame.
-		ActiveTargetSpotlightMask = 0;
-		SetTableSpotlightEnabled(false);
-		if (const UWorld* World = GetWorld())
+		// Multiplayer carries the completed target bit. Keep the shared red-light
+		// state and darkness until every scheduled loser has reached this frame.
+		ActiveTargetSpotlightMask = PlayerSlotMask == 0
+			? 0
+			: ActiveTargetSpotlightMask & ~PlayerSlotMask;
+		if (ActiveTargetSpotlightMask == 0)
 		{
-			if (UGameInstance* GameInstance = World->GetGameInstance())
+			SetTableSpotlightEnabled(false);
+			// A queued loser can leave after the preceding shot. GameMode then sends
+			// a late completion mask; because the real fire already happened, release
+			// darkness here instead of waiting for a callback that will never arrive.
+			if (bPostShotBrightHoldActive)
 			{
-				if (UShowDownAudioSubsystem* AudioSubsystem =
-					GameInstance->GetSubsystem<UShowDownAudioSubsystem>())
+				SetDarknessImmediate(0.0f);
+				SetZeroDarknessSpotlightEnabled(true);
+			}
+			if (const UWorld* World = GetWorld())
+			{
+				if (UGameInstance* GameInstance = World->GetGameInstance())
 				{
-					AudioSubsystem->StopLoserSpotlightWarning();
+					if (UShowDownAudioSubsystem* AudioSubsystem =
+						GameInstance->GetSubsystem<UShowDownAudioSubsystem>())
+					{
+						AudioSubsystem->StopLoserSpotlightWarning();
+					}
 				}
 			}
 		}

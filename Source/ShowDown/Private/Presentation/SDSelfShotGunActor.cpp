@@ -454,7 +454,7 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 	{
 	case EGunAnimState::Raising:
 	{
-		const float Alpha = FMath::Clamp(StateElapsedTime / RaiseTime, 0.0f, 1.0f);
+		const float Alpha = FMath::Clamp(StateElapsedTime / ActiveRaiseTime, 0.0f, 1.0f);
 		SetActorTransformAlpha(RaiseStartTransform, GetPresentationGunTransform(), FMath::InterpEaseOut(0.0f, 1.0f, Alpha, 3.0f));
 		if (Alpha >= 1.0f)
 		{
@@ -494,9 +494,22 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 		if (!bCurrentShotWasEmpty)
 		{
 			UpdateMechanismReset();
+			UpdateShotRecoil();
 		}
-		if (StateElapsedTime >= ShotHoldTime)
+		if (StateElapsedTime >= CalculateEffectiveShotHoldTime(
+			ShotHoldTime,
+			ShotRecoilKickTime,
+			ShotRecoilRecoveryTime,
+			bEnableShotRecoil && !bCurrentShotWasEmpty))
 		{
+			if (!bCurrentShotWasEmpty)
+			{
+				SetActorTransform(ShotRecoilBaseTransform);
+			}
+			if (TryStartPendingMultiplayerRoulettePresentation(true))
+			{
+				break;
+			}
 			ReturnStartTransform = GetActorTransform();
 			AnimState = EGunAnimState::Returning;
 			StateElapsedTime = 0.0f;
@@ -505,6 +518,10 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 		break;
 	case EGunAnimState::Returning:
 	{
+		if (TryStartPendingMultiplayerRoulettePresentation(true))
+		{
+			break;
+		}
 		UpdateMechanismReset();
 		const float Alpha = FMath::Clamp(StateElapsedTime / ReturnTime, 0.0f, 1.0f);
 		SetActorTransformAlpha(ReturnStartTransform, RestActorTransform, FMath::InterpEaseIn(0.0f, 1.0f, Alpha, 2.0f));
@@ -676,7 +693,12 @@ float ASDSelfShotGunActor::GetPresentationFinishDelay(bool bLiveRound) const
 {
 	const float ResolveDelay = GetShotResolveDelay();
 	const float GunMotionAfterResolve = bLiveRound
-		? FMath::Max(0.0f, ShotHoldTime) + FMath::Max(0.0f, ReturnTime)
+		? CalculateEffectiveShotHoldTime(
+			ShotHoldTime,
+			ShotRecoilKickTime,
+			ShotRecoilRecoveryTime,
+			bEnableShotRecoil)
+			+ FMath::Max(0.0f, ReturnTime)
 		: FMath::Max(0.0f, EmptyShotImpactTime)
 			+ FMath::Max(0.0f, EmptyShotImpactHoldTime)
 			+ FMath::Max(0.0f, ShotHoldTime)
@@ -830,6 +852,44 @@ FTransform ASDSelfShotGunActor::BuildEliminationTableOverviewTransform(
 		FVector::OneVector);
 }
 
+float ASDSelfShotGunActor::CalculateShotRecoilWeight(
+	float ElapsedTime,
+	float KickDuration,
+	float RecoveryDuration)
+{
+	const float SafeElapsedTime = FMath::Max(0.0f, ElapsedTime);
+	const float SafeKickDuration = FMath::Max(0.0f, KickDuration);
+	const float SafeRecoveryDuration = FMath::Max(0.0f, RecoveryDuration);
+	if (SafeElapsedTime < SafeKickDuration && SafeKickDuration > KINDA_SMALL_NUMBER)
+	{
+		const float KickAlpha = FMath::Clamp(SafeElapsedTime / SafeKickDuration, 0.0f, 1.0f);
+		return FMath::InterpEaseOut(0.0f, 1.0f, KickAlpha, 3.0f);
+	}
+
+	if (SafeRecoveryDuration <= KINDA_SMALL_NUMBER)
+	{
+		return 0.0f;
+	}
+
+	const float RecoveryAlpha = FMath::Clamp(
+		(SafeElapsedTime - SafeKickDuration) / SafeRecoveryDuration,
+		0.0f,
+		1.0f);
+	return FMath::InterpEaseInOut(1.0f, 0.0f, RecoveryAlpha, 2.0f);
+}
+
+float ASDSelfShotGunActor::CalculateEffectiveShotHoldTime(
+	float ShotHoldDuration,
+	float KickDuration,
+	float RecoveryDuration,
+	bool bRecoilEnabled)
+{
+	const float RecoilDuration = bRecoilEnabled
+		? FMath::Max(0.0f, KickDuration) + FMath::Max(0.0f, RecoveryDuration)
+		: 0.0f;
+	return FMath::Max(FMath::Max(0.0f, ShotHoldDuration), RecoilDuration);
+}
+
 int32 ASDSelfShotGunActor::ResolveRaiseBulletLoadStartCount(
 	int32 PreviousBet,
 	int32 NewBet,
@@ -854,6 +914,15 @@ float ASDSelfShotGunActor::CalculateRaiseBulletLoadSequenceDuration(
 
 	return FMath::Max(0.0f, BulletDuration)
 		+ static_cast<float>(ClampedBulletCount - 1) * FMath::Max(0.0f, StaggerDelay);
+}
+
+float ASDSelfShotGunActor::CalculateRaiseBulletTravelAlpha(float NormalizedTime)
+{
+	return FMath::InterpEaseInOut(
+		0.0f,
+		1.0f,
+		FMath::Clamp(NormalizedTime, 0.0f, 1.0f),
+		2.0f);
 }
 
 float ASDSelfShotGunActor::GetRaiseBulletLoadPresentationDuration(
@@ -1241,24 +1310,39 @@ bool ASDSelfShotGunActor::TryResolveCharacterPresentationShot(
 	return true;
 }
 
-void ASDSelfShotGunActor::StartGunUse()
+void ASDSelfShotGunActor::StartGunUse(bool bContinueFromCurrentTransform)
 {
-	if (!CanStartPresentation())
+	if (!bContinueFromCurrentTransform && !CanStartPresentation())
 	{
 		return;
 	}
 
-	RestActorTransform = GetActorTransform();
-	bHasCapturedRestActorTransform = true;
-	RaiseStartTransform = RestActorTransform;
+	if (bContinueFromCurrentTransform)
+	{
+		CancelSelfShotCinematicCamera();
+		RaiseStartTransform = GetActorTransform();
+		ResetTriggerAndHammer();
+		MuzzleFlashLight->SetIntensity(0.0f);
+		MuzzleFlashElapsedTime = 0.0f;
+	}
+	else
+	{
+		RestActorTransform = GetActorTransform();
+		bHasCapturedRestActorTransform = true;
+		RaiseStartTransform = RestActorTransform;
+	}
+	ActiveRaiseTime = FMath::Max(
+		0.01f,
+		bContinueFromCurrentTransform ? MultiplayerTargetTransitionTime : RaiseTime);
 	StateElapsedTime = 0.0f;
 	MechanismResetElapsedTime = 0.0f;
 	HeldGunJitterElapsedTime = 0.0f;
+	bCurrentShotWasEmpty = false;
 	AnimState = EGunAnimState::Raising;
 	bPresentationFinishPending = true;
 	SetActorTickEnabled(true);
 
-	if (bDisableCollisionWhileUsing)
+	if (!bContinueFromCurrentTransform && bDisableCollisionWhileUsing)
 	{
 		OriginalCollisionEnabled = GunMesh->GetCollisionEnabled();
 		GunMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -1315,9 +1399,12 @@ void ASDSelfShotGunActor::FireGun()
 	if (AShowDownGameStateBase* ShowDownGameState =
 		World ? World->GetGameState<AShowDownGameStateBase>() : nullptr)
 	{
+		const uint8 CompletedTargetMask = bMultiplayerRoulettePresentationActive
+			? ShowDownTableCinematics::PlayerSlotToMask(CurrentShotTargetSlot)
+			: 0;
 		ShowDownGameState->OnTableCinematicCue.Broadcast(
 			ESDTableCinematicCue::TriggerPullCompleted,
-			0);
+			CompletedTargetMask);
 	}
 	StateElapsedTime = 0.0f;
 	MechanismResetElapsedTime = 0.0f;
@@ -1352,6 +1439,14 @@ void ASDSelfShotGunActor::FireGun()
 
 void ASDSelfShotGunActor::FireLiveRound()
 {
+	ShotRecoilBaseTransform = GetActorTransform();
+	ShotRecoilDirection = bHasForcedShotAimLocation
+		? (ForcedShotAimLocation - ShotRecoilBaseTransform.GetLocation()).GetSafeNormal()
+		: ShotRecoilBaseTransform.GetUnitAxis(EAxis::X).GetSafeNormal();
+	if (ShotRecoilDirection.IsNearlyZero())
+	{
+		ShotRecoilDirection = FVector::ForwardVector;
+	}
 	AnimState = EGunAnimState::Fired;
 	bCurrentShotWasEmpty = false;
 	MechanismResetStartTriggerRotation = TriggerRestRotation + TriggerPulledRotationOffset;
@@ -1536,6 +1631,37 @@ void ASDSelfShotGunActor::UpdateMechanismReset()
 		HammerRestRotation,
 		EasedAlpha));
 	ChamberPivot->SetRelativeRotation(ChamberCurrentRotation);
+}
+
+void ASDSelfShotGunActor::UpdateShotRecoil()
+{
+	if (!bEnableShotRecoil)
+	{
+		SetActorTransform(ShotRecoilBaseTransform);
+		return;
+	}
+
+	const float RecoilWeight = CalculateShotRecoilWeight(
+		StateElapsedTime,
+		ShotRecoilKickTime,
+		ShotRecoilRecoveryTime);
+	const FVector ShotDirection = ShotRecoilDirection.IsNearlyZero()
+		? FVector::ForwardVector
+		: ShotRecoilDirection.GetSafeNormal();
+	const FVector RecoilLocation = ShotRecoilBaseTransform.GetLocation()
+		- ShotDirection * FMath::Max(0.0f, ShotRecoilBackwardDistance) * RecoilWeight
+		+ FVector::UpVector * FMath::Max(0.0f, ShotRecoilUpwardDistance) * RecoilWeight;
+	const float RiseTangent = FMath::Tan(FMath::DegreesToRadians(
+		FMath::Max(0.0f, ShotRecoilMuzzleRiseDegrees) * RecoilWeight));
+	const FVector RaisedShotDirection = (ShotDirection + FVector::UpVector * RiseTangent).GetSafeNormal();
+	const FQuat RecoilRotation = (
+		FQuat::FindBetweenNormals(ShotDirection, RaisedShotDirection)
+		* ShotRecoilBaseTransform.GetRotation()).GetNormalized();
+
+	SetActorTransform(FTransform(
+		RecoilRotation,
+		RecoilLocation,
+		ShotRecoilBaseTransform.GetScale3D()));
 }
 
 void ASDSelfShotGunActor::ResetTriggerAndHammer()
@@ -2350,11 +2476,7 @@ FTransform ASDSelfShotGunActor::ResolveBettingBulletRestRelativeTransform(int32 
 		return FTransform::Identity;
 	}
 
-	FTransform RestTransform = BulletRestRelativeTransforms[BulletIndex];
-	RestTransform.SetLocation(
-		RestTransform.GetLocation()
-		+ RestTransform.GetRotation().RotateVector(RaiseBulletLoadedLocalOffset));
-	return RestTransform;
+	return BulletRestRelativeTransforms[BulletIndex];
 }
 
 UStaticMeshComponent* ASDSelfShotGunActor::GetBulletMeshComponent(int32 BulletIndex) const
@@ -2407,8 +2529,8 @@ void ASDSelfShotGunActor::SetBulletPresentationImmediate(int32 BulletCount)
 	const int32 ClampedBulletCount = FMath::Clamp(BulletCount, 0, RevolverBulletSlotCount);
 	for (int32 BulletIndex = 0; BulletIndex < RevolverBulletSlotCount; ++BulletIndex)
 	{
-		// The old slot meshes are retained only as authored transform markers.
-		// All visible rounds use the dedicated bulletBetting asset.
+		// The old slot meshes remain authored transform markers only. The pooled
+		// bulletBetting meshes stay hidden outside the temporary raise travel FX.
 		if (UStaticMeshComponent* LegacyBulletMesh = GetBulletMeshComponent(BulletIndex))
 		{
 			LegacyBulletMesh->SetVisibility(false, true);
@@ -2426,9 +2548,10 @@ void ASDSelfShotGunActor::SetBulletPresentationImmediate(int32 BulletCount)
 			SlotTransform.GetLocation(),
 			SlotTransform.GetRotation());
 		BettingBulletMesh->SetRelativeScale3D(FVector(FMath::Max(0.001f, RaiseBulletBettingScale)));
-		const bool bVisible = BulletIndex < ClampedBulletCount;
-		BettingBulletMesh->SetVisibility(bVisible, true);
-		BettingBulletMesh->SetHiddenInGame(!bVisible, true);
+		// The raise bullets are transient travel FX. The authoritative count is
+		// presented by the ammo status UI instead of rounds seated in the cylinder.
+		BettingBulletMesh->SetVisibility(false, true);
+		BettingBulletMesh->SetHiddenInGame(true, true);
 	}
 
 	DisplayedBulletCount = ClampedBulletCount;
@@ -2703,11 +2826,6 @@ void ASDSelfShotGunActor::UpdateRaiseBulletLoadAnimation(float DeltaSeconds)
 	RaiseBulletLoadElapsedTime += FMath::Max(0.0f, DeltaSeconds);
 	const float BulletDuration = FMath::Max(0.05f, RaiseBulletLoadDuration);
 	const float StaggerDelay = FMath::Max(0.0f, RaiseBulletLoadStaggerDelay);
-	const float StartHoldTime = FMath::Clamp(
-		RaiseBulletLoadStartHoldTime,
-		0.0f,
-		FMath::Max(0.0f, BulletDuration - 0.05f));
-	const float TravelDuration = FMath::Max(0.05f, BulletDuration - StartHoldTime);
 	const int32 StartCount = FMath::Clamp(
 		RaiseBulletLoadStartCount,
 		0,
@@ -2716,6 +2834,16 @@ void ASDSelfShotGunActor::UpdateRaiseBulletLoadAnimation(float DeltaSeconds)
 		RaiseBulletLoadTargetCount,
 		StartCount,
 		RevolverBulletSlotCount);
+	const FVector GunWorldLocation = ChamberPivot->GetComponentLocation();
+	const FVector GunToSourceDirection = (
+		ActiveRaiseBulletSourceWorldLocation - GunWorldLocation).GetSafeNormal();
+	const FVector VanishWorldLocation = GunWorldLocation
+		+ GunToSourceDirection * FMath::Max(0.0f, RaiseBulletVanishDistance);
+	const FVector TravelDirection = (
+		VanishWorldLocation - ActiveRaiseBulletSourceWorldLocation).GetSafeNormal();
+	const FQuat TravelWorldRotation = TravelDirection.IsNearlyZero()
+		? ChamberPivot->GetComponentQuat()
+		: FRotationMatrix::MakeFromZ(TravelDirection).ToQuat();
 
 	for (int32 BulletIndex = 0; BulletIndex < RevolverBulletSlotCount; ++BulletIndex)
 	{
@@ -2732,8 +2860,8 @@ void ASDSelfShotGunActor::UpdateRaiseBulletLoadAnimation(float DeltaSeconds)
 				RestTransform.GetLocation(),
 				RestTransform.GetRotation());
 			BettingBulletMesh->SetRelativeScale3D(FVector(FMath::Max(0.001f, RaiseBulletBettingScale)));
-			BettingBulletMesh->SetVisibility(true, true);
-			BettingBulletMesh->SetHiddenInGame(false, true);
+			BettingBulletMesh->SetVisibility(false, true);
+			BettingBulletMesh->SetHiddenInGame(true, true);
 			continue;
 		}
 		if (BulletIndex >= TargetCount)
@@ -2759,88 +2887,21 @@ void ASDSelfShotGunActor::UpdateRaiseBulletLoadAnimation(float DeltaSeconds)
 
 		BettingBulletMesh->SetVisibility(true, true);
 		BettingBulletMesh->SetHiddenInGame(false, true);
-		const FTransform ChamberWorldTransform = ChamberPivot->GetComponentTransform();
-		const FVector TargetWorldLocation = ChamberWorldTransform.TransformPosition(
-			RestTransform.GetLocation());
-		const FQuat TargetWorldRotation = ChamberWorldTransform.TransformRotation(
-			RestTransform.GetRotation());
 		if (LocalElapsedTime >= BulletDuration)
 		{
-			BettingBulletMesh->SetRelativeLocationAndRotation(
-				RestTransform.GetLocation(),
-				RestTransform.GetRotation());
-			BettingBulletMesh->SetRelativeScale3D(FVector(FMath::Max(0.001f, RaiseBulletBettingScale)));
+			BettingBulletMesh->SetVisibility(false, true);
+			BettingBulletMesh->SetHiddenInGame(true, true);
 			continue;
 		}
 
-		const float TravelElapsedTime = FMath::Max(0.0f, LocalElapsedTime - StartHoldTime);
-		const float Alpha = FMath::Clamp(TravelElapsedTime / TravelDuration, 0.0f, 1.0f);
-		FVector EntryAxis = TargetWorldRotation.GetAxisZ().GetSafeNormal();
-		const FVector TargetToSource = (
-			ActiveRaiseBulletSourceWorldLocation - TargetWorldLocation).GetSafeNormal();
-		if (EntryAxis.IsNearlyZero())
-		{
-			EntryAxis = TargetToSource.IsNearlyZero() ? FVector::UpVector : TargetToSource;
-		}
-		else if (!TargetToSource.IsNearlyZero() && FVector::DotProduct(EntryAxis, TargetToSource) < 0.0f)
-		{
-			EntryAxis *= -1.0f;
-		}
-
-		const FVector EntryWorldLocation = TargetWorldLocation
-			+ EntryAxis * FMath::Max(0.0f, RaiseBulletLoadEntryDistance);
-		const float InsertionFraction = FMath::Clamp(
-			RaiseBulletLoadInsertionFraction,
-			0.1f,
-			0.75f);
-		const float ApproachFraction = 1.0f - InsertionFraction;
-		FVector CurrentWorldLocation = TargetWorldLocation;
-		FQuat CurrentWorldRotation = TargetWorldRotation;
-		if (Alpha < ApproachFraction)
-		{
-			const float ApproachAlpha = FMath::Clamp(Alpha / ApproachFraction, 0.0f, 1.0f);
-			const float EasedApproachAlpha = FMath::InterpEaseInOut(
-				0.0f,
-				1.0f,
-				ApproachAlpha,
-				2.0f);
-			CurrentWorldLocation = FMath::Lerp(
-				ActiveRaiseBulletSourceWorldLocation,
-				EntryWorldLocation,
-				EasedApproachAlpha);
-			CurrentWorldLocation += FVector::UpVector
-				* FMath::Sin(EasedApproachAlpha * PI)
-				* FMath::Max(0.0f, RaiseBulletLoadArcHeight);
-
-			const FVector ApproachDirection = (
-				EntryWorldLocation - ActiveRaiseBulletSourceWorldLocation).GetSafeNormal();
-			const FQuat ApproachWorldRotation = ApproachDirection.IsNearlyZero()
-				? TargetWorldRotation
-				: FRotationMatrix::MakeFromZ(ApproachDirection).ToQuat();
-			CurrentWorldRotation = FQuat::Slerp(
-				ApproachWorldRotation,
-				TargetWorldRotation,
-				EasedApproachAlpha).GetNormalized();
-		}
-		else
-		{
-			const float InsertionAlpha = FMath::Clamp(
-				(Alpha - ApproachFraction) / InsertionFraction,
-				0.0f,
-				1.0f);
-			const float EasedInsertionAlpha = FMath::InterpEaseInOut(
-				0.0f,
-				1.0f,
-				InsertionAlpha,
-				2.0f);
-			CurrentWorldLocation = FMath::Lerp(
-				EntryWorldLocation,
-				TargetWorldLocation,
-				EasedInsertionAlpha);
-		}
+		const float Alpha = CalculateRaiseBulletTravelAlpha(LocalElapsedTime / BulletDuration);
+		const FVector CurrentWorldLocation = FMath::Lerp(
+			ActiveRaiseBulletSourceWorldLocation,
+			VanishWorldLocation,
+			Alpha);
 		BettingBulletMesh->SetWorldLocationAndRotation(
 			CurrentWorldLocation,
-			CurrentWorldRotation);
+			TravelWorldRotation);
 		BettingBulletMesh->SetWorldScale3D(FVector(FMath::Max(0.001f, RaiseBulletBettingScale)));
 	}
 
@@ -3272,7 +3333,8 @@ void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(
 	EShowDownPlayerSlot TargetSlot,
 	bool bHit,
 	int32 MatchSequence,
-	int32 RoundSequence)
+	int32 RoundSequence,
+	bool bContinueFromCurrentTransform)
 {
 	const EMultiplayerPresentationContextRelation ContextRelation =
 		CompareMultiplayerPresentationContext(MatchSequence, RoundSequence);
@@ -3287,8 +3349,11 @@ void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(
 		return;
 	}
 
+	const bool bCanContinueFromCurrentTransform = bContinueFromCurrentTransform
+		&& bMultiplayerRoulettePresentationActive
+		&& (AnimState == EGunAnimState::Fired || AnimState == EGunAnimState::Returning);
 	if (ContextRelation == EMultiplayerPresentationContextRelation::Future
-		|| !CanStartPresentation())
+		|| (!bCanContinueFromCurrentTransform && !CanStartPresentation()))
 	{
 		if (GetNetMode() != NM_DedicatedServer)
 		{
@@ -3346,15 +3411,16 @@ void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(
 		bHasForcedShotRotationOffset = true;
 	}
 
-	StartGunUse();
+	StartGunUse(bCanContinueFromCurrentTransform);
 }
 
-void ASDSelfShotGunActor::TryStartPendingMultiplayerRoulettePresentation()
+bool ASDSelfShotGunActor::TryStartPendingMultiplayerRoulettePresentation(
+	bool bContinueFromCurrentTransform)
 {
 	if (GetNetMode() == NM_DedicatedServer
 		|| PendingMultiplayerRoulettePresentations.IsEmpty())
 	{
-		return;
+		return false;
 	}
 
 	while (!PendingMultiplayerRoulettePresentations.IsEmpty())
@@ -3370,10 +3436,13 @@ void ASDSelfShotGunActor::TryStartPendingMultiplayerRoulettePresentation()
 			PendingMultiplayerRoulettePresentations.RemoveAt(0);
 			continue;
 		}
+		const bool bCanContinueFromCurrentTransform = bContinueFromCurrentTransform
+			&& bMultiplayerRoulettePresentationActive
+			&& (AnimState == EGunAnimState::Fired || AnimState == EGunAnimState::Returning);
 		if (ContextRelation == EMultiplayerPresentationContextRelation::Future
-			|| !CanStartPresentation())
+			|| (!bCanContinueFromCurrentTransform && !CanStartPresentation()))
 		{
-			return;
+			return false;
 		}
 
 		const FPendingMultiplayerRoulettePresentation PresentationToStart =
@@ -3383,9 +3452,12 @@ void ASDSelfShotGunActor::TryStartPendingMultiplayerRoulettePresentation()
 			PresentationToStart.TargetSlot,
 			PresentationToStart.bHit,
 			PresentationToStart.MatchSequence,
-			PresentationToStart.RoundSequence);
-		return;
+			PresentationToStart.RoundSequence,
+			bCanContinueFromCurrentTransform);
+		return true;
 	}
+
+	return false;
 }
 
 ASDSelfShotGunActor::EMultiplayerPresentationContextRelation

@@ -552,6 +552,8 @@ protected:
 	FShowDownHitRecoveryPresentationState HitRecoveryPresentationState;
 
 private:
+	friend class FShowDownGunVisionSequenceTimingTest;
+
 	void ApplyCharacterSkin();
 	void ApplyCharacterAnimState(EShowDownCharacterAnimState NewState);
 	void FinishCharacterActionAnimIfCurrent(EShowDownCharacterAnimState FinishedState);
@@ -606,6 +608,7 @@ private:
 	bool bNameTagVisibilityInitialized = false;
 	bool bLastNameTagVisible = false;
 	bool bLoserSpotlightActive = false;
+	bool bInitialDealPresentationActive = false;
 	bool bRoundStatusSpotLightTurnColorCached = false;
 	FLinearColor RoundStatusSpotLightTurnColor = FLinearColor::White;
 

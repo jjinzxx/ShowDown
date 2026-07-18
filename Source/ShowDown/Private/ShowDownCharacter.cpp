@@ -1155,6 +1155,16 @@ void AShowDownCharacter::HandleTableCinematicCue(
 	ESDTableCinematicCue Cue,
 	uint8 PlayerSlotMask)
 {
+	if (Cue == ESDTableCinematicCue::InitialDealStarted)
+	{
+		bInitialDealPresentationActive = true;
+	}
+	else if (Cue == ESDTableCinematicCue::InitialDealFinished
+		|| Cue == ESDTableCinematicCue::Reset)
+	{
+		bInitialDealPresentationActive = false;
+	}
+
 	if (Cue == ESDTableCinematicCue::LoserSpotlight)
 	{
 		const bool bMultiplayerTarget = ShowDownTableCinematics::IsPlayerSlotInMask(
@@ -1173,9 +1183,14 @@ void AShowDownCharacter::HandleTableCinematicCue(
 	}
 	else if (Cue == ESDTableCinematicCue::TriggerPullCompleted)
 	{
-		// The red loser light stays on throughout trigger travel and clears only
-		// on the gun actor's exact full-pull/fire frame.
-		bLoserSpotlightActive = false;
+		// Multiplayer completion carries only the fired target's seat bit. Keep
+		// every later loser red until their own trigger reaches the firing frame.
+		// Mask zero remains the legacy single-player clear-all signal.
+		if (PlayerSlotMask == 0
+			|| ShowDownTableCinematics::IsPlayerSlotInMask(PlayerSlotMask, PlayerSlot))
+		{
+			bLoserSpotlightActive = false;
+		}
 	}
 	else if (Cue == ESDTableCinematicCue::Reset
 		|| Cue == ESDTableCinematicCue::MatchIntro
@@ -2198,7 +2213,10 @@ void AShowDownCharacter::RefreshRoundStatusSpotlight()
 		&& (ShowDownGameState->CurrentPhase == EShowDownPhase::Betting
 			|| ShowDownGameState->CurrentPhase == EShowDownPhase::SelectCard);
 	const bool bShowLoser = bLoserSpotlightActive;
-	const bool bShowTurn = !bShowLoser && bTurnPhase && IsNameTagTurnActive();
+	const bool bShowTurn = !bShowLoser
+		&& !bInitialDealPresentationActive
+		&& bTurnPhase
+		&& IsNameTagTurnActive();
 	const bool bVisible = bCharacterSceneActive
 		&& !bHitRecoveryVisualConcealed
 		&& !HitRecoveryPresentationState.bActive

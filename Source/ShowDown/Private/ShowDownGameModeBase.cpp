@@ -74,6 +74,15 @@ namespace
 		return Mask;
 	}
 
+	void ExecuteOneShotContinuation(const TSharedPtr<TFunction<void()>>& Continuation)
+	{
+		if (Continuation && *Continuation)
+		{
+			TFunction<void()> FunctionToExecute = MoveTemp(*Continuation);
+			FunctionToExecute();
+		}
+	}
+
 	int32 GetMultiplayerTurnOrderIndex(EShowDownPlayerSlot Slot)
 	{
 		return ShowDownMultiplayerRoundFlow::GetMultiplayerTurnOrderIndex(Slot);
@@ -932,13 +941,14 @@ void AShowDownGameModeBase::ResetForHubReturn()
 	bSingleBetTransitionInProgress = false;
 	bCollectorTurnLeadInProgress = false;
 	bCollectorCardSelectionPending = false;
+	bPlayerCardSelectionPresentationComplete = false;
+	bCollectorCardSelectionPresentationComplete = false;
 	bBossChatReplyInFlight = false;
 	bHasPendingBossChatReply = false;
 	PendingBossChatReplyDialogue.Empty();
 	bPendingSelfShotRouletteResult = false;
 	PendingSelfShotTriggerTargetMask = 0;
 	PendingMultiplayerTriggerTargetMask = 0;
-	CardPlacementDelayContinuation = TFunction<void()>();
 	CollectorActionPresentationContinuation = TFunction<void()>();
 	SelfShotGunResultContinuation = TFunction<void()>();
 	SelfShotGunPresentationContinuation = TFunction<void()>();
@@ -981,7 +991,6 @@ void AShowDownGameModeBase::PlayerSelectedCardFromController(AController* Submit
 	}
 
 	if (bInitialCardDealPresentationInProgress
-		|| bCollectorActionPresentationInProgress
 		|| bCollectorBetDecisionInProgress)
 	{
 		return;
@@ -1028,6 +1037,17 @@ void AShowDownGameModeBase::PlayerSelectedCardFromController(AController* Submit
 	// collector responds. Lock the remaining cards immediately so the completed
 	// choice cannot still look interactive during that presentation.
 	SetPlayerHandSelectable(false);
+	if (!PlayerState.ForeheadCard)
+	{
+		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+		{
+			ShowDownGameState->SetNameTagSingleRoundStatus(
+				0,
+				0,
+				EShowDownSide::Collector,
+				EShowDownPlayerSlot::Player1);
+		}
+	}
 
 	CardSystem->RemoveCardFromHand(PlayerState.HandCards, SelectedCard);
 	ReflowHandCards(EShowDownSide::Player);
@@ -1044,14 +1064,12 @@ void AShowDownGameModeBase::PlayerSelectedCardFromController(AController* Submit
 	{
 		PlayCollectorActionPresentationThen([this]()
 		{
-			if (PlayerState.ForeheadCard)
-			{
-				StartBettingPhase();
-			}
-			else
+			bPlayerCardSelectionPresentationComplete = true;
+			if (!PlayerState.ForeheadCard)
 			{
 				QueueCollectorGiveCardToPlayer();
 			}
+			TryStartBettingAfterCardSelections();
 		});
 	});
 }
@@ -2747,34 +2765,8 @@ void AShowDownGameModeBase::PlayCollectorActionPresentation()
 
 void AShowDownGameModeBase::WaitForCardPlacementThen(ACard* Card, TFunction<void()>&& Continuation)
 {
-	CardPlacementDelayContinuation = MoveTemp(Continuation);
-
 	const float PlacementDelay = IsValid(Card) ? Card->GetSlotAttachMotionTotalSeconds() : 0.0f;
-	if (PlacementDelay <= KINDA_SMALL_NUMBER)
-	{
-		FinishCardPlacementWait();
-		return;
-	}
-
-	GetWorldTimerManager().ClearTimer(CardPlacementDelayHandle);
-	GetWorldTimerManager().SetTimer(
-		CardPlacementDelayHandle,
-		this,
-		&AShowDownGameModeBase::FinishCardPlacementWait,
-		PlacementDelay,
-		false);
-}
-
-void AShowDownGameModeBase::FinishCardPlacementWait()
-{
-	GetWorldTimerManager().ClearTimer(CardPlacementDelayHandle);
-
-	TFunction<void()> Continuation = MoveTemp(CardPlacementDelayContinuation);
-	CardPlacementDelayContinuation = TFunction<void()>();
-	if (Continuation)
-	{
-		Continuation();
-	}
+	ScheduleSingleRoundCinematicAction(PlacementDelay, MoveTemp(Continuation));
 }
 
 void AShowDownGameModeBase::PlayCollectorActionPresentationThen(TFunction<void()>&& Continuation)
@@ -3898,6 +3890,24 @@ float AShowDownGameModeBase::CalculateRouletteProgressionFinishDelay(
 		FMath::Max(0.0f, ResultDelay) + FMath::Max(0.0f, PostShotHoldDuration));
 }
 
+float AShowDownGameModeBase::CalculateRouletteTargetHandoffDelay(
+	float ResultDelay,
+	float PresentationFinishDelay,
+	float PostShotHoldDuration,
+	float InterShotDelay,
+	bool bHasFollowingTarget)
+{
+	if (bHasFollowingTarget)
+	{
+		return FMath::Max(0.0f, ResultDelay) + FMath::Max(0.0f, InterShotDelay);
+	}
+
+	return CalculateRouletteProgressionFinishDelay(
+		ResultDelay,
+		PresentationFinishDelay,
+		PostShotHoldDuration);
+}
+
 float AShowDownGameModeBase::CalculateRaiseBulletLoadHandoffDelay(
 	float BaseActionInterval,
 	float PresentationDuration,
@@ -3991,11 +4001,8 @@ void AShowDownGameModeBase::CollectorGiveCardToPlayer()
 	{
 		PlayCollectorActionPresentationThen([this]()
 		{
-			if (CollectorState.ForeheadCard)
-			{
-				StartBettingPhase();
-			}
-			else
+			bCollectorCardSelectionPresentationComplete = true;
+			if (!CollectorState.ForeheadCard)
 			{
 				SetPlayerHandSelectable(true);
 				if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
@@ -4009,8 +4016,23 @@ void AShowDownGameModeBase::CollectorGiveCardToPlayer()
 					EShowDownSide::Player,
 					EShowDownPlayerSlot::Player1);
 			}
+			TryStartBettingAfterCardSelections();
 		});
 	});
+}
+
+void AShowDownGameModeBase::TryStartBettingAfterCardSelections()
+{
+	if (bBettingPhase
+		|| !PlayerState.ForeheadCard
+		|| !CollectorState.ForeheadCard
+		|| !bPlayerCardSelectionPresentationComplete
+		|| !bCollectorCardSelectionPresentationComplete)
+	{
+		return;
+	}
+
+	StartBettingPhase();
 }
 
 void AShowDownGameModeBase::StartBettingPhase()
@@ -5613,6 +5635,8 @@ void AShowDownGameModeBase::BeginCardSelectionRound()
 	ClearDecisionTimer();
 	ResetCurrentRoundMemory();
 	CurrentRoundFirstSide = NextRoundFirstSide;
+	bPlayerCardSelectionPresentationComplete = false;
+	bCollectorCardSelectionPresentationComplete = false;
 
 	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 	{
@@ -5621,19 +5645,23 @@ void AShowDownGameModeBase::BeginCardSelectionRound()
 	}
 	BroadcastTableCinematicCue(ESDTableCinematicCue::TableSpotlightOff, 0);
 
-	if (CurrentRoundFirstSide == EShowDownSide::Collector)
-	{
-		SetPlayerHandSelectable(false);
-		QueueCollectorGiveCardToPlayer();
-		return;
-	}
-
 	SetPlayerHandSelectable(true);
 	StartDecisionTimer(
 		EShowDownDecisionTimerKind::CardSelection,
 		CardSelectionTimeLimitSeconds,
 		EShowDownSide::Player,
 		EShowDownPlayerSlot::Player1);
+	QueueCollectorGiveCardToPlayer();
+	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+	{
+		// Card giving is simultaneous in single-player. Keep the local choice
+		// highlighted even while the Collector is preparing its own card.
+		ShowDownGameState->SetNameTagSingleRoundStatus(
+			0,
+			0,
+			EShowDownSide::Player,
+			EShowDownPlayerSlot::Player1);
+	}
 }
 
 void AShowDownGameModeBase::SetNextRoundFirstSideFromResult(EShowDownRoundResult Result)
@@ -9559,11 +9587,116 @@ void AShowDownGameModeBase::PlayMultiplayerRouletteTargetsSequentially(
 			&& Target->Lives > 0
 			&& Target->ForeheadCard)
 		{
+			bool bHasFollowingTarget = false;
+			uint8 FollowingTargetMask = 0;
+			for (int32 FollowingIndex = TargetIndex + 1; FollowingIndex < Targets.Num(); ++FollowingIndex)
+			{
+				ASDPlayerState* FollowingTarget = Targets[FollowingIndex].Get();
+				if (FollowingTarget)
+				{
+					FollowingTargetMask |= ShowDownTableCinematics::PlayerSlotToMask(
+						FollowingTarget->ShowDownSlot);
+				}
+				if (FollowingTarget
+					&& MultiplayerPlayers.Contains(FollowingTarget)
+					&& FollowingTarget->Lives > 0
+					&& FollowingTarget->ForeheadCard)
+				{
+					bHasFollowingTarget = true;
+				}
+			}
+			if (bHasFollowingTarget)
+			{
+				const EShowDownPlayerSlot CompletedTargetSlot = Target->ShowDownSlot;
+				TSharedPtr<TFunction<void()>> FastFollowUpContinuation =
+					MakeShared<TFunction<void()>>(
+						[this, Targets = MoveTemp(Targets), TargetIndex, FollowingTargetMask, CompletedTargetSlot]() mutable
+						{
+							ScheduleMultiplayerRoundAction(
+								MultiplayerRouletteInterShotDelaySeconds,
+								[this, Targets = MoveTemp(Targets), TargetIndex, FollowingTargetMask, CompletedTargetSlot]() mutable
+								{
+									uint8 ValidFollowingTargetMask = 0;
+									for (int32 FollowingIndex = TargetIndex + 1; FollowingIndex < Targets.Num(); ++FollowingIndex)
+									{
+										ASDPlayerState* FollowingTarget = Targets[FollowingIndex].Get();
+										if (FollowingTarget
+											&& MultiplayerPlayers.Contains(FollowingTarget)
+											&& FollowingTarget->Lives > 0
+											&& FollowingTarget->ForeheadCard)
+										{
+											ValidFollowingTargetMask |= ShowDownTableCinematics::PlayerSlotToMask(
+												FollowingTarget->ShowDownSlot);
+										}
+									}
+
+									const uint8 SkippedTargetMask = FollowingTargetMask & ~ValidFollowingTargetMask;
+									if (SkippedTargetMask != 0)
+									{
+										BroadcastTableCinematicCue(
+											ESDTableCinematicCue::TriggerPullCompleted,
+											SkippedTargetMask);
+									}
+
+									if (ValidFollowingTargetMask == 0)
+									{
+										float FinalShotHoldDelay = FMath::Max(
+											0.0f,
+											RoundCinematicPostShotProgressHoldSeconds);
+										if (const ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
+										{
+											const float ResolveDelay = GunActor->GetShotResolveDelay();
+											const float MaxRemainingGunPresentation = FMath::Max(
+												GunActor->GetPresentationFinishDelay(false),
+												GunActor->GetPresentationFinishDelay(true))
+												- ResolveDelay;
+											FinalShotHoldDelay = FMath::Max(
+												FinalShotHoldDelay,
+												FMath::Max(0.0f, MaxRemainingGunPresentation));
+										}
+										if (const AShowDownCharacter* CompletedTargetCharacter =
+											FindActiveCharacterForPlayerSlot(GetWorld(), CompletedTargetSlot))
+										{
+											FinalShotHoldDelay = FMath::Max(
+												FinalShotHoldDelay,
+												CompletedTargetCharacter->GetHitRecoveryPresentationDuration());
+										}
+										if (GetWorld())
+										{
+											MultiplayerRoundProgressBlockedUntilSeconds = FMath::Max(
+												MultiplayerRoundProgressBlockedUntilSeconds,
+												GetWorld()->GetTimeSeconds() + FinalShotHoldDelay);
+										}
+										ScheduleMultiplayerRoundAction(
+											FinalShotHoldDelay,
+											[this]()
+											{
+												EndMultiplayerRound();
+											});
+										return;
+									}
+
+									PlayMultiplayerRouletteTargetsSequentially(
+										MoveTemp(Targets),
+										TargetIndex + 1);
+								});
+						});
+				ApplyMultiplayerRoulette(
+					Target,
+					MultiplayerLiveRoundCount,
+					0.0f,
+					true,
+					true,
+					MoveTemp(FastFollowUpContinuation));
+				return;
+			}
+
 			const float ShotProgressionDelay = ApplyMultiplayerRoulette(
 				Target,
 				MultiplayerLiveRoundCount,
 				0.0f,
-				true);
+				true,
+				false);
 			ScheduleMultiplayerRoundAction(
 				ShotProgressionDelay,
 				[this, Targets = MoveTemp(Targets), TargetIndex]() mutable
@@ -9659,10 +9792,13 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 	ASDPlayerState* TargetPlayer,
 	int32 BulletCount,
 	float StartDelay,
-	bool bUseSharedChambers)
+	bool bUseSharedChambers,
+	bool bAllowFastFollowUp,
+	TSharedPtr<TFunction<void()>> FastFollowUpContinuation)
 {
 	if (!TargetPlayer || !RouletteSystem)
 	{
+		ExecuteOneShotContinuation(FastFollowUpContinuation);
 		return 0.0f;
 	}
 
@@ -9688,22 +9824,31 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 			ResultDelay,
 			MaxPresentationDelay,
 			MaxCharacterRecoveryDuration);
-		const float ReservedProgressionFinishDelay = CalculateRouletteProgressionFinishDelay(
+		const float ReservedProgressionFinishDelay = CalculateRouletteTargetHandoffDelay(
 			ResultDelay,
 			ReservedPresentationFinishDelay,
-			RoundCinematicPostShotProgressHoldSeconds);
+			RoundCinematicPostShotProgressHoldSeconds,
+			MultiplayerRouletteInterShotDelaySeconds,
+			bAllowFastFollowUp);
 		const TWeakObjectPtr<ASDPlayerState> WeakQueuedTarget(TargetPlayer);
-		ScheduleMultiplayerRoundAction(SafeStartDelay, [this, WeakQueuedTarget]()
+		ScheduleMultiplayerRoundAction(SafeStartDelay, [this, WeakQueuedTarget, bAllowFastFollowUp, FastFollowUpContinuation]()
 		{
 			ASDPlayerState* QueuedTarget = WeakQueuedTarget.Get();
 			if (!QueuedTarget
 				|| !MultiplayerPlayers.Contains(QueuedTarget)
 				|| QueuedTarget->Lives <= 0)
 			{
+				ExecuteOneShotContinuation(FastFollowUpContinuation);
 				return;
 			}
 
-			ApplyMultiplayerRoulette(QueuedTarget, MultiplayerLiveRoundCount, 0.0f, true);
+			ApplyMultiplayerRoulette(
+				QueuedTarget,
+				MultiplayerLiveRoundCount,
+				0.0f,
+				true,
+				bAllowFastFollowUp,
+				FastFollowUpContinuation);
 		});
 		return SafeStartDelay + ReservedProgressionFinishDelay;
 	}
@@ -9748,20 +9893,22 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 		ResultDelay,
 		ResolveMultiplayerRoulettePresentationDelay(bHit),
 		CharacterRecoveryDuration);
-	const float ProgressionFinishDelay = CalculateRouletteProgressionFinishDelay(
+	const float ProgressionFinishDelay = CalculateRouletteTargetHandoffDelay(
 		ResultDelay,
 		FinishDelay,
-		RoundCinematicPostShotProgressHoldSeconds);
+		RoundCinematicPostShotProgressHoldSeconds,
+		MultiplayerRouletteInterShotDelaySeconds,
+		bAllowFastFollowUp);
 	const TWeakObjectPtr<ASDPlayerState> WeakTargetPlayer(TargetPlayer);
 	const int32 PresentationMatchSequence = MultiplayerMatchSequence;
 	const int32 PresentationRoundSequence = static_cast<int32>(MultiplayerRoundSequence);
 
-	auto BroadcastResult = [this, WeakTargetPlayer, TargetSlot, TargetName, ClampedBulletCount, bHit, LiveRoundsAfterShot, ChambersAfterShot]()
+	auto BroadcastResult = [this, WeakTargetPlayer, TargetSlot, TargetName, ClampedBulletCount, bHit, LiveRoundsAfterShot, ChambersAfterShot, bAllowFastFollowUp, FastFollowUpContinuation]()
 	{
 		// The gun callback is the authoritative shot frame even if the target
 		// disconnects in the same network window. Keep the progression gate tied
 		// to that frame before checking whether player state still exists.
-		if (GetWorld())
+		if (!bAllowFastFollowUp && GetWorld())
 		{
 			MultiplayerRoundProgressBlockedUntilSeconds = FMath::Max(
 				MultiplayerRoundProgressBlockedUntilSeconds,
@@ -9771,6 +9918,7 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 		ASDPlayerState* ResolvedTargetPlayer = WeakTargetPlayer.Get();
 		if (!ResolvedTargetPlayer || !MultiplayerPlayers.Contains(ResolvedTargetPlayer))
 		{
+			ExecuteOneShotContinuation(FastFollowUpContinuation);
 			return;
 		}
 
@@ -9834,17 +9982,21 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 				EShowDownPhase::Roulette,
 				TargetSlot);
 		}
+		ExecuteOneShotContinuation(FastFollowUpContinuation);
 	};
 
-	auto StartPresentation = [this, WeakTargetPlayer, TargetSlot, TargetName, ClampedBulletCount, bHit, ResultDelay, FinishDelay, BroadcastResult, LiveRoundsBeforeShot, ChambersBeforeShot, PresentationMatchSequence, PresentationRoundSequence]()
+	auto StartPresentation = [this, WeakTargetPlayer, TargetSlot, TargetName, ClampedBulletCount, bHit, ResultDelay, FinishDelay, BroadcastResult, LiveRoundsBeforeShot, ChambersBeforeShot, PresentationMatchSequence, PresentationRoundSequence, FastFollowUpContinuation]()
 	{
 		if (!WeakTargetPlayer.IsValid())
 		{
+			ExecuteOneShotContinuation(FastFollowUpContinuation);
 			return;
 		}
 
 		ASDSelfShotGunActor* GunActor = FindSelfShotGunActor();
-		const bool bResolveFromGunEvent = GunActor && GunActor->CanStartPresentation();
+		const bool bResolveFromGunEvent = GunActor
+			&& (GunActor->CanStartPresentation()
+				|| GunActor->IsMultiplayerRoulettePresentation());
 		if (bResolveFromGunEvent)
 		{
 			TFunction<void()> GunResultContinuation = BroadcastResult;
@@ -10642,18 +10794,26 @@ FSDCardHandLayoutSettings AShowDownGameModeBase::ResolveHandLayoutSettingsForPla
 
 		const bool bSideSeat = Player->ShowDownSlot == EShowDownPlayerSlot::Player3
 			|| Player->ShowDownSlot == EShowDownPlayerSlot::Player4;
-		const bool bHasLegacySideSeatLayout =
+		const bool bHasLegacyGenericSideSeatLayout =
 			FMath::IsNearlyEqual(Settings.CardSpacing, 70.0f)
 			&& FMath::IsNearlyEqual(Settings.ForwardOffset, 180.0f)
 			&& FMath::IsNearlyEqual(Settings.HeightOffset, 65.0f)
 			&& FMath::IsNearlyZero(Settings.LeanAngle)
 			&& FMath::IsNearlyEqual(Settings.LayerStep, 0.5f);
+		const bool bHasLegacyCompactSideSeatLayout =
+			FMath::IsNearlyEqual(Settings.CardSpacing, 9.0f)
+			&& FMath::IsNearlyZero(Settings.ForwardOffset)
+			&& FMath::IsNearlyZero(Settings.HeightOffset)
+			&& FMath::IsNearlyZero(Settings.LeanAngle)
+			&& FMath::IsNearlyZero(Settings.LayerStep);
+		const bool bHasLegacySideSeatLayout =
+			bHasLegacyGenericSideSeatLayout || bHasLegacyCompactSideSeatLayout;
 		if (bSideSeat && bHasLegacySideSeatLayout)
 		{
-			// Existing maps serialized the generic hand defaults into the Player 3/4
-			// Blueprint instances. Normalize only that exact legacy preset so future
-			// deliberately authored side-seat layouts remain untouched.
-			Settings.CardSpacing = 9.0f;
+			// Normalize the two exact legacy Player 3/4 presets. Both the old generic
+			// preset and the old compact preset now share the single-player gap while
+			// deliberately authored custom layouts remain untouched.
+			Settings.CardSpacing = CardSpacing;
 			Settings.ForwardOffset = 0.0f;
 			Settings.HeightOffset = 0.0f;
 			Settings.LeanAngle = 0.0f;

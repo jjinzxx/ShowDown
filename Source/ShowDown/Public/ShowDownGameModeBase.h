@@ -232,13 +232,18 @@ public:
 		float GunPresentationDelay,
 		float HitRecoveryDuration);
 
-	// Multiplayer may queue several roulette targets before the first gun fires.
-	// Reserve the post-shot hold in that queue so later shots and EndRound cannot
-	// collapse onto the same unblock frame.
+	// The final roulette target reserves both its presentation and post-shot hold
+	// so EndRound cannot collapse onto the firing frame.
 	static float CalculateRouletteProgressionFinishDelay(
 		float ResultDelay,
 		float PresentationFinishDelay,
 		float PostShotHoldDuration);
+	static float CalculateRouletteTargetHandoffDelay(
+		float ResultDelay,
+		float PresentationFinishDelay,
+		float PostShotHoldDuration,
+		float InterShotDelay,
+		bool bHasFollowingTarget);
 
 	// Keeps the next multiplayer turn from overtaking a configurable bullet-load
 	// cascade, while retaining the normal action interval for shorter effects.
@@ -438,6 +443,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Post Shot Progress Hold"))
 	float RoundCinematicPostShotProgressHoldSeconds = 3.5f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Round Cinematic", meta = (ClampMin = "0.0", DisplayName = "Sequential Shot Handoff"))
+	float MultiplayerRouletteInterShotDelaySeconds = 0.05f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (DisplayName = "Use Initial Card Deal Presentation"))
 	bool bUseInitialCardDealPresentation = true;
 
@@ -547,16 +555,16 @@ private:
 	bool bSingleBetTransitionInProgress = false;
 	bool bCollectorTurnLeadInProgress = false;
 	bool bCollectorCardSelectionPending = false;
+	bool bPlayerCardSelectionPresentationComplete = false;
+	bool bCollectorCardSelectionPresentationComplete = false;
 	bool bHasPendingRoundReveal = false;
 	bool bHasPendingFoldReveal = false;
 	bool bCollectorActionPresentationInProgress = false;
 	EShowDownRoundResult PendingRoundResult = EShowDownRoundResult::Draw;
 	EShowDownSide PendingFoldedSide = EShowDownSide::Player;
 	int32 PendingFoldLoadCount = 1;
-	FTimerHandle CardPlacementDelayHandle;
 	FTimerHandle CollectorActionPresentationTimerHandle;
 	FTimerHandle SelfShotHitRecoveryWaitTimerHandle;
-	TFunction<void()> CardPlacementDelayContinuation;
 	TFunction<void()> CollectorActionPresentationContinuation;
 	TFunction<void()> SelfShotGunResultContinuation;
 	TFunction<void()> SelfShotGunPresentationContinuation;
@@ -748,6 +756,7 @@ private:
 	void FindCollector();
 	void QueueCollectorGiveCardToPlayer();
 	void CollectorGiveCardToPlayer();
+	void TryStartBettingAfterCardSelections();
 	float EstimateCollectorWinChance() const;
 	void ResolveCollectorBetResponse();
 	void QueueCollectorBetResponseAfterFocus();
@@ -834,7 +843,6 @@ private:
 	void ClearHandCards();
 	void SetPlayerHandSelectable(bool bSelectable);
 	void WaitForCardPlacementThen(ACard* Card, TFunction<void()>&& Continuation);
-	void FinishCardPlacementWait();
 	void PlayCollectorActionPresentation();
 	void PlayCollectorActionPresentationThen(TFunction<void()>&& Continuation);
 	void FinishCollectorActionPresentation();
@@ -1006,7 +1014,13 @@ private:
 		int32 PreviousBet,
 		int32 NewBet,
 		EShowDownPlayerSlot SourceSlot);
-	float ApplyMultiplayerRoulette(ASDPlayerState* TargetPlayer, int32 BulletCount, float StartDelay = 0.0f, bool bUseSharedChambers = false);
+	float ApplyMultiplayerRoulette(
+		ASDPlayerState* TargetPlayer,
+		int32 BulletCount,
+		float StartDelay = 0.0f,
+		bool bUseSharedChambers = false,
+		bool bAllowFastFollowUp = false,
+		TSharedPtr<TFunction<void()>> FastFollowUpContinuation = nullptr);
 	void EndMultiplayerRound();
 	void ShowMultiplayerFinalRanking(ASDPlayerState* Winner);
 	void SetMultiplayerSelectableHand(ASDPlayerState* Player);

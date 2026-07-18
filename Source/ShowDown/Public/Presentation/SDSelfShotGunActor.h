@@ -131,6 +131,15 @@ public:
 		float BackDistance,
 		float Height,
 		float LookAtHeight);
+	static float CalculateShotRecoilWeight(
+		float ElapsedTime,
+		float KickDuration,
+		float RecoveryDuration);
+	static float CalculateEffectiveShotHoldTime(
+		float ShotHoldDuration,
+		float KickDuration,
+		float RecoveryDuration,
+		bool bRecoilEnabled);
 	static int32 ResolveRaiseBulletLoadStartCount(
 		int32 PreviousBet,
 		int32 NewBet,
@@ -139,6 +148,7 @@ public:
 		int32 BulletCount,
 		float BulletDuration,
 		float StaggerDelay);
+	static float CalculateRaiseBulletTravelAlpha(float NormalizedTime);
 	float GetRaiseBulletLoadPresentationDuration(int32 PreviousBet, int32 NewBet) const;
 
 	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Status")
@@ -299,14 +309,14 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UStaticMeshComponent> BulletMesh06;
 
-	/** bulletBetting meshes used for both the hand-to-gun travel and settled rounds. */
+	/** Pooled bulletBetting meshes used for the temporary hand-to-gun travel effect. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TArray<TObjectPtr<UStaticMeshComponent>> BettingBulletMeshes;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading")
 	bool bEnableRaiseBulletLoadAnimation = true;
 
-	/** Optional full reload. Disabled by default so a 1 -> 4 raise inserts exactly three new bullets. */
+	/** Optional full replay. Disabled by default so a 1 -> 4 raise flies exactly three new bullets. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading")
 	bool bReloadAllBulletsOnRaise = false;
 
@@ -314,7 +324,7 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading")
 	FVector RaiseBulletLoadStartOffset = FVector(86.0f, 0.0f, 12.0f);
 
-	/** Socket/bone used as the start of the straight loading path. */
+	/** Socket/bone used as the start of the direct hand-to-gun path. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading")
 	FName RaiseBulletSourceHandName = TEXT("RightHand");
 
@@ -327,30 +337,14 @@ protected:
 	FVector RaiseBulletFallbackCharacterOffset = FVector(32.0f, 26.0f, 42.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.05"))
-	float RaiseBulletLoadDuration = 0.85f;
+	float RaiseBulletLoadDuration = 0.95f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.0"))
-	float RaiseBulletLoadStaggerDelay = 0.16f;
+	float RaiseBulletLoadStaggerDelay = 0.18f;
 
-	/** Keeps each incoming bullet readable at its spawn point before it travels into the cylinder. */
+	/** Stops the temporary bullet just short of the gun before it is hidden. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.0"))
-	float RaiseBulletLoadStartHoldTime = 0.10f;
-
-	/** Local-space correction applied to the authored cylinder slot for the bulletBetting mesh. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading")
-	FVector RaiseBulletLoadedLocalOffset = FVector(0.0f, 0.0f, -1.5f);
-
-	/** Distance from the cylinder slot where the final aligned insertion begins. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.0"))
-	float RaiseBulletLoadEntryDistance = 18.0f;
-
-	/** Fraction of travel time reserved for the straight cylinder-axis insertion. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.1", ClampMax = "0.75"))
-	float RaiseBulletLoadInsertionFraction = 0.30f;
-
-	/** Small lift on the approach path before the bullet aligns with the cylinder. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.0"))
-	float RaiseBulletLoadArcHeight = 14.0f;
+	float RaiseBulletVanishDistance = 12.0f;
 
 	/** World scale for /Game/Fab/Revolver/bulletBetting. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.001"))
@@ -433,6 +427,27 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Timing", meta = (ClampMin = "0.01"))
 	float ReturnTime = 0.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Timing", meta = (ClampMin = "0.01", DisplayName = "Multiplayer Target Transition Time"))
+	float MultiplayerTargetTransitionTime = 0.24f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Recoil")
+	bool bEnableShotRecoil = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Recoil", meta = (ClampMin = "0.0", DisplayName = "Kick Time"))
+	float ShotRecoilKickTime = 0.055f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Recoil", meta = (ClampMin = "0.0", DisplayName = "Recovery Time"))
+	float ShotRecoilRecoveryTime = 0.18f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Recoil", meta = (ClampMin = "0.0", DisplayName = "Backward Distance"))
+	float ShotRecoilBackwardDistance = 7.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Recoil", meta = (ClampMin = "0.0", DisplayName = "Upward Distance"))
+	float ShotRecoilUpwardDistance = 5.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Recoil", meta = (ClampMin = "0.0", ClampMax = "45.0", DisplayName = "Muzzle Rise Degrees"))
+	float ShotRecoilMuzzleRiseDegrees = 9.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Mechanism")
 	bool bEnableMechanismAnimation = true;
@@ -689,12 +704,13 @@ private:
 	void FireLiveRound();
 	void FireEmptyRound();
 	void FinishSequence();
-	void StartGunUse();
+	void StartGunUse(bool bContinueFromCurrentTransform = false);
 	void StartMechanismAnimation();
 	void UpdateMechanismCocking();
 	void UpdateHammerRelease();
 	void UpdateEmptyShotImpact();
 	void UpdateMechanismReset();
+	void UpdateShotRecoil();
 	void ResetTriggerAndHammer();
 	void StartSelfShotCinematicCamera();
 	void TryStartLocalTargetShotCamera();
@@ -732,8 +748,9 @@ private:
 		EShowDownPlayerSlot TargetSlot,
 		bool bHit,
 		int32 MatchSequence,
-		int32 RoundSequence);
-	void TryStartPendingMultiplayerRoulettePresentation();
+		int32 RoundSequence,
+		bool bContinueFromCurrentTransform = false);
+	bool TryStartPendingMultiplayerRoulettePresentation(bool bContinueFromCurrentTransform = false);
 
 	enum class EMultiplayerPresentationContextRelation : uint8
 	{
@@ -821,6 +838,7 @@ private:
 	FTransform RevolverPlacementDevPreviewRestoreTransform;
 	FTransform RaiseStartTransform;
 	FTransform ReturnStartTransform;
+	FTransform ShotRecoilBaseTransform;
 	FRotator TriggerRestRotation = FRotator::ZeroRotator;
 	FRotator HammerRestRotation = FRotator::ZeroRotator;
 	FRotator MechanismResetStartTriggerRotation = FRotator::ZeroRotator;
@@ -839,6 +857,7 @@ private:
 	EGunAnimState AnimState = EGunAnimState::Idle;
 	EHitSequenceState HitSequenceState = EHitSequenceState::Idle;
 	float StateElapsedTime = 0.0f;
+	float ActiveRaiseTime = 0.45f;
 	float MechanismResetElapsedTime = 0.0f;
 	float HeldGunJitterElapsedTime = 0.0f;
 	float CinematicCameraElapsedTime = 0.0f;
@@ -855,6 +874,7 @@ private:
 	float OpeningCardDropVelocityZ = 0.0f;
 	float RaiseBulletLoadElapsedTime = 0.0f;
 	FVector ActiveRaiseBulletSourceWorldLocation = FVector::ZeroVector;
+	FVector ShotRecoilDirection = FVector::ForwardVector;
 	int32 DisplayedBulletCount = 0;
 	int32 RaiseBulletLoadPreviousCount = 0;
 	int32 RaiseBulletLoadStartCount = 0;

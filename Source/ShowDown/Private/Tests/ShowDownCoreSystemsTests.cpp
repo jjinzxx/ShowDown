@@ -16,6 +16,7 @@
 #include "RoundResolver.h"
 #include "RouletteSystem.h"
 #include "SDMultiplayerRoundFlow.h"
+#include "SDCardPlacementAnchor.h"
 #include "SDPlayerState.h"
 #include "ShowDownCharacter.h"
 #include "ShowDownCharacterSkinCatalog.h"
@@ -33,6 +34,36 @@
 #include "Engine/StaticMesh.h"
 #include "Sound/SoundWave.h"
 #include "UObject/UnrealType.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FShowDownMultiplayerHandSpacingTest,
+	"ShowDown.Core.MultiplayerHandSpacing",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FShowDownMultiplayerHandSpacingTest::RunTest(const FString& Parameters)
+{
+	const ASDCardPlacementAnchor* BaseAnchor = GetDefault<ASDCardPlacementAnchor>();
+	const ASDPlayer3HandAnchor* Player3Anchor = GetDefault<ASDPlayer3HandAnchor>();
+	const ASDPlayer4HandAnchor* Player4Anchor = GetDefault<ASDPlayer4HandAnchor>();
+
+	TestNotNull(TEXT("The shared hand anchor default exists"), BaseAnchor);
+	TestNotNull(TEXT("The Player 3 hand anchor default exists"), Player3Anchor);
+	TestNotNull(TEXT("The Player 4 hand anchor default exists"), Player4Anchor);
+	if (!BaseAnchor || !Player3Anchor || !Player4Anchor)
+	{
+		return false;
+	}
+
+	TestEqual(
+		TEXT("Player 3 uses the same card spacing as the shared single-player layout"),
+		Player3Anchor->CardSpacing,
+		BaseAnchor->CardSpacing);
+	TestEqual(
+		TEXT("Player 4 uses the same card spacing as the shared single-player layout"),
+		Player4Anchor->CardSpacing,
+		BaseAnchor->CardSpacing);
+	return true;
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FShowDownCardRankNetworkPrivacyTest,
@@ -890,7 +921,8 @@ bool FShowDownCharacterSkinCatalogOrderTest::RunTest(const FString& Parameters)
 		TEXT("custom_blue"),
 		TEXT("robot"),
 		TEXT("hoodman"),
-		TEXT("micu")
+		TEXT("gangman"),
+		TEXT("maskman")
 	};
 	TestEqual(
 		TEXT("Catalog order is retained, duplicates are removed, and missing built-ins are appended"),
@@ -927,7 +959,7 @@ bool FShowDownCharacterSkinCatalogOrderTest::RunTest(const FString& Parameters)
 	TestEqual(
 		TEXT("A missing editor catalog still exposes all built-in skins"),
 		BuiltInOnlyDefinitions.Num(),
-		4);
+		5);
 	return true;
 }
 
@@ -1066,6 +1098,7 @@ bool FShowDownRoundCinematicDefaultsTest::RunTest(const FString& Parameters)
 	TestFloatDefault(TEXT("RoundCinematicLoserSpotlightHoldSeconds"), 1.5f);
 	TestFloatDefault(TEXT("CollectorCardSelectionDelaySeconds"), 2.1f);
 	TestFloatDefault(TEXT("RoundCinematicPostShotProgressHoldSeconds"), 3.5f);
+	TestFloatDefault(TEXT("MultiplayerRouletteInterShotDelaySeconds"), 0.05f);
 	TestFloatDefault(TEXT("CardSelectionTimeLimitSeconds"), 30.0f);
 	TestFloatDefault(TEXT("BettingTurnTimeLimitSeconds"), 30.0f);
 	return true;
@@ -1206,7 +1239,67 @@ bool FShowDownGunShotCameraTest::RunTest(const FString& Parameters)
 		TestFalse(
 			TEXT("The development-only direct gun interaction stays disabled"),
 			InteractionGun->CanInteract_Implementation(nullptr));
+		TestTrue(TEXT("Live shots enable actor-wide recoil by default"), InteractionGun->bEnableShotRecoil);
+		TestEqual(TEXT("The recoil kick is immediate"), InteractionGun->ShotRecoilKickTime, 0.055f);
+		TestEqual(TEXT("The recoil recovery is quick and readable"), InteractionGun->ShotRecoilRecoveryTime, 0.18f);
+		TestEqual(TEXT("Sequential targets use a short direct transition"), InteractionGun->MultiplayerTargetTransitionTime, 0.24f);
+
+		AShowDownGameStateBase* HandoffGameState = NewObject<AShowDownGameStateBase>();
+		TestNotNull(TEXT("A direct-handoff context can be created"), HandoffGameState);
+		if (HandoffGameState)
+		{
+			HandoffGameState->MultiplayerMatchSequence = 4;
+			HandoffGameState->MultiplayerRoundSequence = 9;
+			InteractionGun->BoundShowDownGameState = HandoffGameState;
+			InteractionGun->bMultiplayerRoulettePresentationActive = true;
+			InteractionGun->AnimState = ASDSelfShotGunActor::EGunAnimState::Fired;
+			InteractionGun->RestActorTransform = FTransform(
+				FRotator::ZeroRotator,
+				FVector(10.0f, 20.0f, 30.0f));
+			const FTransform FirstTargetTransform(
+				FRotator(4.0f, 30.0f, 0.0f),
+				FVector(100.0f, 200.0f, 150.0f));
+			InteractionGun->SetActorTransform(FirstTargetTransform);
+			InteractionGun->PendingMultiplayerRoulettePresentations.Add(
+				{ EShowDownPlayerSlot::Player2, false, 4, 9 });
+			TestTrue(
+				TEXT("A queued loser starts directly from the previous target"),
+				InteractionGun->TryStartPendingMultiplayerRoulettePresentation(true));
+			TestEqual(
+				TEXT("Direct handoff starts the next raise without entering table return"),
+				InteractionGun->AnimState,
+				ASDSelfShotGunActor::EGunAnimState::Raising);
+			TestTrue(
+				TEXT("Direct handoff starts at the previous target transform"),
+				InteractionGun->RaiseStartTransform.Equals(FirstTargetTransform, 0.01f));
+			TestTrue(
+				TEXT("Direct handoff preserves the original table return transform"),
+				InteractionGun->RestActorTransform.GetLocation().Equals(FVector(10.0f, 20.0f, 30.0f), 0.01f));
+			TestTrue(
+				TEXT("Direct handoff consumes the queued target"),
+				InteractionGun->PendingMultiplayerRoulettePresentations.IsEmpty());
+		}
 	}
+	TestEqual(
+		TEXT("Recoil starts at the authored pose"),
+		ASDSelfShotGunActor::CalculateShotRecoilWeight(0.0f, 0.055f, 0.18f),
+		0.0f);
+	TestEqual(
+		TEXT("Recoil reaches its peak at the end of the kick"),
+		ASDSelfShotGunActor::CalculateShotRecoilWeight(0.055f, 0.055f, 0.18f),
+		1.0f);
+	TestEqual(
+		TEXT("Recoil returns exactly to the authored pose"),
+		ASDSelfShotGunActor::CalculateShotRecoilWeight(0.235f, 0.055f, 0.18f),
+		0.0f);
+	TestTrue(
+		TEXT("Recoil recovery eases naturally between the peak and rest"),
+		ASDSelfShotGunActor::CalculateShotRecoilWeight(0.145f, 0.055f, 0.18f) > 0.0f
+			&& ASDSelfShotGunActor::CalculateShotRecoilWeight(0.145f, 0.055f, 0.18f) < 1.0f);
+	TestEqual(
+		TEXT("The live-shot hold reserves the full recoil"),
+		ASDSelfShotGunActor::CalculateEffectiveShotHoldTime(0.12f, 0.055f, 0.18f, true),
+		0.235f);
 
 	const FVector TableCenter(40.0f, -25.0f, 10.0f);
 	const float SeatDistance = 300.0f;
@@ -1382,6 +1475,37 @@ bool FShowDownHitRecoveryTimingTest::RunTest(const FString& Parameters)
 	TestEqual(
 		TEXT("Negative multiplayer progression timing is clamped"),
 		AShowDownGameModeBase::CalculateRouletteProgressionFinishDelay(-1.0f, -2.0f, -3.0f),
+		0.0f);
+	TestTrue(
+		TEXT("An intermediate loser hands off just after the real firing frame"),
+		FMath::IsNearlyEqual(
+			AShowDownGameModeBase::CalculateRouletteTargetHandoffDelay(
+				1.045f,
+				4.0f,
+				3.5f,
+				0.05f,
+				true),
+			1.095f,
+			0.0001f));
+	TestTrue(
+		TEXT("The final loser still reserves the full post-shot progression"),
+		FMath::IsNearlyEqual(
+			AShowDownGameModeBase::CalculateRouletteTargetHandoffDelay(
+				1.045f,
+				4.0f,
+				3.5f,
+				0.05f,
+				false),
+			4.545f,
+			0.0001f));
+	TestEqual(
+		TEXT("Negative intermediate-shot timing is clamped"),
+		AShowDownGameModeBase::CalculateRouletteTargetHandoffDelay(
+			-1.0f,
+			-2.0f,
+			-3.0f,
+			-4.0f,
+			true),
 		0.0f);
 	return true;
 }
@@ -1670,9 +1794,24 @@ bool FShowDownGunVisionSequenceTimingTest::RunTest(const FString& Parameters)
 	SequenceSubsystem->BoundGameState = GameState;
 	SequenceSubsystem->DesiredDarknessStrength = 1.0f;
 	SequenceSubsystem->bZeroDarknessSpotlightEnabled = false;
-	const uint8 TargetMask = ShowDownTableCinematics::PlayerSlotToMask(
+	const uint8 FirstTargetMask = ShowDownTableCinematics::PlayerSlotToMask(
 		EShowDownPlayerSlot::Player1);
+	const uint8 SecondTargetMask = ShowDownTableCinematics::PlayerSlotToMask(
+		EShowDownPlayerSlot::Player2);
+	const uint8 TargetMask = FirstTargetMask | SecondTargetMask;
 	SequenceSubsystem->ActiveTargetSpotlightMask = TargetMask;
+	AShowDownCharacter* FirstTargetCharacter = NewObject<AShowDownCharacter>();
+	AShowDownCharacter* SecondTargetCharacter = NewObject<AShowDownCharacter>();
+	TestNotNull(TEXT("The first loser character can be created"), FirstTargetCharacter);
+	TestNotNull(TEXT("The second loser character can be created"), SecondTargetCharacter);
+	if (!FirstTargetCharacter || !SecondTargetCharacter)
+	{
+		return false;
+	}
+	FirstTargetCharacter->PlayerSlot = EShowDownPlayerSlot::Player1;
+	SecondTargetCharacter->PlayerSlot = EShowDownPlayerSlot::Player2;
+	FirstTargetCharacter->bLoserSpotlightActive = true;
+	SecondTargetCharacter->bLoserSpotlightActive = true;
 
 	SequenceSubsystem->HandleTableCinematicCue(
 		ESDTableCinematicCue::TriggerPullStarted,
@@ -1691,11 +1830,23 @@ bool FShowDownGunVisionSequenceTimingTest::RunTest(const FString& Parameters)
 
 	SequenceSubsystem->HandleTableCinematicCue(
 		ESDTableCinematicCue::TriggerPullCompleted,
-		0);
+		FirstTargetMask);
 	TestEqual(
-		TEXT("Full trigger travel clears the red loser light"),
+		TEXT("The first full trigger clears only the completed target bit"),
 		SequenceSubsystem->ActiveTargetSpotlightMask,
-		static_cast<uint8>(0));
+		SecondTargetMask);
+	FirstTargetCharacter->HandleTableCinematicCue(
+		ESDTableCinematicCue::TriggerPullCompleted,
+		FirstTargetMask);
+	SecondTargetCharacter->HandleTableCinematicCue(
+		ESDTableCinematicCue::TriggerPullCompleted,
+		FirstTargetMask);
+	TestFalse(
+		TEXT("The fired character turns off its red loser light"),
+		FirstTargetCharacter->bLoserSpotlightActive);
+	TestTrue(
+		TEXT("The waiting character keeps its red loser light"),
+		SecondTargetCharacter->bLoserSpotlightActive);
 	TestEqual(
 		TEXT("The full-pull cue itself waits for the firing callback to change darkness"),
 		SequenceSubsystem->DesiredDarknessStrength,
@@ -1703,14 +1854,37 @@ bool FShowDownGunVisionSequenceTimingTest::RunTest(const FString& Parameters)
 
 	SequenceSubsystem->HandleGunFired(GunActor);
 	TestEqual(
-		TEXT("The real live-fire event changes darkness to zero"),
+		TEXT("An intermediate live-fire event keeps the scene dark"),
+		SequenceSubsystem->DesiredDarknessStrength,
+		1.0f);
+	TestTrue(
+		TEXT("The intermediate live-fire event protects the shared darkness state"),
+		SequenceSubsystem->bPostShotBrightHoldActive);
+	TestFalse(
+		TEXT("The intermediate live-fire event keeps the bright spotlight off"),
+		SequenceSubsystem->bZeroDarknessSpotlightEnabled);
+
+	SequenceSubsystem->HandleGunRaised(GunActor);
+	SequenceSubsystem->HandleTableCinematicCue(
+		ESDTableCinematicCue::TriggerPullCompleted,
+		SecondTargetMask);
+	SecondTargetCharacter->HandleTableCinematicCue(
+		ESDTableCinematicCue::TriggerPullCompleted,
+		SecondTargetMask);
+	TestEqual(
+		TEXT("The final full trigger clears the last target bit"),
+		SequenceSubsystem->ActiveTargetSpotlightMask,
+		static_cast<uint8>(0));
+	TestFalse(
+		TEXT("The final fired character turns off its red loser light"),
+		SecondTargetCharacter->bLoserSpotlightActive);
+	SequenceSubsystem->HandleGunFired(GunActor);
+	TestEqual(
+		TEXT("Only the final live-fire event changes darkness to zero"),
 		SequenceSubsystem->DesiredDarknessStrength,
 		0.0f);
 	TestTrue(
-		TEXT("The real live-fire event starts the post-shot hold"),
-		SequenceSubsystem->bPostShotBrightHoldActive);
-	TestTrue(
-		TEXT("The real live-fire event enables the bright spotlight"),
+		TEXT("Only the final live-fire event enables the bright spotlight"),
 		SequenceSubsystem->bZeroDarknessSpotlightEnabled);
 
 	SequenceSubsystem->HandleGunPresentationFinished(GunActor);
@@ -1721,6 +1895,36 @@ bool FShowDownGunVisionSequenceTimingTest::RunTest(const FString& Parameters)
 	TestTrue(
 		TEXT("The post-shot hold waits for an authoritative progression event"),
 		SequenceSubsystem->bPostShotBrightHoldActive);
+
+	FirstTargetCharacter->bLoserSpotlightActive = true;
+	SecondTargetCharacter->bLoserSpotlightActive = true;
+	FirstTargetCharacter->HandleTableCinematicCue(
+		ESDTableCinematicCue::TriggerPullCompleted,
+		0);
+	SecondTargetCharacter->HandleTableCinematicCue(
+		ESDTableCinematicCue::TriggerPullCompleted,
+		0);
+	TestFalse(
+		TEXT("The legacy zero mask still clears the first single-player light"),
+		FirstTargetCharacter->bLoserSpotlightActive);
+	TestFalse(
+		TEXT("The legacy zero mask still clears the second single-player light"),
+		SecondTargetCharacter->bLoserSpotlightActive);
+
+	SequenceSubsystem->ActiveTargetSpotlightMask = SecondTargetMask;
+	SequenceSubsystem->DesiredDarknessStrength = 1.0f;
+	SequenceSubsystem->bZeroDarknessSpotlightEnabled = false;
+	SequenceSubsystem->bPostShotBrightHoldActive = true;
+	SequenceSubsystem->HandleTableCinematicCue(
+		ESDTableCinematicCue::TriggerPullCompleted,
+		SecondTargetMask);
+	TestEqual(
+		TEXT("A departed queued loser releases darkness after the preceding real shot"),
+		SequenceSubsystem->DesiredDarknessStrength,
+		0.0f);
+	TestTrue(
+		TEXT("A departed queued loser restores the bright spotlight without another shot"),
+		SequenceSubsystem->bZeroDarknessSpotlightEnabled);
 
 	SequenceSubsystem->HandleTableCinematicCue(ESDTableCinematicCue::Reset, 0);
 	TestFalse(
@@ -1825,15 +2029,15 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FShowDownRaiseBulletLoadingTest::RunTest(const FString& Parameters)
 {
 	TestEqual(
-		TEXT("Full reload mode starts a target load from an empty cylinder"),
+		TEXT("Full replay mode starts a target effect from zero"),
 		ASDSelfShotGunActor::ResolveRaiseBulletLoadStartCount(2, 5, true),
 		0);
 	TestEqual(
-		TEXT("Additive mode preserves bullets that were already loaded"),
+		TEXT("Delta mode skips bullets already represented by the previous bet"),
 		ASDSelfShotGunActor::ResolveRaiseBulletLoadStartCount(2, 5, false),
 		2);
 	TestEqual(
-		TEXT("The additive start count is clamped to the six chamber cylinder"),
+		TEXT("The delta start count is clamped to the six-bullet limit"),
 		ASDSelfShotGunActor::ResolveRaiseBulletLoadStartCount(8, 12, false),
 		6);
 	TestEqual(
@@ -1851,6 +2055,24 @@ bool FShowDownRaiseBulletLoadingTest::RunTest(const FString& Parameters)
 	TestTrue(
 		TEXT("A three-bullet raise includes one travel duration and two stagger intervals"),
 		FMath::IsNearlyEqual(ThreeBulletSequenceDuration, 0.72f, KINDA_SMALL_NUMBER));
+	TestTrue(
+		TEXT("Direct travel starts slowly"),
+		FMath::IsNearlyEqual(
+			ASDSelfShotGunActor::CalculateRaiseBulletTravelAlpha(0.25f),
+			0.125f,
+			KINDA_SMALL_NUMBER));
+	TestTrue(
+		TEXT("Direct travel reaches its midpoint halfway through"),
+		FMath::IsNearlyEqual(
+			ASDSelfShotGunActor::CalculateRaiseBulletTravelAlpha(0.50f),
+			0.50f,
+			KINDA_SMALL_NUMBER));
+	TestTrue(
+		TEXT("Direct travel slows symmetrically before arrival"),
+		FMath::IsNearlyEqual(
+			ASDSelfShotGunActor::CalculateRaiseBulletTravelAlpha(0.75f),
+			0.875f,
+			KINDA_SMALL_NUMBER));
 	TestTrue(
 		TEXT("The next multiplayer turn reserves a safety margin after the cascade"),
 		FMath::IsNearlyEqual(
@@ -1871,10 +2093,10 @@ bool FShowDownRaiseBulletLoadingTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	TestFalse(
-		TEXT("Raises insert only the newly added bullets by default"),
+		TEXT("Raises fly only the newly added bullets by default"),
 		GunActor->bReloadAllBulletsOnRaise);
 	TestEqual(
-		TEXT("Six dedicated bulletBetting meshes drive the cylinder presentation"),
+		TEXT("Six pooled bulletBetting meshes drive the transient travel presentation"),
 		GunActor->BettingBulletMeshes.Num(),
 		6);
 	TestTrue(
@@ -1884,8 +2106,14 @@ bool FShowDownRaiseBulletLoadingTest::RunTest(const FString& Parameters)
 			&& GunActor->BettingBulletMeshes[0]->GetStaticMesh()
 			&& GunActor->BettingBulletMeshes[0]->GetStaticMesh()->GetName() == TEXT("bulletBetting"));
 	TestTrue(
-		TEXT("Incoming bullets pause briefly at their visible spawn point"),
-		GunActor->RaiseBulletLoadStartHoldTime > 0.0f);
+		TEXT("Each incoming bullet travels for 0.95 seconds"),
+		FMath::IsNearlyEqual(GunActor->RaiseBulletLoadDuration, 0.95f, KINDA_SMALL_NUMBER));
+	TestTrue(
+		TEXT("Incoming bullets start 0.18 seconds apart"),
+		FMath::IsNearlyEqual(GunActor->RaiseBulletLoadStaggerDelay, 0.18f, KINDA_SMALL_NUMBER));
+	TestTrue(
+		TEXT("Incoming bullets disappear just short of the gun"),
+		GunActor->RaiseBulletVanishDistance > 0.0f);
 	const float ConfiguredSixBulletSequenceDuration =
 		ASDSelfShotGunActor::CalculateRaiseBulletLoadSequenceDuration(
 			6,
@@ -1897,7 +2125,7 @@ bool FShowDownRaiseBulletLoadingTest::RunTest(const FString& Parameters)
 			GunActor->RaiseBulletLoadDuration,
 			GunActor->RaiseBulletLoadStaggerDelay);
 	TestTrue(
-		TEXT("The runtime duration reflects the complete configured six-bullet load"),
+		TEXT("The runtime duration reflects the complete configured six-bullet travel effect"),
 		FMath::IsNearlyEqual(
 			GunActor->GetRaiseBulletLoadPresentationDuration(0, 6),
 			ConfiguredSixBulletSequenceDuration,
@@ -1929,26 +2157,27 @@ bool FShowDownRaiseBulletLoadingTest::RunTest(const FString& Parameters)
 		GunActor->DisplayedBulletCount,
 		1);
 	TestFalse(TEXT("Legacy slot meshes stay hidden"), GunActor->BulletMesh02->IsVisible());
-	TestTrue(TEXT("The existing first bulletBetting round remains loaded"), GunActor->BettingBulletMeshes[0]->IsVisible());
-	TestTrue(TEXT("The first newly raised bulletBetting round enters immediately"), GunActor->BettingBulletMeshes[1]->IsVisible());
+	TestFalse(TEXT("Existing rounds are not displayed as seated chamber bullets"), GunActor->BettingBulletMeshes[0]->IsVisible());
+	TestTrue(TEXT("The first newly raised bullet starts its direct travel immediately"), GunActor->BettingBulletMeshes[1]->IsVisible());
 	TestFalse(TEXT("The next bulletBetting round waits for its stagger"), GunActor->BettingBulletMeshes[2]->IsVisible());
 	TestTrue(
 		TEXT("The current raise remembers which player's hand is the source"),
 		GunActor->ActiveRaiseBulletSourceSlot == EShowDownPlayerSlot::Player1);
 	GunActor->UpdateRaiseBulletLoadAnimation(GunActor->RaiseBulletLoadDuration);
+	TestFalse(TEXT("The first travelling bullet disappears on arrival"), GunActor->BettingBulletMeshes[1]->IsVisible());
 	TestEqual(
-		TEXT("The counter reaches 2/6 when the first new bullet seats"),
+		TEXT("The counter reaches 2/6 when the first new bullet arrives"),
 		GunActor->DisplayedBulletCount,
 		2);
 	GunActor->UpdateRaiseBulletLoadAnimation(GunActor->RaiseBulletLoadStaggerDelay);
 	TestEqual(
-		TEXT("The counter reaches 3/6 when the second new bullet seats"),
+		TEXT("The counter reaches 3/6 when the second new bullet arrives"),
 		GunActor->DisplayedBulletCount,
 		3);
 	GunActor->UpdateRaiseBulletLoadAnimation(GunActor->RaiseBulletLoadStaggerDelay);
 	TestFalse(TEXT("The three-bullet cascade reaches a stable final state"), GunActor->bRaiseBulletLoadActive);
 	TestEqual(TEXT("The final display reaches 4/6"), GunActor->DisplayedBulletCount, 4);
-	TestTrue(TEXT("The fourth raised bulletBetting round is visible"), GunActor->BettingBulletMeshes[3]->IsVisible());
+	TestFalse(TEXT("The final travelling bullet disappears instead of seating in the chamber"), GunActor->BettingBulletMeshes[3]->IsVisible());
 	TestFalse(TEXT("A bulletBetting round above the raised bet stays hidden"), GunActor->BettingBulletMeshes[4]->IsVisible());
 
 	// RPC-first delivery must also survive the later target status replication.
@@ -1963,7 +2192,7 @@ bool FShowDownRaiseBulletLoadingTest::RunTest(const FString& Parameters)
 		GunActor->bRaiseBulletLoadActive);
 	TestEqual(TEXT("The active counter remains at the previous bet"), GunActor->DisplayedBulletCount, 1);
 	GunActor->UpdateRaiseBulletLoadAnimation(ConfiguredThreeBulletSequenceDuration);
-	TestEqual(TEXT("RPC-first delivery also settles at 4/6"), GunActor->DisplayedBulletCount, 4);
+	TestEqual(TEXT("RPC-first delivery also completes at 4/6"), GunActor->DisplayedBulletCount, 4);
 
 	GunActor->StatusPhase = EShowDownPhase::Betting;
 	GunActor->StatusLiveRounds = 2;
@@ -1979,9 +2208,9 @@ bool FShowDownRaiseBulletLoadingTest::RunTest(const FString& Parameters)
 		TEXT("The newer consecutive raise remains the active target"),
 		GunActor->RaiseBulletLoadTargetCount,
 		5);
-	GunActor->UpdateRaiseBulletLoadAnimation(SixBulletSequenceDuration);
+	GunActor->UpdateRaiseBulletLoadAnimation(ConfiguredSixBulletSequenceDuration);
 	TestEqual(
-		TEXT("Consecutive raises settle on the latest target"),
+		TEXT("Consecutive raises complete on the latest target"),
 		GunActor->DisplayedBulletCount,
 		5);
 
@@ -2002,15 +2231,15 @@ bool FShowDownRaiseBulletLoadingTest::RunTest(const FString& Parameters)
 	TestTrue(
 		TEXT("The queued raise starts in betting"),
 		GunActor->bRaiseBulletLoadActive);
-	GunActor->UpdateRaiseBulletLoadAnimation(SixBulletSequenceDuration);
+	GunActor->UpdateRaiseBulletLoadAnimation(ConfiguredSixBulletSequenceDuration);
 
 	GunActor->SetBulletPresentationImmediate(2);
 	GunActor->StartRaiseBulletLoadAnimation(2, 4, EShowDownPlayerSlot::Player1);
 	GunActor->StatusLiveRounds = 4;
 	GunActor->StatusPhase = EShowDownPhase::Roulette;
 	GunActor->SynchronizeBulletPresentationFromStatus();
-	TestFalse(TEXT("Leaving betting settles an unfinished cascade"), GunActor->bRaiseBulletLoadActive);
-	TestEqual(TEXT("The settled cylinder keeps the authoritative count"), GunActor->DisplayedBulletCount, 4);
+	TestFalse(TEXT("Leaving betting cancels an unfinished cascade"), GunActor->bRaiseBulletLoadActive);
+	TestEqual(TEXT("The ammo status UI keeps the authoritative count"), GunActor->DisplayedBulletCount, 4);
 
 	GunActor->ReceiveRaiseBulletLoadPresentation(2, 4, 0, EShowDownPlayerSlot::Player1);
 	TestFalse(
