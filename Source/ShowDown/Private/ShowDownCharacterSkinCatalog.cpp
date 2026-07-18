@@ -7,10 +7,14 @@ namespace
 {
 	const FString RobotSkinId(TEXT("robot"));
 	const FString HoodmanSkinId(TEXT("hoodman"));
+	const FString GangmanSkinId(TEXT("gangman"));
+	const FString MaskmanSkinId(TEXT("maskman"));
 	const FString MicuSkinId(TEXT("micu"));
 	const FString MikuSkinId(TEXT("miku"));
 	const TCHAR* DefaultCatalogObjectPath =
 		TEXT("/Game/Data/Characters/DA_CharacterSkinCatalog.DA_CharacterSkinCatalog");
+	const TCHAR* MainMenuCapoeiraAnimationPath =
+		TEXT("/Game/Character/Animation/Capoeira.Capoeira");
 	constexpr int32 MaximumReplicatedSkinIdLength = 64;
 
 	FShowDownCharacterPreviewAnimationProfile MakeSingleAnimationProfile(
@@ -42,10 +46,8 @@ namespace
 		Definition.ShopPreview = MakeSingleAnimationProfile(
 			PreviewAnimationPath,
 			bLoopPreviewAnimation);
-		// Main-menu animation is independently authorable in the data asset. The
-		// built-in fallback deliberately starts with the compatible shop animation
-		// so every shipping skin remains animated before that asset is authored.
-		Definition.MainMenuPreview = Definition.ShopPreview;
+		Definition.MainMenuPreview = MakeSingleAnimationProfile(
+			MainMenuCapoeiraAnimationPath);
 		return Definition;
 	}
 
@@ -58,14 +60,25 @@ namespace
 				NSLOCTEXT("ShowDownCharacterSkins", "Robot", "Robot"),
 				EShowDownCharacterSkinRarity::Common,
 				TEXT("/Game/Character/Robot/robot.robot"),
-				TEXT("/Game/Character/Animation/Idle_default_.Idle_default_")),
+				TEXT("/Game/Data/Characters/Robot_Hip_Hop_Dance.Robot_Hip_Hop_Dance")),
 			MakeBuiltInSkinDefinition(
 				HoodmanSkinId,
 				NSLOCTEXT("ShowDownCharacterSkins", "Hoodman", "Hoodman"),
 				EShowDownCharacterSkinRarity::Rare,
 				TEXT("/Game/Character/hoodman_default_/hoodman.hoodman"),
-				TEXT("/Game/Character/Animation/Dismissing_Gesture.Dismissing_Gesture"),
-				false),
+				TEXT("/Game/Data/Characters/Wave_Hip_Hop_Dance.Wave_Hip_Hop_Dance")),
+			MakeBuiltInSkinDefinition(
+				GangmanSkinId,
+				NSLOCTEXT("ShowDownCharacterSkins", "Gangman", "Gangman"),
+				EShowDownCharacterSkinRarity::Epic,
+				TEXT("/Game/Character/gangman/gangman.gangman"),
+				TEXT("/Game/Data/Characters/Gangnam_Style__1_.Gangnam_Style__1_")),
+			MakeBuiltInSkinDefinition(
+				MaskmanSkinId,
+				NSLOCTEXT("ShowDownCharacterSkins", "Maskman", "Maskman"),
+				EShowDownCharacterSkinRarity::Rare,
+				TEXT("/Game/Character/maskman/maskman.maskman"),
+				TEXT("/Game/Data/Characters/Locking_Hip_Hop_Dance.Locking_Hip_Hop_Dance")),
 			MakeBuiltInSkinDefinition(
 				MicuSkinId,
 				NSLOCTEXT("ShowDownCharacterSkins", "Micu", "Micu"),
@@ -77,8 +90,7 @@ namespace
 				NSLOCTEXT("ShowDownCharacterSkins", "Miku", "Miku"),
 				EShowDownCharacterSkinRarity::Legendary,
 				TEXT("/Game/Character/miku/miku.miku"),
-				TEXT("/Game/Character/Animation/Reacting.Reacting"),
-				false)
+				TEXT("/Game/Data/Characters/Tut_Hip_Hop_Dance.Tut_Hip_Hop_Dance"))
 		};
 		return Definitions;
 	}
@@ -117,6 +129,14 @@ FString UShowDownCharacterSkinCatalog::CanonicalizeSkinId(const FString& SkinId)
 	if (CanonicalId == TEXT("character_hoodman"))
 	{
 		return HoodmanSkinId;
+	}
+	if (CanonicalId == TEXT("character_gangman"))
+	{
+		return GangmanSkinId;
+	}
+	if (CanonicalId == TEXT("character_maskman"))
+	{
+		return MaskmanSkinId;
 	}
 	if (CanonicalId == TEXT("character_micu"))
 	{
@@ -316,6 +336,12 @@ void UShowDownCharacterSkinCatalog::GetOrderedSkinDefinitions(
 	{
 		const FString CanonicalSkinId = CanonicalizeSkinId(RequestedSkinId);
 		if (CanonicalSkinId.IsEmpty() || AddedSkinIds.Contains(CanonicalSkinId))
+		{
+			return;
+		}
+		// Micu remains resolvable for existing owners and replicated legacy
+		// loadouts, but is intentionally retired from the character shop.
+		if (CanonicalSkinId == MicuSkinId)
 		{
 			return;
 		}

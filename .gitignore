@@ -20,6 +20,7 @@ Intermediate/
 Saved/
 Build/
 Platforms/
+/Samples/
 
 # 플러그인 내 임시 폴더
 Plugins/**/Binaries/

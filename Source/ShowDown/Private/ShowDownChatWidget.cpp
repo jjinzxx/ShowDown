@@ -27,6 +27,7 @@
 #include "ShowDownPlayerController.h"
 #include "ShowDownGameStateBase.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
+#include "Styling/CoreStyle.h"
 #include "Styling/SlateBrush.h"
 #include "Styling/SlateTypes.h"
 #include "TimerManager.h"
@@ -79,7 +80,7 @@ namespace
 	const FLinearColor ChatPanelColor(0.0f, 0.0f, 0.0f, 1.0f);
 	const FLinearColor InputPanelColor(0.0f, 0.0f, 0.0f, 0.96f);
 	const FLinearColor InputAccentColor(0.20f, 0.78f, 1.0f, 0.95f);
-	const TCHAR* PretendardRegularFontPath = TEXT("/Script/Engine.Font'/Game/UI/Font/Pretendard/static/alternative/Pretendard-Regular_Font.Pretendard-Regular_Font'");
+	const TCHAR* PretendardRegularFontPath = TEXT("/Script/Engine.Font'/Game/UI/Font/Pretendard/static/Pretendard-Regular_Font.Pretendard-Regular_Font'");
 
 	float EaseOut(float Alpha)
 	{
@@ -98,9 +99,7 @@ namespace
 			return FSlateFontInfo(FontObject, Size);
 		}
 
-		FSlateFontInfo FallbackFont;
-		FallbackFont.Size = Size;
-		return FallbackFont;
+		return FSlateFontInfo(FCoreStyle::GetDefaultFont(), FMath::RoundToInt(Size));
 	}
 }
 

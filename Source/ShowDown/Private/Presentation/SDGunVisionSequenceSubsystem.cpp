@@ -34,9 +34,16 @@ namespace
 	const FName ZeroDarknessSpotlightActorTag(TEXT("ShowDownZeroDarknessSpotlight"));
 	const FName LegacyZeroDarknessSpotlightActorName(TEXT("SpotLight7"));
 
+	bool HasConflictingSpotlightTags(const ASpotLight* Spotlight)
+	{
+		return IsValid(Spotlight)
+			&& Spotlight->ActorHasTag(TableSpotlightActorTag)
+			&& Spotlight->ActorHasTag(ZeroDarknessSpotlightActorTag);
+	}
+
 	bool IsTableSpotlightActor(const ASpotLight* Spotlight)
 	{
-		if (!IsValid(Spotlight))
+		if (!IsValid(Spotlight) || HasConflictingSpotlightTags(Spotlight))
 		{
 			return false;
 		}
@@ -56,7 +63,7 @@ namespace
 
 	bool IsZeroDarknessSpotlightActor(const ASpotLight* Spotlight)
 	{
-		if (!IsValid(Spotlight))
+		if (!IsValid(Spotlight) || HasConflictingSpotlightTags(Spotlight))
 		{
 			return false;
 		}
@@ -691,6 +698,14 @@ ASpotLight* USDGunVisionSequenceSubsystem::ResolveTableSpotlight()
 
 	for (TActorIterator<ASpotLight> It(World); It; ++It)
 	{
+		if (HasConflictingSpotlightTags(*It))
+		{
+			UE_LOG(LogTemp, Error,
+				TEXT("Spotlight %s has both table and zero-darkness tags; ignoring the ambiguous actor."),
+				*It->GetPathName());
+			continue;
+		}
+
 		if (!IsTableSpotlightActor(*It))
 		{
 			continue;
@@ -722,8 +737,21 @@ ASpotLight* USDGunVisionSequenceSubsystem::ResolveZeroDarknessSpotlight()
 		return nullptr;
 	}
 
+	ASpotLight* AmbiguousFallback = nullptr;
 	for (TActorIterator<ASpotLight> It(World); It; ++It)
 	{
+		if (HasConflictingSpotlightTags(*It))
+		{
+			// Legacy maps accidentally tagged SpotLight7 for both roles. Never let it
+			// win the table lookup, but keep it as a zero-darkness fallback when no
+			// correctly tagged actor exists.
+			if (!AmbiguousFallback)
+			{
+				AmbiguousFallback = *It;
+			}
+			continue;
+		}
+
 		if (!IsZeroDarknessSpotlightActor(*It))
 		{
 			continue;
@@ -737,6 +765,15 @@ ASpotLight* USDGunVisionSequenceSubsystem::ResolveZeroDarknessSpotlight()
 				TEXT("SpotLight7 has Affects World disabled. Keep it enabled and use runtime visibility for the zero-darkness light."));
 		}
 		return *It;
+	}
+
+	if (AmbiguousFallback)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("Spotlight %s has both table and zero-darkness tags; treating it as zero-darkness only."),
+			*AmbiguousFallback->GetPathName());
+		ZeroDarknessSpotlight = AmbiguousFallback;
+		return AmbiguousFallback;
 	}
 
 	return nullptr;
