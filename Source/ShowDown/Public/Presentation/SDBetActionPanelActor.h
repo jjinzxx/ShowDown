@@ -190,6 +190,12 @@ private:
 	UPROPERTY()
 	TArray<TObjectPtr<UMaterialInstanceDynamic>> BulletPreviewMaterials;
 
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> BulletPreviewOutlineMeshes;
+
+	UPROPERTY()
+	TArray<TObjectPtr<UMaterialInstanceDynamic>> BulletPreviewOutlineMaterials;
+
 	TArray<float> BulletVisualAlphas;
 	TArray<float> BulletVisualScales;
 	TArray<float> BulletTransitionStartAlphas;

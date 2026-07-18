@@ -32,6 +32,8 @@ public:
 		float SlotDiameter,
 		float SlotSpacing,
 		bool bEmphasized);
+	void ShowRaiseDelta(int32 AddedRounds);
+	void CompleteRaiseDelta();
 	static EShowDownAmmoSlotState ResolveSlotStateForCounts(
 		int32 SlotIndex,
 		int32 LiveRounds,
@@ -48,6 +50,8 @@ private:
 	static constexpr float SlotPulseDuration = 0.28f;
 	static constexpr float EmphasisPulseDuration = 0.34f;
 	static constexpr float ShotStatusHoldDuration = 0.12f;
+	static constexpr float RaiseDeltaAppearDuration = 0.16f;
+	static constexpr float RaiseDeltaCompleteDuration = 0.46f;
 
 	void BuildDefaultWidget();
 	void RefreshVisuals();
@@ -64,6 +68,12 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UHorizontalBox> StatusRow;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UBorder> RaiseDeltaBadge;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> RaiseDeltaText;
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<USizeBox>> SlotContainers;
@@ -92,4 +102,8 @@ private:
 	int32 PendingRemainingChambers = ChamberSlotCount;
 	FLinearColor PendingLiveRoundColor = FLinearColor::White;
 	float ShotStatusHoldElapsed = 0.0f;
+	int32 CachedRaiseDelta = 0;
+	bool bRaiseDeltaActive = false;
+	bool bRaiseDeltaCompleting = false;
+	float RaiseDeltaElapsed = 0.0f;
 };

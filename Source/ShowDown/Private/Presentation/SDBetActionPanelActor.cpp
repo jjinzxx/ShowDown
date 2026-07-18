@@ -123,12 +123,29 @@ ASDBetActionPanelActor::ASDBetActionPanelActor()
 	Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 	SetRootComponent(Root);
 
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> BulletMeshFinder(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> BulletMeshFinder(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> BulletMaterialFinder(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
 	BulletPreviewMeshAsset = BulletMeshFinder.Succeeded() ? BulletMeshFinder.Object : nullptr;
 	BulletPreviewTintMaterial = BulletMaterialFinder.Succeeded() ? BulletMaterialFinder.Object : nullptr;
 	for (int32 BulletIndex = 0; BulletIndex < 6; ++BulletIndex)
 	{
+		UStaticMeshComponent* OutlineMesh = CreateDefaultSubobject<UStaticMeshComponent>(
+			*FString::Printf(TEXT("RaiseBulletPreviewOutline%d"), BulletIndex + 1));
+		OutlineMesh->SetupAttachment(Root);
+		OutlineMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		OutlineMesh->SetCanEverAffectNavigation(false);
+		OutlineMesh->SetCastShadow(false);
+		OutlineMesh->SetVisibility(false, true);
+		if (BulletPreviewMeshAsset)
+		{
+			OutlineMesh->SetStaticMesh(BulletPreviewMeshAsset);
+		}
+		if (BulletPreviewTintMaterial)
+		{
+			OutlineMesh->SetMaterial(0, BulletPreviewTintMaterial);
+		}
+		BulletPreviewOutlineMeshes.Add(OutlineMesh);
+
 		UStaticMeshComponent* BulletMesh = CreateDefaultSubobject<UStaticMeshComponent>(
 			*FString::Printf(TEXT("RaiseBulletPreview%d"), BulletIndex + 1));
 		BulletMesh->SetupAttachment(Root);
@@ -267,6 +284,7 @@ void ASDBetActionPanelActor::EnsureBulletPreview()
 	}
 
 	BulletPreviewMaterials.SetNum(BulletPreviewMeshes.Num());
+	BulletPreviewOutlineMaterials.SetNum(BulletPreviewOutlineMeshes.Num());
 	const int32 PreviousAnimationCount = BulletVisualAlphas.Num();
 	BulletVisualAlphas.SetNum(BulletPreviewMeshes.Num());
 	BulletVisualScales.SetNum(BulletPreviewMeshes.Num());
@@ -289,6 +307,14 @@ void ASDBetActionPanelActor::EnsureBulletPreview()
 		{
 			BulletPreviewMaterials[BulletIndex] = UMaterialInstanceDynamic::Create(BulletPreviewTintMaterial, this);
 			BulletPreviewMeshes[BulletIndex]->SetMaterial(0, BulletPreviewMaterials[BulletIndex]);
+		}
+		if (BulletPreviewOutlineMeshes.IsValidIndex(BulletIndex)
+			&& BulletPreviewOutlineMeshes[BulletIndex]
+			&& !BulletPreviewOutlineMaterials[BulletIndex]
+			&& BulletPreviewTintMaterial)
+		{
+			BulletPreviewOutlineMaterials[BulletIndex] = UMaterialInstanceDynamic::Create(BulletPreviewTintMaterial, this);
+			BulletPreviewOutlineMeshes[BulletIndex]->SetMaterial(0, BulletPreviewOutlineMaterials[BulletIndex]);
 		}
 	}
 }
@@ -365,8 +391,10 @@ void ASDBetActionPanelActor::RefreshBulletPreview(bool bVisible)
 	}
 
 	const FRotator PanelRotation = CachedBulletPanelRotation;
+	const FVector ForwardDirection = FRotationMatrix(PanelRotation).GetUnitAxis(EAxis::X);
 	const FVector RightDirection = FRotationMatrix(PanelRotation).GetUnitAxis(EAxis::Y);
 	const FVector BulletRowWorldOffset = PanelRotation.RotateVector(PanelState.BulletRowOffset * LayoutScale);
+	const FRotator DotRotation = FQuat::FindBetweenNormals(FVector::UpVector, ForwardDirection).Rotator();
 
 	for (int32 BulletIndex = 0; BulletIndex < BulletPreviewMeshes.Num(); ++BulletIndex)
 	{
@@ -379,25 +407,35 @@ void ASDBetActionPanelActor::RefreshBulletPreview(bool bVisible)
 		const bool bAlreadyLoaded = BulletIndex < LoadedCount;
 		const bool bPendingRaise = BulletIndex >= LoadedCount && BulletIndex < RaiseTarget;
 		const FLinearColor BulletColor = bAlreadyLoaded
-			? FLinearColor(0.92f, 0.58f, 0.16f, 1.0f)
+			? FLinearColor(0.76f, 0.46f, 0.14f, 1.0f)
 			: (bPendingRaise
-				? FLinearColor(1.0f, 0.24f, 0.035f, 1.0f)
-				: FLinearColor(0.075f, 0.09f, 0.12f, 1.0f));
+				? FLinearColor(0.94f, 0.29f, 0.055f, 1.0f)
+				: FLinearColor(0.085f, 0.10f, 0.135f, 1.0f));
 
 		// The panel faces the viewer from the opposite side of its local right
 		// axis, so reverse the visual slot index to fill left-to-right on screen.
 		const int32 VisualSlotIndex = BulletPreviewMeshes.Num() - 1 - BulletIndex;
-		BulletMesh->SetWorldLocationAndRotation(
-			CachedBulletPanelLocation
-				+ BulletRowWorldOffset
-				+ RightDirection * ((static_cast<float>(VisualSlotIndex) - 2.5f) * PanelState.BulletSpacing * LayoutScale),
-			PanelRotation);
+		const FVector DotLocation = CachedBulletPanelLocation
+			+ BulletRowWorldOffset
+			+ RightDirection * ((static_cast<float>(VisualSlotIndex) - 2.5f) * PanelState.BulletSpacing * LayoutScale);
+		BulletMesh->SetWorldLocationAndRotation(DotLocation + ForwardDirection * 0.16f, DotRotation);
+		if (BulletPreviewOutlineMeshes.IsValidIndex(BulletIndex) && BulletPreviewOutlineMeshes[BulletIndex])
+		{
+			BulletPreviewOutlineMeshes[BulletIndex]->SetWorldLocationAndRotation(DotLocation, DotRotation);
+		}
 		if (BulletPreviewMaterials.IsValidIndex(BulletIndex) && BulletPreviewMaterials[BulletIndex])
 		{
 			BulletMesh->SetMaterial(0, BulletPreviewMaterials[BulletIndex]);
 			BulletPreviewMaterials[BulletIndex]->SetVectorParameterValue(TEXT("Color"), BulletColor);
 			BulletPreviewMaterials[BulletIndex]->SetVectorParameterValue(TEXT("BaseColor"), BulletColor);
 			BulletPreviewMaterials[BulletIndex]->SetScalarParameterValue(TEXT("Opacity"), BulletColor.A);
+		}
+		if (BulletPreviewOutlineMaterials.IsValidIndex(BulletIndex) && BulletPreviewOutlineMaterials[BulletIndex])
+		{
+			const FLinearColor OutlineColor(0.012f, 0.016f, 0.024f, 1.0f);
+			BulletPreviewOutlineMeshes[BulletIndex]->SetMaterial(0, BulletPreviewOutlineMaterials[BulletIndex]);
+			BulletPreviewOutlineMaterials[BulletIndex]->SetVectorParameterValue(TEXT("Color"), OutlineColor);
+			BulletPreviewOutlineMaterials[BulletIndex]->SetVectorParameterValue(TEXT("BaseColor"), OutlineColor);
 		}
 	}
 
@@ -540,10 +578,10 @@ void ASDBetActionPanelActor::ApplyBulletAnimatedVisuals()
 {
 	const float LayoutScale = FMath::Max(0.1f, PanelState.PanelVisualScale);
 	// The old value was authored for the long bulletBetting mesh. Scale the
-	// engine sphere down to a compact dot that fits inside the existing spacing.
+	// cylinder into a compact, thin disc that fits inside the existing spacing.
 	const float BaseBulletScale = FMath::Max(0.001f, PanelState.BulletPreviewScale)
 		* (LayoutScale / 0.35f)
-		* 0.36f;
+		* 0.30f;
 	const float Duration = FMath::Clamp(PanelState.BulletAnimationDuration, 0.05f, 1.0f);
 	const float BounceStrength = FMath::Clamp(PanelState.BulletBounceStrength, 0.0f, 0.5f);
 
@@ -562,10 +600,20 @@ void ASDBetActionPanelActor::ApplyBulletAnimatedVisuals()
 		}
 
 		const float AnimatedScale = FMath::Max(0.0f, BulletVisualScales[BulletIndex]) * PulseScale;
-		BulletMesh->SetWorldScale3D(FVector(BaseBulletScale * AnimatedScale));
-		BulletMesh->SetVisibility(
-			BulletVisualAlphas[BulletIndex] > KINDA_SMALL_NUMBER || AnimatedScale > KINDA_SMALL_NUMBER,
-			true);
+		const bool bDrawVisible = BulletVisualAlphas[BulletIndex] > KINDA_SMALL_NUMBER
+			|| AnimatedScale > KINDA_SMALL_NUMBER;
+		const float OutlineRadiusScale = BaseBulletScale * AnimatedScale;
+		const float FillRadiusScale = OutlineRadiusScale * 0.72f;
+		BulletMesh->SetWorldScale3D(FVector(FillRadiusScale, FillRadiusScale, FillRadiusScale * 0.11f));
+		BulletMesh->SetVisibility(bDrawVisible, true);
+		if (BulletPreviewOutlineMeshes.IsValidIndex(BulletIndex) && BulletPreviewOutlineMeshes[BulletIndex])
+		{
+			BulletPreviewOutlineMeshes[BulletIndex]->SetWorldScale3D(FVector(
+				OutlineRadiusScale,
+				OutlineRadiusScale,
+				OutlineRadiusScale * 0.09f));
+			BulletPreviewOutlineMeshes[BulletIndex]->SetVisibility(bDrawVisible, true);
+		}
 	}
 }
 

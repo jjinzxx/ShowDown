@@ -279,17 +279,51 @@ void UShowDownAudioSubsystem::StopLoserSpotlightWarning()
 	LoserSpotlightWarningComponent = nullptr;
 }
 
-void UShowDownAudioSubsystem::NotifyPhaseChanged(EShowDownPhase NewPhase)
+void UShowDownAudioSubsystem::NotifyCardRevealStarted()
 {
 	EnsurePersistentLoops();
-	if (!AudioConfig || NewPhase == EShowDownPhase::Roulette)
+	UWorld* World = ResolvePlaybackWorld();
+	if (!AudioConfig || !CanPlayInWorld(World) || !AudioConfig->CardRevealSound)
 	{
 		return;
 	}
 
-	ClearPresentationTimers();
+	World->GetTimerManager().ClearTimer(CardRevealTimerHandle);
+	CardRevealTimerHandle.Invalidate();
+	const float RevealDelay = FMath::Max(0.0f, AudioConfig->CardRevealSoundDelay);
+	if (RevealDelay <= KINDA_SMALL_NUMBER)
+	{
+		HandleCardRevealDelayElapsed();
+		return;
+	}
+
+	World->GetTimerManager().SetTimer(
+		CardRevealTimerHandle,
+		this,
+		&UShowDownAudioSubsystem::HandleCardRevealDelayElapsed,
+		RevealDelay,
+		false);
+}
+
+void UShowDownAudioSubsystem::NotifyPhaseChanged(EShowDownPhase NewPhase)
+{
+	EnsurePersistentLoops();
+	if (!AudioConfig)
+	{
+		return;
+	}
+	if (NewPhase == EShowDownPhase::Roulette)
+	{
+		return;
+	}
+
+	ClearPresentationTimers(NewPhase != EShowDownPhase::Reveal);
 	StopLoserSpotlightWarning();
 	RestoreIdleMix(AudioConfig->MixRestoreDuration);
+	if (NewPhase == EShowDownPhase::GameOver)
+	{
+		SetMusicContext(EShowDownMusicContext::Silent, AudioConfig->MusicTransitionDuration);
+	}
 }
 
 void UShowDownAudioSubsystem::SetCrowdBedEnabled(bool bEnabled, float FadeDuration)
@@ -297,6 +331,9 @@ void UShowDownAudioSubsystem::SetCrowdBedEnabled(bool bEnabled, float FadeDurati
 	EnsurePersistentLoops();
 	bCrowdBedEnabled = bEnabled;
 	SetCrowdMixVolume(CurrentCrowdConfigVolume, FMath::Max(0.0f, FadeDuration));
+	SetMusicContext(
+		bEnabled ? EShowDownMusicContext::Match : EShowDownMusicContext::Menu,
+		AudioConfig ? AudioConfig->MusicTransitionDuration : FadeDuration);
 }
 
 void UShowDownAudioSubsystem::SetUserMusicVolume(float Volume)
@@ -338,7 +375,7 @@ void UShowDownAudioSubsystem::RefreshUserVolumes()
 			AudioDevice->SetTransientPrimaryVolume(ClampUserVolume(MasterVolume));
 		}
 	}
-	SetMusicMixMultiplier(CurrentMusicMixMultiplier, 0.0f);
+	ApplyMusicContextVolumes(0.0f);
 	SetCrowdMixVolume(CurrentCrowdConfigVolume, 0.0f);
 	ApplyButtonClickVolume();
 	ApplySpotlightTransitionVolume();
@@ -433,6 +470,33 @@ void UShowDownAudioSubsystem::StartPersistentLoops(UWorld* World)
 			GetMusicTargetVolume());
 	}
 
+	if (!IsValid(MenuMusicComponent) && AudioConfig->MenuMusicSound)
+	{
+		MenuMusicComponent = UGameplayStatics::CreateSound2D(
+			World,
+			AudioConfig->MenuMusicSound,
+			1.0f,
+			1.0f,
+			0.0f,
+			nullptr,
+			true,
+			false);
+		if (MenuMusicComponent)
+		{
+			MenuMusicComponent->OnAudioFinished.AddUniqueDynamic(
+				this,
+				&UShowDownAudioSubsystem::HandleMenuMusicFinished);
+		}
+	}
+	if (MenuMusicComponent
+		&& !MenuMusicComponent->IsPlaying()
+		&& GetMenuMusicTargetVolume() > KINDA_SMALL_NUMBER)
+	{
+		MenuMusicComponent->FadeIn(
+			FMath::Max(0.0f, AudioConfig->LoopFadeInDuration),
+			GetMenuMusicTargetVolume());
+	}
+
 	if (!IsValid(CrowdBedComponent) && AudioConfig->CrowdBedSound)
 	{
 		CrowdBedComponent = UGameplayStatics::CreateSound2D(
@@ -474,6 +538,16 @@ void UShowDownAudioSubsystem::StopPersistentLoops()
 		BackgroundMusicComponent = nullptr;
 	}
 
+	if (MenuMusicComponent)
+	{
+		MenuMusicComponent->OnAudioFinished.RemoveDynamic(
+			this,
+			&UShowDownAudioSubsystem::HandleMenuMusicFinished);
+		MenuMusicComponent->Stop();
+		MenuMusicComponent->DestroyComponent();
+		MenuMusicComponent = nullptr;
+	}
+
 	if (CrowdBedComponent)
 	{
 		CrowdBedComponent->OnAudioFinished.RemoveDynamic(
@@ -506,11 +580,21 @@ UWorld* UShowDownAudioSubsystem::ResolvePlaybackWorld() const
 
 float UShowDownAudioSubsystem::GetMusicTargetVolume() const
 {
-	return AudioConfig
+	return AudioConfig && MusicContext == EShowDownMusicContext::Match
 		? CalculateMusicTargetVolume(
 			AudioConfig->BackgroundMusicVolume,
 			UserMusicVolume,
 			CurrentMusicMixMultiplier)
+		: 0.0f;
+}
+
+float UShowDownAudioSubsystem::GetMenuMusicTargetVolume() const
+{
+	return AudioConfig && MusicContext == EShowDownMusicContext::Menu
+		? CalculateMusicTargetVolume(
+			AudioConfig->MenuMusicVolume,
+			UserMusicVolume,
+			1.0f)
 		: 0.0f;
 }
 
@@ -563,29 +647,61 @@ void UShowDownAudioSubsystem::SetCrowdMixVolume(float ConfigVolume, float FadeDu
 void UShowDownAudioSubsystem::SetMusicMixMultiplier(float Multiplier, float FadeDuration)
 {
 	CurrentMusicMixMultiplier = FMath::Max(0.0f, Multiplier);
-	if (!BackgroundMusicComponent || !AudioConfig)
+	ApplyMusicContextVolumes(FadeDuration);
+}
+
+void UShowDownAudioSubsystem::SetMusicContext(
+	const EShowDownMusicContext NewContext,
+	const float FadeDuration)
+{
+	MusicContext = NewContext;
+	ApplyMusicContextVolumes(FadeDuration);
+}
+
+void UShowDownAudioSubsystem::ApplyMusicContextVolumes(const float FadeDuration)
+{
+	if (!AudioConfig)
+	{
+		return;
+	}
+
+	SetLoopComponentTargetVolume(
+		BackgroundMusicComponent,
+		GetMusicTargetVolume(),
+		FadeDuration);
+	SetLoopComponentTargetVolume(
+		MenuMusicComponent,
+		GetMenuMusicTargetVolume(),
+		FadeDuration);
+}
+
+void UShowDownAudioSubsystem::SetLoopComponentTargetVolume(
+	UAudioComponent* Component,
+	const float TargetVolume,
+	const float FadeDuration)
+{
+	if (!Component)
 	{
 		return;
 	}
 
 	const float SafeFadeDuration = FMath::Max(0.0f, FadeDuration);
-	const float TargetVolume = GetMusicTargetVolume();
 	if (TargetVolume <= KINDA_SMALL_NUMBER)
 	{
-		if (BackgroundMusicComponent->IsPlaying())
+		if (Component->IsPlaying())
 		{
-			BackgroundMusicComponent->FadeOut(SafeFadeDuration, 0.0f);
+			Component->FadeOut(SafeFadeDuration, 0.0f);
 		}
 		return;
 	}
 
-	if (!BackgroundMusicComponent->IsPlaying())
+	if (!Component->IsPlaying())
 	{
-		BackgroundMusicComponent->FadeIn(SafeFadeDuration, TargetVolume);
+		Component->FadeIn(SafeFadeDuration, TargetVolume);
 		return;
 	}
 
-	BackgroundMusicComponent->AdjustVolume(SafeFadeDuration, TargetVolume);
+	Component->AdjustVolume(SafeFadeDuration, TargetVolume);
 }
 
 void UShowDownAudioSubsystem::RestoreIdleMix(float FadeDuration)
@@ -622,14 +738,22 @@ void UShowDownAudioSubsystem::ScheduleMixRestore(float Delay)
 		false);
 }
 
-void UShowDownAudioSubsystem::ClearPresentationTimers()
+void UShowDownAudioSubsystem::ClearPresentationTimers(const bool bClearCardRevealTimer)
 {
 	if (UWorld* World = ResolvePlaybackWorld())
 	{
 		World->GetTimerManager().ClearTimer(CrowdShockTimerHandle);
+		if (bClearCardRevealTimer)
+		{
+			World->GetTimerManager().ClearTimer(CardRevealTimerHandle);
+		}
 		World->GetTimerManager().ClearTimer(MixRestoreTimerHandle);
 	}
 	CrowdShockTimerHandle.Invalidate();
+	if (bClearCardRevealTimer)
+	{
+		CardRevealTimerHandle.Invalidate();
+	}
 	MixRestoreTimerHandle.Invalidate();
 }
 
@@ -684,6 +808,19 @@ void UShowDownAudioSubsystem::HandleBackgroundMusicFinished()
 	}
 }
 
+void UShowDownAudioSubsystem::HandleMenuMusicFinished()
+{
+	const float TargetVolume = GetMenuMusicTargetVolume();
+	if (MenuMusicComponent
+		&& AudioConfig
+		&& AudioConfig->MenuMusicSound
+		&& TargetVolume > KINDA_SMALL_NUMBER
+		&& CanPlayInWorld(ResolvePlaybackWorld()))
+	{
+		MenuMusicComponent->FadeIn(0.0f, TargetVolume, 0.0f);
+	}
+}
+
 void UShowDownAudioSubsystem::HandleCrowdBedFinished()
 {
 	const float TargetVolume = GetCrowdTargetVolume();
@@ -713,6 +850,21 @@ void UShowDownAudioSubsystem::HandleCrowdShockDelayElapsed()
 		World,
 		AudioConfig->CrowdShockedSound,
 		FMath::Max(0.0f, AudioConfig->CrowdShockedVolume) * UserEffectVolume);
+}
+
+void UShowDownAudioSubsystem::HandleCardRevealDelayElapsed()
+{
+	CardRevealTimerHandle.Invalidate();
+	UWorld* World = ResolvePlaybackWorld();
+	if (!AudioConfig || !CanPlayInWorld(World) || !AudioConfig->CardRevealSound)
+	{
+		return;
+	}
+
+	UGameplayStatics::PlaySound2D(
+		World,
+		AudioConfig->CardRevealSound,
+		FMath::Max(0.0f, AudioConfig->CardRevealVolume) * UserEffectVolume);
 }
 
 void UShowDownAudioSubsystem::HandleMixRestoreDelayElapsed()

@@ -120,6 +120,7 @@ private:
 	bool SetZeroDarknessSpotlightEnabled(bool bEnabled);
 	void PlaySpotlightTransitionSound() const;
 	void PlayLoserSpotlightWarningSound() const;
+	void PlayCardRevealSound() const;
 	void RefreshTurnSpotlightSoundState();
 	void ApplyPhasePresentationPolicy(EShowDownPhase Phase);
 	bool IsRoulettePhase() const;

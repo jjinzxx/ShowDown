@@ -11,6 +11,13 @@ class USoundBase;
 class USoundWave;
 struct FActorsInitializedParams;
 
+enum class EShowDownMusicContext : uint8
+{
+	Menu,
+	Match,
+	Silent
+};
+
 /**
  * Persistent local audio director for music, the crowd bed and presentation
  * one-shots. Gameplay actors only report semantic events; all sound choices
@@ -52,6 +59,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Audio|Presentation")
 	void StopLoserSpotlightWarning();
 
+	/** Schedules the card-reveal cue against the authored reveal lead-in. */
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Audio|Presentation")
+	void NotifyCardRevealStarted();
+
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Audio|Presentation")
 	void NotifyPhaseChanged(EShowDownPhase NewPhase);
 
@@ -84,12 +95,16 @@ private:
 
 	static float CalculateMusicTargetVolume(float ConfigVolume, float UserVolume, float MixMultiplier);
 	float GetMusicTargetVolume() const;
+	float GetMenuMusicTargetVolume() const;
 	float GetCrowdTargetVolume() const;
 	void SetCrowdMixVolume(float ConfigVolume, float FadeDuration);
 	void SetMusicMixMultiplier(float Multiplier, float FadeDuration);
+	void SetMusicContext(EShowDownMusicContext NewContext, float FadeDuration);
+	void ApplyMusicContextVolumes(float FadeDuration);
+	static void SetLoopComponentTargetVolume(UAudioComponent* Component, float TargetVolume, float FadeDuration);
 	void RestoreIdleMix(float FadeDuration);
 	void ScheduleMixRestore(float Delay);
-	void ClearPresentationTimers();
+	void ClearPresentationTimers(bool bClearCardRevealTimer = true);
 	void ApplyButtonClickVolume();
 	void ApplySpotlightTransitionVolume();
 	void ApplyLoserSpotlightWarningVolume();
@@ -99,10 +114,16 @@ private:
 	void HandleBackgroundMusicFinished();
 
 	UFUNCTION()
+	void HandleMenuMusicFinished();
+
+	UFUNCTION()
 	void HandleCrowdBedFinished();
 
 	UFUNCTION()
 	void HandleCrowdShockDelayElapsed();
+
+	UFUNCTION()
+	void HandleCardRevealDelayElapsed();
 
 	UFUNCTION()
 	void HandleMixRestoreDelayElapsed();
@@ -112,6 +133,9 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UAudioComponent> BackgroundMusicComponent;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UAudioComponent> MenuMusicComponent;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UAudioComponent> CrowdBedComponent;
@@ -126,6 +150,7 @@ private:
 	FDelegateHandle PostLoadMapDelegateHandle;
 	FDelegateHandle WorldInitializedActorsDelegateHandle;
 	FTimerHandle CrowdShockTimerHandle;
+	FTimerHandle CardRevealTimerHandle;
 	FTimerHandle MixRestoreTimerHandle;
 
 	float UserMusicVolume = 1.0f;
@@ -134,4 +159,5 @@ private:
 	float CurrentMusicMixMultiplier = 1.0f;
 	uint64 LastSpotlightTransitionFrame = MAX_uint64;
 	bool bCrowdBedEnabled = false;
+	EShowDownMusicContext MusicContext = EShowDownMusicContext::Menu;
 };

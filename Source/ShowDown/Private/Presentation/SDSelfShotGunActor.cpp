@@ -29,8 +29,6 @@
 
 namespace
 {
-	constexpr float MaximumMuzzleFlashIntensity = 8000.0f;
-	constexpr float MaximumMuzzleFlashAttenuationRadius = 350.0f;
 	constexpr float MinimumCinematicCameraHoldTime = 1.8f;
 	constexpr int32 RevolverBulletSlotCount = 6;
 
@@ -276,7 +274,7 @@ ASDSelfShotGunActor::ASDSelfShotGunActor()
 	MuzzleFlashLight->SetIntensity(0.0f);
 	MuzzleFlashLight->SetIntensityUnits(ELightUnits::Lumens);
 	MuzzleFlashLight->SetAttenuationRadius(
-		FMath::Clamp(MuzzleFlashAttenuationRadius, 0.0f, MaximumMuzzleFlashAttenuationRadius));
+		FMath::Max(0.0f, MuzzleFlashAttenuationRadius));
 	MuzzleFlashLight->SetLightColor(MuzzleFlashColor);
 	MuzzleFlashLight->SetCastShadows(true);
 	MuzzleFlashLight->SetIndirectLightingIntensity(0.0f);
@@ -358,7 +356,7 @@ void ASDSelfShotGunActor::BeginPlay()
 	ChamberStartRotation = ChamberCurrentRotation;
 	ChamberTargetRotation = ChamberCurrentRotation;
 	MuzzleFlashLight->SetAttenuationRadius(
-		FMath::Clamp(MuzzleFlashAttenuationRadius, 0.0f, MaximumMuzzleFlashAttenuationRadius));
+		FMath::Max(0.0f, MuzzleFlashAttenuationRadius));
 	MuzzleFlashLight->SetIntensityUnits(ELightUnits::Lumens);
 	MuzzleFlashLight->SetLightColor(MuzzleFlashColor);
 	if (IsValid(SelfShotCinematicCamera))
@@ -421,7 +419,7 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 		MuzzleFlashElapsedTime = FMath::Max(0.0f, MuzzleFlashElapsedTime - DeltaSeconds);
 		MuzzleFlashLight->SetIntensity(
 			MuzzleFlashElapsedTime > 0.0f
-				? FMath::Clamp(MuzzleFlashIntensity, 0.0f, MaximumMuzzleFlashIntensity)
+				? FMath::Max(0.0f, MuzzleFlashIntensity)
 				: 0.0f);
 	}
 
@@ -976,6 +974,7 @@ void ASDSelfShotGunActor::HandleGamePhaseChanged(EShowDownPhase NewPhase)
 	}
 	if (NewPhase != EShowDownPhase::Betting && bRaiseBulletLoadActive)
 	{
+		CompleteAmmoStatusRaiseDelta();
 		SetBulletPresentationImmediate(StatusLiveRounds);
 	}
 	TryStartPendingRaiseBulletLoadPresentation();
@@ -1068,6 +1067,31 @@ void ASDSelfShotGunActor::ApplyAmmoStatusDisplaySettings()
 		}
 		AmmoStatusWidgetComponent->SetVisibility(bShouldShowAmmoStatus, true);
 		AmmoStatusWidgetComponent->SetHiddenInGame(!bShouldShowAmmoStatus, true);
+	}
+}
+
+void ASDSelfShotGunActor::ShowAmmoStatusRaiseDelta(int32 AddedRounds)
+{
+	ApplyAmmoStatusDisplaySettings();
+	if (AmmoStatusWidgetComponent)
+	{
+		if (UShowDownAmmoStatusWidget* AmmoWidget =
+			Cast<UShowDownAmmoStatusWidget>(AmmoStatusWidgetComponent->GetUserWidgetObject()))
+		{
+			AmmoWidget->ShowRaiseDelta(AddedRounds);
+		}
+	}
+}
+
+void ASDSelfShotGunActor::CompleteAmmoStatusRaiseDelta()
+{
+	if (AmmoStatusWidgetComponent)
+	{
+		if (UShowDownAmmoStatusWidget* AmmoWidget =
+			Cast<UShowDownAmmoStatusWidget>(AmmoStatusWidgetComponent->GetUserWidgetObject()))
+		{
+			AmmoWidget->CompleteRaiseDelta();
+		}
 	}
 }
 
@@ -1332,16 +1356,16 @@ void ASDSelfShotGunActor::FireLiveRound()
 	bCurrentShotWasEmpty = false;
 	MechanismResetStartTriggerRotation = TriggerRestRotation + TriggerPulledRotationOffset;
 	MechanismResetStartHammerRotation = HammerRestRotation + HammerFiredRotationOffset;
-	MuzzleFlashElapsedTime = FMath::Clamp(MuzzleFlashDuration, 0.01f, 0.025f);
+	MuzzleFlashElapsedTime = FMath::Max(0.01f, MuzzleFlashDuration);
 	MuzzleFlashLight->SetAttenuationRadius(
-		FMath::Clamp(MuzzleFlashAttenuationRadius, 0.0f, MaximumMuzzleFlashAttenuationRadius));
+		FMath::Max(0.0f, MuzzleFlashAttenuationRadius));
 	MuzzleFlashLight->SetIntensityUnits(ELightUnits::Lumens);
 	MuzzleFlashLight->SetLightColor(MuzzleFlashColor);
 	MuzzleFlashLight->SetCastShadows(true);
 	MuzzleFlashLight->SetIndirectLightingIntensity(0.0f);
 	MuzzleFlashLight->SetVolumetricScatteringIntensity(0.0f);
 	MuzzleFlashLight->SetIntensity(
-		FMath::Clamp(MuzzleFlashIntensity, 0.0f, MaximumMuzzleFlashIntensity));
+		FMath::Max(0.0f, MuzzleFlashIntensity));
 
 	PlayConfiguredSound(GunshotSound, bPlayGunshotSound2D, GetActorLocation());
 	if (UShowDownAudioSubsystem* AudioSubsystem = FindShowDownAudioSubsystem(this))
@@ -2635,11 +2659,13 @@ void ASDSelfShotGunActor::StartRaiseBulletLoadAnimation(
 	{
 		return;
 	}
+	ShowAmmoStatusRaiseDelta(ClampedNewBet - ClampedPreviousBet);
 
 	if (!bEnableRaiseBulletLoadAnimation)
 	{
 		SetBulletPresentationImmediate(ClampedNewBet);
 		ApplyAmmoStatusDisplaySettings();
+		CompleteAmmoStatusRaiseDelta();
 		RefreshRuntimeTickState();
 		return;
 	}
@@ -2839,6 +2865,7 @@ void ASDSelfShotGunActor::UpdateRaiseBulletLoadAnimation(float DeltaSeconds)
 	{
 		SetBulletPresentationImmediate(TargetCount);
 		ApplyAmmoStatusDisplaySettings();
+		CompleteAmmoStatusRaiseDelta();
 		RefreshRuntimeTickState();
 	}
 }

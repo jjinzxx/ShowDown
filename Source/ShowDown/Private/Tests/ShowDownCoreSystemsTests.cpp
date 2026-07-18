@@ -1947,9 +1947,17 @@ bool FShowDownAudioConfigTest::RunTest(const FString& Parameters)
 		AudioConfig->ButtonClickSound,
 		TEXT("/Game/Audio/SW_UI_ButtonClick.SW_UI_ButtonClick"));
 	TestSoundPath(
-		TEXT("BGM uses the imported Boogie Down track"),
+		TEXT("Gameplay BGM uses Call The Police"),
 		AudioConfig->BackgroundMusicSound,
-		TEXT("/Game/Audio/SW_BGM_BoogieDown.SW_BGM_BoogieDown"));
+		TEXT("/Game/Audio/SW_BGM_InGame.SW_BGM_InGame"));
+	TestSoundPath(
+		TEXT("Menu BGM uses Perfect Crime"),
+		AudioConfig->MenuMusicSound,
+		TEXT("/Game/Audio/SW_BGM_MainMenu.SW_BGM_MainMenu"));
+	TestSoundPath(
+		TEXT("Card reveals use the imported logo-reveal cue"),
+		AudioConfig->CardRevealSound,
+		TEXT("/Game/Audio/SW_CardReveal.SW_CardReveal"));
 	TestSoundPath(
 		TEXT("Spotlight transitions use the imported spotlight cue"),
 		AudioConfig->SpotlightTransitionSound,
@@ -1961,9 +1969,15 @@ bool FShowDownAudioConfigTest::RunTest(const FString& Parameters)
 
 	const USoundWave* CrowdBedWave = Cast<USoundWave>(AudioConfig->CrowdBedSound);
 	const USoundWave* BackgroundMusicWave = Cast<USoundWave>(AudioConfig->BackgroundMusicSound);
+	const USoundWave* MenuMusicWave = Cast<USoundWave>(AudioConfig->MenuMusicSound);
+	const USoundWave* CardRevealWave = Cast<USoundWave>(AudioConfig->CardRevealSound);
 	const USoundWave* LoserWarningWave = Cast<USoundWave>(AudioConfig->LoserSpotlightWarningSound);
 	TestTrue(TEXT("Crowd bed is configured to loop"), CrowdBedWave && CrowdBedWave->IsLooping());
-	TestTrue(TEXT("Background music is configured to loop"), BackgroundMusicWave && BackgroundMusicWave->IsLooping());
+	TestTrue(TEXT("Gameplay music is configured to loop"), BackgroundMusicWave && BackgroundMusicWave->IsLooping());
+	TestTrue(TEXT("Menu music is configured to loop"), MenuMusicWave && MenuMusicWave->IsLooping());
+	TestTrue(
+		TEXT("The card-reveal cue is a playable non-looping SoundWave"),
+		CardRevealWave && !CardRevealWave->IsLooping() && CardRevealWave->GetDuration() > 0.0f);
 	TestTrue(
 		TEXT("The loser spotlight warning is an imported non-looping SoundWave"),
 		LoserWarningWave && !LoserWarningWave->IsLooping());
@@ -1973,6 +1987,9 @@ bool FShowDownAudioConfigTest::RunTest(const FString& Parameters)
 	TestTrue(
 		TEXT("Background music has an audible configured volume"),
 		AudioConfig->BackgroundMusicVolume > 0.0f);
+	TestTrue(
+		TEXT("Menu music has an audible configured volume"),
+		AudioConfig->MenuMusicVolume > 0.0f);
 
 	TestEqual(
 		TEXT("Full user music volume resolves to the authored BGM target"),
@@ -2003,6 +2020,13 @@ bool FShowDownAudioConfigTest::RunTest(const FString& Parameters)
 	TestTrue(
 		TEXT("The loser spotlight warning has an audible configured volume"),
 		AudioConfig->LoserSpotlightWarningVolume > 0.0f);
+	TestEqual(
+		TEXT("The red loser spotlight warning is reduced by twenty percent"),
+		AudioConfig->LoserSpotlightWarningVolume,
+		0.80f);
+	TestTrue(
+		TEXT("Card reveal audio waits for the first reveal motion"),
+		AudioConfig->CardRevealSoundDelay > 0.0f);
 	return true;
 }
 

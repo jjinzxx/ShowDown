@@ -240,6 +240,8 @@ protected:
 	void HandleTableCinematicCue(ESDTableCinematicCue Cue, uint8 PlayerSlotMask);
 
 	void ApplyAmmoStatusDisplaySettings();
+	void ShowAmmoStatusRaiseDelta(int32 AddedRounds);
+	void CompleteAmmoStatusRaiseDelta();
 	void UpdateAmmoStatusAnchorLocation();
 	FLinearColor ResolveAmmoStatusRiskColor(int32 LiveRounds) const;
 

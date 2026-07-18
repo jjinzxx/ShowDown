@@ -85,6 +85,34 @@ void UShowDownAmmoStatusWidget::SetAmmoStatus(
 	RefreshVisuals();
 }
 
+void UShowDownAmmoStatusWidget::ShowRaiseDelta(int32 AddedRounds)
+{
+	const int32 SafeAddedRounds = FMath::Clamp(AddedRounds, 0, ChamberSlotCount);
+	if (SafeAddedRounds <= 0)
+	{
+		return;
+	}
+
+	BuildDefaultWidget();
+	CachedRaiseDelta = SafeAddedRounds;
+	bRaiseDeltaActive = true;
+	bRaiseDeltaCompleting = false;
+	RaiseDeltaElapsed = 0.0f;
+	RefreshVisuals();
+}
+
+void UShowDownAmmoStatusWidget::CompleteRaiseDelta()
+{
+	if (!bRaiseDeltaActive || bRaiseDeltaCompleting)
+	{
+		return;
+	}
+
+	bRaiseDeltaCompleting = true;
+	RaiseDeltaElapsed = 0.0f;
+	RefreshVisuals();
+}
+
 TSharedRef<SWidget> UShowDownAmmoStatusWidget::RebuildWidget()
 {
 	BuildDefaultWidget();
@@ -151,6 +179,19 @@ void UShowDownAmmoStatusWidget::NativeTick(const FGeometry& MyGeometry, float In
 		}
 	}
 
+	if (bRaiseDeltaActive)
+	{
+		RaiseDeltaElapsed += InDeltaTime;
+		if (bRaiseDeltaCompleting && RaiseDeltaElapsed >= RaiseDeltaCompleteDuration)
+		{
+			bRaiseDeltaActive = false;
+			bRaiseDeltaCompleting = false;
+			CachedRaiseDelta = 0;
+			RaiseDeltaElapsed = 0.0f;
+		}
+		bVisualChanged = true;
+	}
+
 	if (bVisualChanged)
 	{
 		RefreshVisuals();
@@ -179,6 +220,23 @@ void UShowDownAmmoStatusWidget::BuildDefaultWidget()
 
 	StatusRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("AmmoStatusRow"));
 	Background->SetContent(StatusRow);
+
+	RaiseDeltaBadge = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("AmmoRaiseDeltaBadge"));
+	RaiseDeltaBadge->SetPadding(FMargin(8.0f, 3.0f));
+	RaiseDeltaBadge->SetHorizontalAlignment(HAlign_Center);
+	RaiseDeltaBadge->SetVerticalAlignment(VAlign_Center);
+	RaiseDeltaBadge->SetRenderTransformPivot(FVector2D(0.5f, 0.5f));
+	RaiseDeltaBadge->SetVisibility(ESlateVisibility::Collapsed);
+	RaiseDeltaText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("AmmoRaiseDeltaText"));
+	RaiseDeltaText->SetJustification(ETextJustify::Center);
+	RaiseDeltaText->SetShadowOffset(FVector2D(0.0f, 2.0f));
+	RaiseDeltaText->SetShadowColorAndOpacity(FLinearColor::Black);
+	RaiseDeltaBadge->SetContent(RaiseDeltaText);
+	if (UOverlaySlot* BadgeSlot = RootOverlay->AddChildToOverlay(RaiseDeltaBadge))
+	{
+		BadgeSlot->SetHorizontalAlignment(HAlign_Center);
+		BadgeSlot->SetVerticalAlignment(VAlign_Center);
+	}
 
 	SlotContainers.Reserve(ChamberSlotCount);
 	SlotCircles.Reserve(ChamberSlotCount);
@@ -292,6 +350,73 @@ void UShowDownAmmoStatusWidget::RefreshVisuals()
 			bCachedEmphasized ? 1.5f : 1.0f));
 		Background->SetBrushColor(FLinearColor::White);
 		Background->SetRenderScale(FVector2D(ResolvePanelScale()));
+	}
+
+	if (RaiseDeltaBadge && RaiseDeltaText)
+	{
+		if (!bRaiseDeltaActive || CachedRaiseDelta <= 0)
+		{
+			RaiseDeltaBadge->SetVisibility(ESlateVisibility::Collapsed);
+		}
+		else
+		{
+			RaiseDeltaBadge->SetVisibility(ESlateVisibility::HitTestInvisible);
+			RaiseDeltaText->SetText(FText::FromString(FString::Printf(TEXT("+%d"), CachedRaiseDelta)));
+			FSlateFontInfo DeltaFont(
+				FCoreStyle::GetDefaultFont(),
+				FMath::RoundToInt(CachedSlotDiameter * 0.64f));
+			DeltaFont.OutlineSettings.OutlineSize = 2;
+			DeltaFont.OutlineSettings.OutlineColor = FLinearColor::Black;
+			RaiseDeltaText->SetFont(DeltaFont);
+			RaiseDeltaText->SetColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.68f, 0.20f, 1.0f)));
+			RaiseDeltaBadge->SetBrush(FSlateRoundedBoxBrush(
+				FLinearColor(0.055f, 0.03f, 0.012f, 0.96f),
+				8.0f,
+				FLinearColor(1.0f, 0.42f, 0.06f, 0.94f),
+				1.5f));
+			RaiseDeltaBadge->SetBrushColor(FLinearColor::White);
+
+			float BadgeScale = 1.0f;
+			float BadgeOpacity = 1.0f;
+			if (!bRaiseDeltaCompleting)
+			{
+				const float AppearAlpha = FMath::Clamp(
+					RaiseDeltaElapsed / RaiseDeltaAppearDuration,
+					0.0f,
+					1.0f);
+				BadgeScale = FMath::InterpEaseOut(0.72f, 1.0f, AppearAlpha, 2.5f);
+				BadgeOpacity = FMath::SmoothStep(0.0f, 1.0f, AppearAlpha);
+			}
+			else
+			{
+				const float CompleteAlpha = FMath::Clamp(
+					RaiseDeltaElapsed / RaiseDeltaCompleteDuration,
+					0.0f,
+					1.0f);
+				if (CompleteAlpha < 0.30f)
+				{
+					BadgeScale = FMath::InterpEaseOut(
+						1.0f,
+						1.18f,
+						CompleteAlpha / 0.30f,
+						2.0f);
+				}
+				else
+				{
+					const float FadeAlpha = (CompleteAlpha - 0.30f) / 0.70f;
+					BadgeScale = FMath::InterpEaseInOut(1.18f, 0.88f, FadeAlpha, 2.0f);
+					BadgeOpacity = 1.0f - FMath::SmoothStep(0.0f, 1.0f, FadeAlpha);
+				}
+			}
+
+			const float RowWidth = CachedSlotDiameter * static_cast<float>(ChamberSlotCount)
+				+ CachedSlotSpacing * static_cast<float>(ChamberSlotCount - 1);
+			RaiseDeltaBadge->SetRenderTranslation(FVector2D(
+				RowWidth * 0.5f + 10.0f,
+				-CachedSlotDiameter * 0.58f));
+			RaiseDeltaBadge->SetRenderScale(FVector2D(BadgeScale));
+			RaiseDeltaBadge->SetRenderOpacity(BadgeOpacity);
+		}
 	}
 
 	for (int32 SlotIndex = 0; SlotIndex < ChamberSlotCount; ++SlotIndex)

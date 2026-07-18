@@ -842,6 +842,21 @@ void USDGunVisionSequenceSubsystem::PlayLoserSpotlightWarningSound() const
 	}
 }
 
+void USDGunVisionSequenceSubsystem::PlayCardRevealSound() const
+{
+	if (const UWorld* World = GetWorld())
+	{
+		if (UGameInstance* GameInstance = World->GetGameInstance())
+		{
+			if (UShowDownAudioSubsystem* AudioSubsystem =
+				GameInstance->GetSubsystem<UShowDownAudioSubsystem>())
+			{
+				AudioSubsystem->NotifyCardRevealStarted();
+			}
+		}
+	}
+}
+
 void USDGunVisionSequenceSubsystem::RefreshTurnSpotlightSoundState()
 {
 	const AShowDownGameStateBase* GameState = BoundGameState.Get();
@@ -1164,6 +1179,7 @@ void USDGunVisionSequenceSubsystem::HandleTableCinematicCue(
 
 	case ESDTableCinematicCue::RevealStarted:
 		bMatchPresentationActivated = true;
+		PlayCardRevealSound();
 		{
 			bool bSpotlightChanged = ActiveTargetSpotlightMask != 0;
 			ActiveTargetSpotlightMask = 0;
