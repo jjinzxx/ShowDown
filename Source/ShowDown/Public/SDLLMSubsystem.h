@@ -39,6 +39,18 @@ struct FSDLLMBossContext
 	FString DiscardedCardsSummary;
 
 	UPROPERTY(BlueprintReadWrite, Category = "ShowDown|LLM")
+	FString CurrentPhase = TEXT("none");
+
+	UPROPERTY(BlueprintReadWrite, Category = "ShowDown|LLM")
+	FString CurrentTurn = TEXT("none");
+
+	UPROPERTY(BlueprintReadWrite, Category = "ShowDown|LLM")
+	FString ExpectedAction = TEXT("wait");
+
+	UPROPERTY(BlueprintReadWrite, Category = "ShowDown|LLM")
+	FString OpponentName = TEXT("상대");
+
+	UPROPERTY(BlueprintReadWrite, Category = "ShowDown|LLM")
 	int32 PlayerForeheadRank = 0;
 
 	UPROPERTY(BlueprintReadWrite, Category = "ShowDown|LLM")

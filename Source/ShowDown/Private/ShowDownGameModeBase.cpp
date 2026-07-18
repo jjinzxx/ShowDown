@@ -4983,6 +4983,20 @@ void AShowDownGameModeBase::ExecuteCollectorBetDecision(const FCollectorBetDecis
 FSDLLMBossContext AShowDownGameModeBase::BuildLLMBossContext(int32 CurrentBet, int32 GivenCardRank) const
 {
 	FSDLLMBossContext Context;
+	GConfig->GetString(
+		TEXT("ShowDown.UserSettings"),
+		TEXT("CharacterName"),
+		Context.OpponentName,
+		GGameUserSettingsIni);
+	Context.OpponentName = Context.OpponentName.TrimStartAndEnd().Left(32);
+	Context.OpponentName.ReplaceInline(TEXT("\r"), TEXT(" "));
+	Context.OpponentName.ReplaceInline(TEXT("\n"), TEXT(" "));
+	Context.OpponentName.ReplaceInline(TEXT("<"), TEXT(""));
+	Context.OpponentName.ReplaceInline(TEXT(">"), TEXT(""));
+	if (Context.OpponentName.IsEmpty())
+	{
+		Context.OpponentName = TEXT("상대");
+	}
 	Context.PlayerForeheadRank = GivenCardRank;
 	Context.CollectorForeheadRank = CollectorState.ForeheadCard ? CollectorState.ForeheadCard->Rank : 0;
 	Context.PlayerCardClaimMode = GetCollectorCardClaimModeText();
@@ -5010,6 +5024,56 @@ FSDLLMBossContext AShowDownGameModeBase::BuildLLMBossContext(int32 CurrentBet, i
 	if (const AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 	{
 		Context.Round = ShowDownGameState->CurrentRound;
+		switch (ShowDownGameState->CurrentPhase)
+		{
+		case EShowDownPhase::SelectCard:
+			Context.CurrentPhase = TEXT("card_selection");
+			Context.CurrentTurn = ShowDownGameState->NameTagTurnSide == EShowDownSide::Collector
+				? TEXT("collector")
+				: TEXT("player");
+			Context.ExpectedAction = ShowDownGameState->NameTagTurnSide == EShowDownSide::Collector
+				? TEXT("collector_gives_card")
+				: TEXT("player_gives_card");
+			break;
+
+		case EShowDownPhase::Betting:
+			Context.CurrentPhase = TEXT("betting");
+			Context.CurrentTurn = ShowDownGameState->NameTagTurnSide == EShowDownSide::Collector
+				? TEXT("collector")
+				: TEXT("player");
+			Context.ExpectedAction = ShowDownGameState->NameTagTurnSide == EShowDownSide::Collector
+				? TEXT("collector_bets")
+				: TEXT("player_bets");
+			break;
+
+		case EShowDownPhase::Reveal:
+			Context.CurrentPhase = TEXT("card_reveal");
+			Context.ExpectedAction = TEXT("react_to_reveal");
+			break;
+
+		case EShowDownPhase::Roulette:
+			Context.CurrentPhase = TEXT("roulette");
+			Context.ExpectedAction = TEXT("wait_for_shot");
+			break;
+
+		case EShowDownPhase::RoundEnd:
+			Context.CurrentPhase = TEXT("round_end");
+			Context.ExpectedAction = TEXT("wait_for_next_round");
+			break;
+
+		case EShowDownPhase::GameOver:
+			Context.CurrentPhase = TEXT("game_over");
+			Context.ExpectedAction = TEXT("react_to_match_end");
+			break;
+
+		case EShowDownPhase::None:
+		default:
+			Context.CurrentPhase = bInitialCardDealPresentationInProgress
+				? TEXT("initial_deal")
+				: TEXT("waiting");
+			Context.ExpectedAction = TEXT("wait");
+			break;
+		}
 	}
 
 	for (const ACard* Card : CollectorState.HandCards)
