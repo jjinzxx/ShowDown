@@ -56,13 +56,17 @@ bool FShowDownMultiplayerHandSpacingTest::RunTest(const FString& Parameters)
 	}
 
 	TestEqual(
-		TEXT("Player 3 uses the same card spacing as the shared single-player layout"),
+		TEXT("Player 3 keeps the compact side-seat spacing"),
 		Player3Anchor->CardSpacing,
-		BaseAnchor->CardSpacing);
+		9.0f);
 	TestEqual(
-		TEXT("Player 4 uses the same card spacing as the shared single-player layout"),
+		TEXT("Player 4 keeps the compact side-seat spacing"),
 		Player4Anchor->CardSpacing,
-		BaseAnchor->CardSpacing);
+		9.0f);
+	TestTrue(
+		TEXT("Side-seat hands are more compact than the generic hand layout"),
+		Player3Anchor->CardSpacing < BaseAnchor->CardSpacing
+			&& Player4Anchor->CardSpacing < BaseAnchor->CardSpacing);
 	return true;
 }
 

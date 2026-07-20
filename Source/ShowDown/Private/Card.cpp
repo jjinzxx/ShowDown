@@ -168,7 +168,8 @@ void ACard::BeginPlay()
 			ReplicatedMovementTarget.bUseSettleMotion,
 			ReplicatedMovementTarget.bOrientToLocalViewer,
 			ReplicatedMovementTarget.SettleStrength,
-			ReplicatedMovementTarget.ServerStartTime);
+			ReplicatedMovementTarget.ServerStartTime,
+			ReplicatedMovementTarget.bRevealAtMotionStart);
 	}
 }
 
@@ -361,7 +362,8 @@ void ACard::OnRep_MovementTarget()
 		ReplicatedMovementTarget.bUseSettleMotion,
 		ReplicatedMovementTarget.bOrientToLocalViewer,
 		ReplicatedMovementTarget.SettleStrength,
-		ReplicatedMovementTarget.ServerStartTime);
+		ReplicatedMovementTarget.ServerStartTime,
+		ReplicatedMovementTarget.bRevealAtMotionStart);
 	ApplySynchronizedVisualScale(
 		ReplicatedMovementTarget.VisualScaleMultiplier,
 		ReplicatedMovementTarget.ServerStartTime,
@@ -659,6 +661,29 @@ void ACard::MoveToPresentationTransform(
 	bool bOrientToLocalViewer,
 	float SettleStrength)
 {
+	MoveToPresentationTransformAtServerTime(
+		NewTransform,
+		VisualScaleMultiplier,
+		MotionDuration,
+		ArcHeight,
+		-1.0f,
+		false,
+		bUseSettleMotion,
+		bOrientToLocalViewer,
+		SettleStrength);
+}
+
+void ACard::MoveToPresentationTransformAtServerTime(
+	const FTransform& NewTransform,
+	float VisualScaleMultiplier,
+	float MotionDuration,
+	float ArcHeight,
+	float ServerStartTime,
+	bool bRevealAtMotionStart,
+	bool bUseSettleMotion,
+	bool bOrientToLocalViewer,
+	float SettleStrength)
+{
 	ClearPendingSlotAttachment();
 	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
 	bSelected = false;
@@ -667,9 +692,29 @@ void ACard::MoveToPresentationTransform(
 	const float SafeDuration = FMath::Max(0.05f, MotionDuration);
 	const float SafeArcHeight = FMath::Max(0.0f, ArcHeight);
 	const float SafeSettleStrength = FMath::Clamp(SettleStrength, 0.0f, 1.0f);
-	ApplyMovementTarget(NewTransform, true, SafeDuration, SafeArcHeight, 0.0f, bUseSettleMotion, bOrientToLocalViewer, SafeSettleStrength);
+	ApplyMovementTarget(
+		NewTransform,
+		true,
+		SafeDuration,
+		SafeArcHeight,
+		0.0f,
+		bUseSettleMotion,
+		bOrientToLocalViewer,
+		SafeSettleStrength,
+		ServerStartTime,
+		bRevealAtMotionStart);
 	SetTargetVisualScaleMultiplier(VisualScaleMultiplier);
-	PublishMovementTarget(NewTransform, true, SafeDuration, SafeArcHeight, 0.0f, bUseSettleMotion, bOrientToLocalViewer, SafeSettleStrength);
+	PublishMovementTarget(
+		NewTransform,
+		true,
+		SafeDuration,
+		SafeArcHeight,
+		0.0f,
+		bUseSettleMotion,
+		bOrientToLocalViewer,
+		SafeSettleStrength,
+		ServerStartTime,
+		bRevealAtMotionStart);
 }
 
 void ACard::EnableMotionTick()
@@ -686,7 +731,8 @@ void ACard::PublishMovementTarget(
 	bool bUseSettleMotion,
 	bool bOrientToLocalViewer,
 	float SettleStrength,
-	float ServerStartTime)
+	float ServerStartTime,
+	bool bRevealAtMotionStart)
 {
 	if (!HasAuthority())
 	{
@@ -703,6 +749,7 @@ void ACard::PublishMovementTarget(
 	ReplicatedMovementTarget.SettleStrength = FMath::Clamp(SettleStrength, 0.0f, 1.0f);
 	ReplicatedMovementTarget.bOrientToLocalViewer = bOrientToLocalViewer;
 	ReplicatedMovementTarget.VisualScaleMultiplier = TargetVisualScaleMultiplier;
+	ReplicatedMovementTarget.bRevealAtMotionStart = bRevealAtMotionStart;
 	if (ServerStartTime >= 0.0f)
 	{
 		ReplicatedMovementTarget.ServerStartTime = ServerStartTime;
@@ -732,15 +779,22 @@ void ACard::ApplyMovementTarget(
 	bool bUseSettleMotion,
 	bool bOrientToLocalViewer,
 	float SettleStrength,
-	float ServerStartTime)
+	float ServerStartTime,
+	bool bRevealAtMotionStart)
 {
 	ResetTravelMotionState();
 	ActiveSlotAttachDuration = MotionDuration >= 0.0f ? MotionDuration : SlotAttachDuration;
+	ActiveSlotAttachServerStartTime = ServerStartTime;
 	ActiveSlotAttachArcHeight = ArcHeight >= 0.0f ? ArcHeight : SlotAttachArcHeight;
 	ActiveSlotAttachOvershootDistance = OvershootDistance >= 0.0f ? OvershootDistance : SlotAttachOvershootDistance;
 	bActiveSlotAttachSettleMotion = bUseSettleMotion;
 	ActiveSlotAttachSettleStrength = FMath::Clamp(SettleStrength, 0.0f, 1.0f);
 	bActiveOrientToLocalViewer = bOrientToLocalViewer;
+	bActiveRevealAtMotionStart = bRevealAtMotionStart;
+	if (bActiveRevealAtMotionStart)
+	{
+		SetActorHiddenInGame(true);
+	}
 	TargetLocalViewerOrientationAlpha = bActiveOrientToLocalViewer ? 1.0f : 0.0f;
 	DefaultLocation = NewTransform.GetLocation();
 	DefaultRotation = NewTransform.GetRotation().Rotator();
@@ -750,24 +804,20 @@ void ACard::ApplyMovementTarget(
 	if (bPlaySlotAttachMotion)
 	{
 		StartSlotAttachMotion(FTransform(DefaultRotation, DefaultLocation));
-		if (!HasAuthority() && ServerStartTime >= 0.0f && GetWorld() && GetWorld()->GetGameState())
+		if (ServerStartTime >= 0.0f && GetWorld() && GetWorld()->GetGameState())
 		{
 			const float ServerNow = GetWorld()->GetGameState()->GetServerWorldTimeSeconds();
 			const float ElapsedBeforeReceipt = FMath::Max(0.0f, ServerNow - ServerStartTime);
-			if (ElapsedBeforeReceipt > KINDA_SMALL_NUMBER)
+			UpdateSlotAttachMotion(0.0f);
+			UpdateLocalViewerOrientation(FMath::Min(ElapsedBeforeReceipt, ActiveSlotAttachDuration));
+			if (bSlotAttachSettleActive && ElapsedBeforeReceipt > ActiveSlotAttachDuration)
 			{
-				const float MotionDurationSeconds = FMath::Max(0.05f, ActiveSlotAttachDuration);
-				UpdateSlotAttachMotion(FMath::Min(ElapsedBeforeReceipt, MotionDurationSeconds));
-				UpdateLocalViewerOrientation(FMath::Min(ElapsedBeforeReceipt, MotionDurationSeconds));
-				if (bSlotAttachSettleActive && ElapsedBeforeReceipt > MotionDurationSeconds)
+				SlotAttachSettleElapsedTime = FMath::Min(
+					ElapsedBeforeReceipt - ActiveSlotAttachDuration,
+					FMath::Max(0.0f, SlotAttachSettleDuration));
+				if (SlotAttachSettleElapsedTime >= SlotAttachSettleDuration)
 				{
-					SlotAttachSettleElapsedTime = FMath::Min(
-						ElapsedBeforeReceipt - MotionDurationSeconds,
-						FMath::Max(0.0f, SlotAttachSettleDuration));
-					if (SlotAttachSettleElapsedTime >= SlotAttachSettleDuration)
-					{
-						bSlotAttachSettleActive = false;
-					}
+					bSlotAttachSettleActive = false;
 				}
 			}
 		}
@@ -802,8 +852,10 @@ void ACard::ResetTravelMotionState()
 {
 	bSlotAttachMotionActive = false;
 	bSlotAttachSettleActive = false;
+	bActiveRevealAtMotionStart = false;
 	SlotAttachElapsedTime = 0.0f;
 	SlotAttachSettleElapsedTime = 0.0f;
+	ActiveSlotAttachServerStartTime = -1.0f;
 }
 
 void ACard::UpdateTargetTransform()
@@ -846,7 +898,35 @@ void ACard::StartSlotAttachMotion(const FTransform& TargetTransform)
 
 void ACard::UpdateSlotAttachMotion(float DeltaTime)
 {
-	SlotAttachElapsedTime += DeltaTime;
+	bool bScheduledStartReached = true;
+	if (ActiveSlotAttachServerStartTime >= 0.0f && GetWorld() && GetWorld()->GetGameState())
+	{
+		const float ServerNow = GetWorld()->GetGameState()->GetServerWorldTimeSeconds();
+		bScheduledStartReached = ServerNow >= ActiveSlotAttachServerStartTime;
+		SlotAttachElapsedTime = FMath::Max(
+			0.0f,
+			ServerNow - ActiveSlotAttachServerStartTime);
+	}
+	else
+	{
+		SlotAttachElapsedTime += DeltaTime;
+	}
+
+	if (!bScheduledStartReached)
+	{
+		return;
+	}
+
+	if (bActiveRevealAtMotionStart)
+	{
+		bActiveRevealAtMotionStart = false;
+		SetActorHiddenInGame(false);
+		if (HasAuthority())
+		{
+			ForceNetUpdate();
+		}
+	}
+
 	const float Duration = FMath::Max(0.05f, ActiveSlotAttachDuration);
 	const float Alpha = FMath::Clamp(SlotAttachElapsedTime / Duration, 0.0f, 1.0f);
 	const float EasedAlpha = FMath::InterpEaseInOut(0.0f, 1.0f, Alpha, 2.0f);

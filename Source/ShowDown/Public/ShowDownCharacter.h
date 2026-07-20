@@ -126,6 +126,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Hit Recovery")
 	void StartHitRecoveryPresentation(bool bFinalElimination);
 
+	/** Publishes a hit ahead of time so every machine starts the ragdoll on the same server frame. */
+	void ScheduleHitRecoveryPresentation(bool bFinalElimination, float ServerStartTimeSeconds);
+
 	/** Clears an interrupted presentation, for example when a new match resets the table. */
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Hit Recovery")
 	void CancelHitRecoveryPresentation(bool bRevealCharacter = true);
@@ -167,6 +170,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Player Camera")
 	void SetPlayerViewRotation(FRotator ViewRotation);
+
+	/** Server-side path for a remote player's sampled view. Keeps the listen-server view smooth too. */
+	void SetRemotePlayerViewRotation(FRotator ViewRotation);
 
 	UFUNCTION(BlueprintPure, Category = "ShowDown|Player Camera")
 	FName ResolvePlayerCameraAttachName() const;
@@ -441,6 +447,14 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Player Camera", meta = (ClampMin = "0.0", ClampMax = "120.0"))
 	float MaxHeadLookYaw = 65.0f;
 
+	/** Exponential interpolation speed used only for remote character heads. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Player Camera", meta = (ClampMin = "1.0", ClampMax = "40.0"))
+	float RemoteHeadLookInterpolationSpeed = 9.0f;
+
+	/** Very large discontinuities are snapped so a reset or seat change cannot leave the head trailing behind. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Player Camera", meta = (ClampMin = "30.0", ClampMax = "180.0"))
+	float RemoteHeadLookSnapAngle = 85.0f;
+
 	UPROPERTY(ReplicatedUsing = OnRep_ViewRotation, BlueprintReadOnly, Category = "ShowDown|Player Camera")
 	FRotator ReplicatedPlayerViewRotation = FRotator::ZeroRotator;
 
@@ -592,6 +606,9 @@ private:
 	void StopActionVisuals();
 	void PushAnimStateToAnimInstance() const;
 	void ApplyPlayerViewRotation(FRotator ViewRotation);
+	void QueueRemotePlayerViewRotation(FRotator ViewRotation);
+	void UpdateRemoteHeadLook(float DeltaSeconds);
+	void CalculateHeadLookForViewRotation(FRotator ViewRotation, float& OutPitch, float& OutYaw) const;
 	void ApplyCharacterSceneActive();
 	void ApplyPresentationCollisionSettings();
 	void RefreshRoundStatusSpotlight();
@@ -629,7 +646,12 @@ private:
 	FVector BaseMeshRelativeLocation = FVector::ZeroVector;
 	FRotator BaseMeshRelativeRotation = FRotator::ZeroRotator;
 	FString AppliedCharacterSkinId;
+	float RemoteHeadLookTargetPitch = 0.0f;
+	float RemoteHeadLookTargetYaw = 0.0f;
+	bool bRemoteHeadLookInitialized = false;
+	bool bRemoteHeadLookInterpolationActive = false;
 	int32 LocalHitRecoverySequence = INDEX_NONE;
+	bool bHitRecoveryImpactStarted = false;
 	bool bHitRecoveryVisualConcealed = false;
 	bool bHitRecoveryStatusConcealed = false;
 	bool bHitRecoveryRagdollReset = false;

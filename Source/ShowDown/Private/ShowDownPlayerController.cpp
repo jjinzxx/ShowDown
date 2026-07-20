@@ -71,8 +71,8 @@ namespace
 	};
 
 	const TCHAR* DefaultInteractionOutlineMaterialPath = TEXT("/Game/ArtTone/M_PP_InteractionOutline.M_PP_InteractionOutline");
-	constexpr float CharacterHeadLookReplicationInterval = 0.05f;
-	constexpr float CharacterHeadLookReplicationAngleThreshold = 0.5f;
+	constexpr float CharacterHeadLookReplicationInterval = 1.0f / 30.0f;
+	constexpr float CharacterHeadLookReplicationAngleThreshold = 0.25f;
 	constexpr int32 GameplayPromptZOrder = 400;
 	constexpr int32 GameplayStatusHudZOrder = 390;
 	constexpr float GameplayHudIntroFadeDuration = 0.55f;
@@ -4813,7 +4813,7 @@ void AShowDownPlayerController::ServerUpdateCharacterHeadLookRotation_Implementa
 {
 	if (AShowDownCharacter* TargetCharacter = FindLocalCharacterForPlayerCamera())
 	{
-		TargetCharacter->SetPlayerViewRotation(LookRotation);
+		TargetCharacter->SetRemotePlayerViewRotation(LookRotation);
 	}
 }
 

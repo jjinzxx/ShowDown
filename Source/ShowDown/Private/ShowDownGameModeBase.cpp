@@ -2229,6 +2229,13 @@ void AShowDownGameModeBase::AnimatePreparedOpeningHands(
 	const float DealStaggerSeconds = 0.16f;
 	const float DealMoveDuration = FMath::Max(0.65f, InitialDealCardMoveDuration);
 	const float DealBounceStrength = FMath::Clamp(InitialDealCardBounceStrength, 0.0f, 1.0f);
+	const float DealTimelineServerStart = GetShowDownGameState()
+		? GetShowDownGameState()->GetServerWorldTimeSeconds()
+		: GetWorld()->GetTimeSeconds();
+	const float NetworkScheduleLeadTime = FMath::Clamp(
+		InitialDealNetworkScheduleLeadTime,
+		0.0f,
+		DealLeadInSeconds);
 	const int32 CardsPerParticipant = CardsInDealOrder.Num() / ParticipantCount;
 	const bool bDealSinglePlayerPairsTogether = !bInitialCardDealIsMultiplayer
 		&& ParticipantCount == 2;
@@ -2280,26 +2287,33 @@ void AShowDownGameModeBase::AnimatePreparedOpeningHands(
 		{
 			const TWeakObjectPtr<ACard> WeakCard(CardsInDealOrder[DealIndex]);
 			const FTransform FlatTransform = FlatTransforms[DealIndex];
-			ScheduleInitialCardDealAction(DealLeadInSeconds + DealIndex * DealStaggerSeconds,
-				[this, WeakCard, FlatTransform, DealMoveDuration, DealBounceStrength, DealIndex,
-					SafeDeckRemainingBeforeDeal, DeckVisualTotalCards]()
+			const float VisualStartDelay = DealLeadInSeconds + DealIndex * DealStaggerSeconds;
+			const float ScheduledServerStart = DealTimelineServerStart + VisualStartDelay;
+			ScheduleInitialCardDealAction(
+				FMath::Max(0.0f, VisualStartDelay - NetworkScheduleLeadTime),
+				[WeakCard, FlatTransform, DealMoveDuration, DealBounceStrength, ScheduledServerStart]()
 				{
-					SetInitialDealDeckVisual(
-						SafeDeckRemainingBeforeDeal - DealIndex - 1,
-						DeckVisualTotalCards);
 					if (ACard* LiveCard = WeakCard.Get())
 					{
-						LiveCard->SetActorHiddenInGame(false);
-						LiveCard->MoveToPresentationTransform(
+						LiveCard->MoveToPresentationTransformAtServerTime(
 							FlatTransform,
 							1.0f,
 							DealMoveDuration,
 							34.0f,
+							ScheduledServerStart,
+							true,
 							true,
 							false,
 							DealBounceStrength);
-						LiveCard->ForceNetUpdate();
 					}
+				});
+			ScheduleInitialCardDealAction(
+				VisualStartDelay,
+				[this, DealIndex, SafeDeckRemainingBeforeDeal, DeckVisualTotalCards]()
+				{
+					SetInitialDealDeckVisual(
+						SafeDeckRemainingBeforeDeal - DealIndex - 1,
+						DeckVisualTotalCards);
 				});
 		}
 	}
@@ -2324,16 +2338,20 @@ void AShowDownGameModeBase::AnimatePreparedOpeningHands(
 
 			const TWeakObjectPtr<ACard> WeakCard(CardsInDealOrder[DealIndex]);
 			const FTransform FinalTransform = FinalTransforms[DealIndex];
-			ScheduleInitialCardDealAction(StartDelay,
-				[WeakCard, FinalTransform, LiftMoveDuration, LiftArcHeight]()
+			const float ScheduledServerStart = DealTimelineServerStart + StartDelay;
+			ScheduleInitialCardDealAction(
+				FMath::Max(0.0f, StartDelay - NetworkScheduleLeadTime),
+				[WeakCard, FinalTransform, LiftMoveDuration, LiftArcHeight, ScheduledServerStart]()
 				{
 					if (ACard* LiveCard = WeakCard.Get())
 					{
-						LiveCard->MoveToPresentationTransform(
+						LiveCard->MoveToPresentationTransformAtServerTime(
 							FinalTransform,
 							1.0f,
 							LiftMoveDuration,
 							LiftArcHeight,
+							ScheduledServerStart,
+							false,
 							false);
 					}
 				});
@@ -10013,6 +10031,20 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 		{
+			if (bHit)
+			{
+				if (AShowDownCharacter* TargetCharacter =
+					FindActiveCharacterForPlayerSlot(GetWorld(), TargetSlot))
+				{
+					const ASDPlayerState* ResolvedTargetPlayer = WeakTargetPlayer.Get();
+					const bool bFinalElimination = ResolvedTargetPlayer
+						&& ResolvedTargetPlayer->Lives <= 1;
+					TargetCharacter->ScheduleHitRecoveryPresentation(
+						bFinalElimination,
+						ShowDownGameState->GetServerWorldTimeSeconds() + ResultDelay);
+				}
+			}
+
 			ShowDownGameState->SetPhase(EShowDownPhase::Roulette);
 			ShowDownGameState->SetNameTagPlayerLoadedBulletCount(TargetSlot, ClampedBulletCount);
 			ShowDownGameState->SetNameTagRoundStatus(
@@ -10810,10 +10842,9 @@ FSDCardHandLayoutSettings AShowDownGameModeBase::ResolveHandLayoutSettingsForPla
 			bHasLegacyGenericSideSeatLayout || bHasLegacyCompactSideSeatLayout;
 		if (bSideSeat && bHasLegacySideSeatLayout)
 		{
-			// Normalize the two exact legacy Player 3/4 presets. Both the old generic
-			// preset and the old compact preset now share the single-player gap while
-			// deliberately authored custom layouts remain untouched.
-			Settings.CardSpacing = CardSpacing;
+			// Side seats need an overlapped hand. The global 70-unit spacing was
+			// accidentally restored here and spread Player 3/4 cards across the table.
+			Settings.CardSpacing = 9.0f;
 			Settings.ForwardOffset = 0.0f;
 			Settings.HeightOffset = 0.0f;
 			Settings.LeanAngle = 0.0f;

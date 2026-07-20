@@ -53,6 +53,9 @@ struct FSDCardMovementTarget
 	float ServerStartTime = -1.0f;
 
 	UPROPERTY()
+	bool bRevealAtMotionStart = false;
+
+	UPROPERTY()
 	uint8 Revision = 0;
 };
 
@@ -225,6 +228,18 @@ public:
 		bool bOrientToLocalViewer = false,
 		float SettleStrength = 1.0f);
 
+	/** Sends a movement target before it starts, allowing remote clients to play it on the shared server clock. */
+	void MoveToPresentationTransformAtServerTime(
+		const FTransform& NewTransform,
+		float VisualScaleMultiplier,
+		float MotionDuration,
+		float ArcHeight,
+		float ServerStartTime,
+		bool bRevealAtMotionStart,
+		bool bUseSettleMotion = false,
+		bool bOrientToLocalViewer = false,
+		float SettleStrength = 1.0f);
+
 	virtual bool CanInteract_Implementation(AActor* Interactor) const override;
 	virtual void Interact_Implementation(AActor* Interactor) override;
 
@@ -263,7 +278,8 @@ private:
 		bool bUseSettleMotion = true,
 		bool bOrientToLocalViewer = false,
 		float SettleStrength = 1.0f,
-		float ServerStartTime = -1.0f);
+		float ServerStartTime = -1.0f,
+		bool bRevealAtMotionStart = false);
 	void ApplyMovementTarget(
 		const FTransform& NewTransform,
 		bool bPlaySlotAttachMotion,
@@ -273,7 +289,8 @@ private:
 		bool bUseSettleMotion = true,
 		bool bOrientToLocalViewer = false,
 		float SettleStrength = 1.0f,
-		float ServerStartTime = -1.0f);
+		float ServerStartTime = -1.0f,
+		bool bRevealAtMotionStart = false);
 	void AttachToPendingSlot();
 	void ClearPendingSlotAttachment();
 	void ResetTravelMotionState();
@@ -314,6 +331,7 @@ private:
 	float VisualScaleElapsedTime = 0.0f;
 	float SlotAttachElapsedTime = 0.0f;
 	float SlotAttachSettleElapsedTime = 0.0f;
+	float ActiveSlotAttachServerStartTime = -1.0f;
 	float ActiveSlotAttachDuration = 0.85f;
 	float ActiveSlotAttachArcHeight = 55.0f;
 	float ActiveSlotAttachOvershootDistance = 8.0f;
@@ -322,6 +340,7 @@ private:
 	float TargetLocalViewerOrientationAlpha = 0.0f;
 	bool bActiveSlotAttachSettleMotion = true;
 	bool bActiveOrientToLocalViewer = false;
+	bool bActiveRevealAtMotionStart = false;
 	float TargetVisualScaleMultiplier = 1.0f;
 	UPROPERTY(ReplicatedUsing = OnRep_MovementTarget)
 	FSDCardMovementTarget ReplicatedMovementTarget;

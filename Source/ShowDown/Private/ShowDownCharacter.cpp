@@ -321,6 +321,7 @@ AShowDownCharacter::AShowDownCharacter()
 void AShowDownCharacter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	UpdateRemoteHeadLook(DeltaSeconds);
 	UpdateHitRecoveryPresentation();
 	UpdateWorldLifeLostPulse(DeltaSeconds);
 
@@ -617,6 +618,13 @@ void AShowDownCharacter::StartHitRagdoll()
 
 void AShowDownCharacter::StartHitRecoveryPresentation(bool bFinalElimination)
 {
+	ScheduleHitRecoveryPresentation(bFinalElimination, GetSynchronizedServerTimeSeconds());
+}
+
+void AShowDownCharacter::ScheduleHitRecoveryPresentation(
+	bool bFinalElimination,
+	float ServerStartTimeSeconds)
+{
 	if (!HasAuthority())
 	{
 		// Result presentation is server-authored. Map-placed characters are not
@@ -643,15 +651,13 @@ void AShowDownCharacter::StartHitRecoveryPresentation(bool bFinalElimination)
 	HitRecoveryPresentationState.Sequence = HitRecoveryPresentationState.Sequence == MAX_int32
 		? 1
 		: HitRecoveryPresentationState.Sequence + 1;
-	HitRecoveryPresentationState.ServerStartTimeSeconds = GetSynchronizedServerTimeSeconds();
+	HitRecoveryPresentationState.ServerStartTimeSeconds = FMath::Max(
+		GetSynchronizedServerTimeSeconds(),
+		ServerStartTimeSeconds);
 	HitRecoveryPresentationState.bActive = true;
 	HitRecoveryPresentationState.bFinalElimination = bFinalElimination;
 	BeginLocalHitRecoveryPresentation();
-	ApplyCharacterAnimState(EShowDownCharacterAnimState::Hit);
-	if (!bRagdollActive)
-	{
-		StartActionVisual(EShowDownCharacterAnimState::Hit);
-	}
+	UpdateHitRecoveryPresentation();
 	ForceNetUpdate();
 }
 
@@ -673,6 +679,7 @@ void AShowDownCharacter::CancelHitRecoveryPresentation(bool bRevealCharacter)
 	// clients interpret the inactive presentation as a surviving character.
 	HitRecoveryPresentationState.bFinalElimination = !bRevealCharacter;
 	bPendingSceneDeactivateAfterHitRecovery = false;
+	bHitRecoveryImpactStarted = false;
 	bHitRecoveryRagdollReset = true;
 	bHitRecoverySurvivorRevealed = bRevealCharacter;
 	LocalHitRecoverySequence = HitRecoveryPresentationState.Sequence;
@@ -1055,7 +1062,11 @@ void AShowDownCharacter::OnRep_CharacterLives(int32 PreviousLives)
 
 void AShowDownCharacter::OnRep_ViewRotation()
 {
-	ApplyPlayerViewRotation(ReplicatedPlayerViewRotation);
+	if (PlayerSlot != EShowDownPlayerSlot::None && PlayerSlot == GetLocalPlayerSlot())
+	{
+		return;
+	}
+	QueueRemotePlayerViewRotation(ReplicatedPlayerViewRotation);
 }
 
 void AShowDownCharacter::OnRep_SceneActive()
@@ -1084,6 +1095,7 @@ void AShowDownCharacter::OnRep_HitRecoveryPresentationState()
 	}
 
 	LocalHitRecoverySequence = HitRecoveryPresentationState.Sequence;
+	bHitRecoveryImpactStarted = false;
 	bHitRecoveryRagdollReset = true;
 	bHitRecoverySurvivorRevealed = !HitRecoveryPresentationState.bFinalElimination;
 	SetHitResetPulseStrength(0.0f);
@@ -1728,6 +1740,7 @@ void AShowDownCharacter::StopRagdoll()
 void AShowDownCharacter::BeginLocalHitRecoveryPresentation()
 {
 	LocalHitRecoverySequence = HitRecoveryPresentationState.Sequence;
+	bHitRecoveryImpactStarted = false;
 	bHitRecoveryRagdollReset = false;
 	bHitRecoverySurvivorRevealed = false;
 	SetHitResetPulseStrength(0.0f);
@@ -1746,15 +1759,34 @@ void AShowDownCharacter::UpdateHitRecoveryPresentation()
 		BeginLocalHitRecoveryPresentation();
 	}
 
+	const float SignedElapsed =
+		GetSynchronizedServerTimeSeconds() - HitRecoveryPresentationState.ServerStartTimeSeconds;
+	if (SignedElapsed < 0.0f)
+	{
+		return;
+	}
+
+	if (!bHitRecoveryImpactStarted)
+	{
+		bHitRecoveryImpactStarted = true;
+		if (HasAuthority())
+		{
+			ApplyCharacterAnimState(EShowDownCharacterAnimState::Hit);
+		}
+		else if (!bRagdollActive)
+		{
+			StartActionVisual(EShowDownCharacterAnimState::Hit);
+		}
+		RefreshRoundStatusSpotlight();
+	}
+
 	const float DownedHold = FMath::Max(0.0f, HitDownedHoldDuration);
 	const float PulseDuration = FMath::Max(0.1f, HitResetPulseDuration);
 	const float PulseStartTime = DownedHold;
 	const float ConcealTime = PulseStartTime + PulseDuration * 0.5f;
 	const float RevealTime = PulseStartTime + PulseDuration * 0.85f;
 	const float PulseEndTime = PulseStartTime + PulseDuration;
-	const float Elapsed = FMath::Max(
-		0.0f,
-		GetSynchronizedServerTimeSeconds() - HitRecoveryPresentationState.ServerStartTimeSeconds);
+	const float Elapsed = FMath::Max(0.0f, SignedElapsed);
 
 	if (Elapsed >= PulseStartTime && Elapsed < PulseEndTime)
 	{
@@ -1827,6 +1859,7 @@ void AShowDownCharacter::CompleteHitRecoveryPresentationAuthority()
 	const bool bDeactivateScene = bPendingSceneDeactivateAfterHitRecovery;
 	HitRecoveryPresentationState.bActive = false;
 	bPendingSceneDeactivateAfterHitRecovery = false;
+	bHitRecoveryImpactStarted = false;
 	bHitRecoveryRagdollReset = true;
 	bHitRecoverySurvivorRevealed = !bFinalElimination;
 	SetHitResetPulseStrength(0.0f);
@@ -2156,16 +2189,77 @@ void AShowDownCharacter::ApplyPlayerViewRotation(FRotator ViewRotation)
 {
 	ViewRotation.Roll = 0.0f;
 	ReplicatedPlayerViewRotation = ViewRotation;
+	bRemoteHeadLookInterpolationActive = false;
+	bRemoteHeadLookInitialized = true;
+	CalculateHeadLookForViewRotation(ViewRotation, HeadLookPitch, HeadLookYaw);
+}
+
+void AShowDownCharacter::CalculateHeadLookForViewRotation(
+	FRotator ViewRotation,
+	float& OutPitch,
+	float& OutYaw) const
+{
+	ViewRotation.Roll = 0.0f;
 
 	const FRotator ActorRotation = GetActorRotation();
-	HeadLookPitch = FMath::Clamp(
+	OutPitch = FMath::Clamp(
 		-FRotator::NormalizeAxis(ViewRotation.Pitch - ActorRotation.Pitch),
 		-MaxHeadLookPitch,
 		MaxHeadLookPitch);
-	HeadLookYaw = FMath::Clamp(
+	OutYaw = FMath::Clamp(
 		FRotator::NormalizeAxis(ViewRotation.Yaw - ActorRotation.Yaw),
 		-MaxHeadLookYaw,
 		MaxHeadLookYaw);
+}
+
+void AShowDownCharacter::QueueRemotePlayerViewRotation(FRotator ViewRotation)
+{
+	CalculateHeadLookForViewRotation(
+		ViewRotation,
+		RemoteHeadLookTargetPitch,
+		RemoteHeadLookTargetYaw);
+
+	const float LargestDelta = FMath::Max(
+		FMath::Abs(RemoteHeadLookTargetPitch - HeadLookPitch),
+		FMath::Abs(RemoteHeadLookTargetYaw - HeadLookYaw));
+	if (!bRemoteHeadLookInitialized || LargestDelta >= RemoteHeadLookSnapAngle)
+	{
+		HeadLookPitch = RemoteHeadLookTargetPitch;
+		HeadLookYaw = RemoteHeadLookTargetYaw;
+		bRemoteHeadLookInitialized = true;
+		bRemoteHeadLookInterpolationActive = false;
+		return;
+	}
+
+	bRemoteHeadLookInterpolationActive = true;
+}
+
+void AShowDownCharacter::UpdateRemoteHeadLook(float DeltaSeconds)
+{
+	if (!bRemoteHeadLookInterpolationActive || DeltaSeconds <= 0.0f)
+	{
+		return;
+	}
+
+	const float SafeSpeed = FMath::Max(1.0f, RemoteHeadLookInterpolationSpeed);
+	HeadLookPitch = FMath::FInterpTo(
+		HeadLookPitch,
+		RemoteHeadLookTargetPitch,
+		DeltaSeconds,
+		SafeSpeed);
+	HeadLookYaw = FMath::FInterpTo(
+		HeadLookYaw,
+		RemoteHeadLookTargetYaw,
+		DeltaSeconds,
+		SafeSpeed);
+
+	if (FMath::IsNearlyEqual(HeadLookPitch, RemoteHeadLookTargetPitch, 0.02f)
+		&& FMath::IsNearlyEqual(HeadLookYaw, RemoteHeadLookTargetYaw, 0.02f))
+	{
+		HeadLookPitch = RemoteHeadLookTargetPitch;
+		HeadLookYaw = RemoteHeadLookTargetYaw;
+		bRemoteHeadLookInterpolationActive = false;
+	}
 }
 
 void AShowDownCharacter::ApplyCharacterSceneActive()
@@ -2251,7 +2345,7 @@ void AShowDownCharacter::RefreshRoundStatusSpotlight()
 		&& IsNameTagTurnActive();
 	const bool bPresentationVisible = bCharacterSceneActive
 		&& !bHitRecoveryVisualConcealed
-		&& !HitRecoveryPresentationState.bActive;
+		&& (!HitRecoveryPresentationState.bActive || !bHitRecoveryImpactStarted);
 
 	if (RoundStatusSpotLight)
 	{
@@ -2265,6 +2359,25 @@ void AShowDownCharacter::RefreshRoundStatusSpotlight()
 		RedLoserSpotLight->SetVisibility(bLoserVisible, true);
 		RedLoserSpotLight->SetHiddenInGame(!bLoserVisible, true);
 	}
+}
+
+void AShowDownCharacter::SetRemotePlayerViewRotation(FRotator ViewRotation)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	ViewRotation.Normalize();
+	ViewRotation.Roll = 0.0f;
+	if (ReplicatedPlayerViewRotation.Equals(ViewRotation, 0.1f))
+	{
+		return;
+	}
+
+	ReplicatedPlayerViewRotation = ViewRotation;
+	QueueRemotePlayerViewRotation(ViewRotation);
+	ForceNetUpdate();
 }
 
 void AShowDownCharacter::RefreshNameTag()

@@ -458,6 +458,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "4.0", DisplayName = "Flat Card Overlap Step"))
 	float InitialDealFlatCardSpacing = 4.0f;
 
+	/** How early movement targets are replicated so clients have them before the visual start frame. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.0", ClampMax = "0.5", DisplayName = "Network Schedule Lead Time"))
+	float InitialDealNetworkScheduleLeadTime = 0.25f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Presentation|Initial Deal", meta = (ClampMin = "0.1", ClampMax = "2.0", DisplayName = "Card Move Duration"))
 	float InitialDealCardMoveDuration = 0.70f;
 
