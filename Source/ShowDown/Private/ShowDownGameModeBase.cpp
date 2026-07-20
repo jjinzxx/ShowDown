@@ -10031,20 +10031,6 @@ float AShowDownGameModeBase::ApplyMultiplayerRoulette(
 
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 		{
-			if (bHit)
-			{
-				if (AShowDownCharacter* TargetCharacter =
-					FindActiveCharacterForPlayerSlot(GetWorld(), TargetSlot))
-				{
-					const ASDPlayerState* ResolvedTargetPlayer = WeakTargetPlayer.Get();
-					const bool bFinalElimination = ResolvedTargetPlayer
-						&& ResolvedTargetPlayer->Lives <= 1;
-					TargetCharacter->ScheduleHitRecoveryPresentation(
-						bFinalElimination,
-						ShowDownGameState->GetServerWorldTimeSeconds() + ResultDelay);
-				}
-			}
-
 			ShowDownGameState->SetPhase(EShowDownPhase::Roulette);
 			ShowDownGameState->SetNameTagPlayerLoadedBulletCount(TargetSlot, ClampedBulletCount);
 			ShowDownGameState->SetNameTagRoundStatus(

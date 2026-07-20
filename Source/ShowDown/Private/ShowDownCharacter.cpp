@@ -621,6 +621,50 @@ void AShowDownCharacter::StartHitRecoveryPresentation(bool bFinalElimination)
 	ScheduleHitRecoveryPresentation(bFinalElimination, GetSynchronizedServerTimeSeconds());
 }
 
+void AShowDownCharacter::PrepareLocalHitRecoveryPresentation(bool bFinalElimination)
+{
+	if (IsRunningDedicatedServer() || !bCharacterSceneActive)
+	{
+		return;
+	}
+
+	bAwaitingLocalHitRecoveryFire = true;
+	bLocalHitRecoveryClockActive = false;
+	bLocalPredictedFinalElimination = bFinalElimination;
+	LocalHitRecoveryStartTimeSeconds = 0.0f;
+}
+
+void AShowDownCharacter::StartLocalHitRecoveryPresentation(bool bFinalElimination)
+{
+	if (IsRunningDedicatedServer() || !bCharacterSceneActive || !GetWorld())
+	{
+		return;
+	}
+
+	// The server has already supplied the target and hit/miss result. From here
+	// the presentation belongs to this machine: its own gun-fire frame is time 0.
+	bAwaitingLocalHitRecoveryFire = false;
+	bLocalHitRecoveryClockActive = true;
+	bLocalPredictedFinalElimination = bFinalElimination;
+	LocalHitRecoveryStartTimeSeconds = GetWorld()->GetTimeSeconds();
+
+	if (HitRecoveryPresentationState.bActive
+		&& LocalHitRecoverySequence != HitRecoveryPresentationState.Sequence)
+	{
+		BeginLocalHitRecoveryPresentation();
+	}
+	else if (!HitRecoveryPresentationState.bActive)
+	{
+		bHitRecoveryImpactStarted = false;
+		bHitRecoveryRagdollReset = false;
+		bHitRecoverySurvivorRevealed = false;
+		SetHitResetPulseStrength(0.0f);
+		SetHitRecoveryVisualConcealed(false);
+	}
+
+	UpdateHitRecoveryPresentation();
+}
+
 void AShowDownCharacter::ScheduleHitRecoveryPresentation(
 	bool bFinalElimination,
 	float ServerStartTimeSeconds)
@@ -656,7 +700,17 @@ void AShowDownCharacter::ScheduleHitRecoveryPresentation(
 		ServerStartTimeSeconds);
 	HitRecoveryPresentationState.bActive = true;
 	HitRecoveryPresentationState.bFinalElimination = bFinalElimination;
-	BeginLocalHitRecoveryPresentation();
+	if (bLocalHitRecoveryClockActive && bHitRecoveryImpactStarted)
+	{
+		// A listen server may already be reacting from its local gun frame. Adopt
+		// the replicated sequence without restarting its ragdoll.
+		LocalHitRecoverySequence = HitRecoveryPresentationState.Sequence;
+		bLocalPredictedFinalElimination = bFinalElimination;
+	}
+	else
+	{
+		BeginLocalHitRecoveryPresentation();
+	}
 	UpdateHitRecoveryPresentation();
 	ForceNetUpdate();
 }
@@ -682,6 +736,10 @@ void AShowDownCharacter::CancelHitRecoveryPresentation(bool bRevealCharacter)
 	bHitRecoveryImpactStarted = false;
 	bHitRecoveryRagdollReset = true;
 	bHitRecoverySurvivorRevealed = bRevealCharacter;
+	bAwaitingLocalHitRecoveryFire = false;
+	bLocalHitRecoveryClockActive = false;
+	bLocalPredictedFinalElimination = false;
+	LocalHitRecoveryStartTimeSeconds = 0.0f;
 	LocalHitRecoverySequence = HitRecoveryPresentationState.Sequence;
 	SetHitResetPulseStrength(0.0f);
 	SetHitRecoveryVisualConcealed(!bRevealCharacter);
@@ -712,14 +770,16 @@ float AShowDownCharacter::CalculateHitRecoveryPresentationDuration(
 
 float AShowDownCharacter::GetHitRecoveryPresentationRemainingTime() const
 {
-	if (!HitRecoveryPresentationState.bActive)
+	if (!HitRecoveryPresentationState.bActive && !bLocalHitRecoveryClockActive)
 	{
 		return 0.0f;
 	}
 
-	const float Elapsed = FMath::Max(
-		0.0f,
-		GetSynchronizedServerTimeSeconds() - HitRecoveryPresentationState.ServerStartTimeSeconds);
+	const float Elapsed = bLocalHitRecoveryClockActive && GetWorld()
+		? FMath::Max(0.0f, GetWorld()->GetTimeSeconds() - LocalHitRecoveryStartTimeSeconds)
+		: FMath::Max(
+			0.0f,
+			GetSynchronizedServerTimeSeconds() - HitRecoveryPresentationState.ServerStartTimeSeconds);
 	return FMath::Max(0.0f, GetHitRecoveryPresentationDuration() - Elapsed);
 }
 
@@ -1038,7 +1098,13 @@ void AShowDownCharacter::SetCharacterSceneActive(bool bNewActive)
 
 void AShowDownCharacter::OnRep_AnimState()
 {
-	StartActionVisual(ReplicatedAnimState);
+	const bool bPredictedVisualAlreadyPlaying = bPredictedMultiplayerShootVisual
+		&& ReplicatedAnimState == EShowDownCharacterAnimState::Shoot;
+	bPredictedMultiplayerShootVisual = false;
+	if (!bPredictedVisualAlreadyPlaying)
+	{
+		StartActionVisual(ReplicatedAnimState);
+	}
 	PushAnimStateToAnimInstance();
 	OnCharacterAnimStateChanged(ReplicatedAnimState);
 }
@@ -1084,16 +1150,35 @@ void AShowDownCharacter::OnRep_HitRecoveryPresentationState()
 {
 	if (HitRecoveryPresentationState.bActive)
 	{
+		if (bAwaitingLocalHitRecoveryFire)
+		{
+			LocalHitRecoverySequence = HitRecoveryPresentationState.Sequence;
+			bLocalPredictedFinalElimination =
+				HitRecoveryPresentationState.bFinalElimination;
+			return;
+		}
+
 		// A non-final hit can be upgraded to a final elimination without starting
 		// a new sequence. Preserve the current conceal/ragdoll phase in that case.
-		if (LocalHitRecoverySequence != HitRecoveryPresentationState.Sequence)
+		if (LocalHitRecoverySequence != HitRecoveryPresentationState.Sequence
+			&& !(bLocalHitRecoveryClockActive && bHitRecoveryImpactStarted))
 		{
 			BeginLocalHitRecoveryPresentation();
+		}
+		else
+		{
+			LocalHitRecoverySequence = HitRecoveryPresentationState.Sequence;
+			bLocalPredictedFinalElimination =
+				HitRecoveryPresentationState.bFinalElimination;
 		}
 		UpdateHitRecoveryPresentation();
 		return;
 	}
 
+	bAwaitingLocalHitRecoveryFire = false;
+	bLocalHitRecoveryClockActive = false;
+	bLocalPredictedFinalElimination = false;
+	LocalHitRecoveryStartTimeSeconds = 0.0f;
 	LocalHitRecoverySequence = HitRecoveryPresentationState.Sequence;
 	bHitRecoveryImpactStarted = false;
 	bHitRecoveryRagdollReset = true;
@@ -1156,12 +1241,22 @@ void AShowDownCharacter::HandleMultiplayerRouletteStarted(
 	const FString& TargetName,
 	int32 BulletCount)
 {
-	if (!HasAuthority() || !ShouldReactToMultiplayerRouletteTarget(TargetSlot))
+	if (!ShouldReactToMultiplayerRouletteTarget(TargetSlot))
 	{
 		return;
 	}
 
-	PlayShootAnimation();
+	if (HasAuthority())
+	{
+		PlayShootAnimation();
+	}
+	else
+	{
+		// This multicast already carries the authoritative target. Start the local
+		// visual now; OnRep_AnimState will acknowledge it without replaying it.
+		bPredictedMultiplayerShootVisual = true;
+		StartActionVisual(EShowDownCharacterAnimState::Shoot);
+	}
 }
 
 void AShowDownCharacter::HandleMultiplayerRouletteResult(
@@ -1749,18 +1844,27 @@ void AShowDownCharacter::BeginLocalHitRecoveryPresentation()
 
 void AShowDownCharacter::UpdateHitRecoveryPresentation()
 {
-	if (!HitRecoveryPresentationState.bActive)
+	if (bAwaitingLocalHitRecoveryFire)
 	{
 		return;
 	}
 
-	if (LocalHitRecoverySequence != HitRecoveryPresentationState.Sequence)
+	if (!HitRecoveryPresentationState.bActive && !bLocalHitRecoveryClockActive)
+	{
+		return;
+	}
+
+	if (HitRecoveryPresentationState.bActive
+		&& LocalHitRecoverySequence != HitRecoveryPresentationState.Sequence
+		&& !(bLocalHitRecoveryClockActive && bHitRecoveryImpactStarted))
 	{
 		BeginLocalHitRecoveryPresentation();
 	}
 
-	const float SignedElapsed =
-		GetSynchronizedServerTimeSeconds() - HitRecoveryPresentationState.ServerStartTimeSeconds;
+	const float SignedElapsed = bLocalHitRecoveryClockActive && GetWorld()
+		? GetWorld()->GetTimeSeconds() - LocalHitRecoveryStartTimeSeconds
+		: GetSynchronizedServerTimeSeconds()
+			- HitRecoveryPresentationState.ServerStartTimeSeconds;
 	if (SignedElapsed < 0.0f)
 	{
 		return;
@@ -1822,7 +1926,10 @@ void AShowDownCharacter::UpdateHitRecoveryPresentation()
 		}
 	}
 
-	if (HitRecoveryPresentationState.bFinalElimination)
+	const bool bFinalElimination = HitRecoveryPresentationState.bActive
+		? HitRecoveryPresentationState.bFinalElimination
+		: bLocalPredictedFinalElimination;
+	if (bFinalElimination)
 	{
 		if (bHitRecoveryRagdollReset && bHitRecoverySurvivorRevealed)
 		{
@@ -1842,7 +1949,9 @@ void AShowDownCharacter::UpdateHitRecoveryPresentation()
 		SetHitRecoveryVisualConcealed(false);
 	}
 
-	if (HasAuthority() && Elapsed >= GetHitRecoveryPresentationDuration())
+	if (HasAuthority()
+		&& HitRecoveryPresentationState.bActive
+		&& Elapsed >= GetHitRecoveryPresentationDuration())
 	{
 		CompleteHitRecoveryPresentationAuthority();
 	}
@@ -1862,6 +1971,10 @@ void AShowDownCharacter::CompleteHitRecoveryPresentationAuthority()
 	bHitRecoveryImpactStarted = false;
 	bHitRecoveryRagdollReset = true;
 	bHitRecoverySurvivorRevealed = !bFinalElimination;
+	bAwaitingLocalHitRecoveryFire = false;
+	bLocalHitRecoveryClockActive = false;
+	bLocalPredictedFinalElimination = false;
+	LocalHitRecoveryStartTimeSeconds = 0.0f;
 	SetHitResetPulseStrength(0.0f);
 	SetHitRecoveryVisualConcealed(bFinalElimination);
 	ApplyCharacterAnimState(EShowDownCharacterAnimState::Idle);

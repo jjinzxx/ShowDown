@@ -126,6 +126,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|Hit Recovery")
 	void StartHitRecoveryPresentation(bool bFinalElimination);
 
+	/** Starts the hit visual immediately from this machine's local gun-fire frame. */
+	void StartLocalHitRecoveryPresentation(bool bFinalElimination);
+	void PrepareLocalHitRecoveryPresentation(bool bFinalElimination);
+
 	/** Publishes a hit ahead of time so every machine starts the ragdoll on the same server frame. */
 	void ScheduleHitRecoveryPresentation(bool bFinalElimination, float ServerStartTimeSeconds);
 
@@ -657,6 +661,11 @@ private:
 	bool bHitRecoveryRagdollReset = false;
 	bool bHitRecoverySurvivorRevealed = false;
 	bool bPendingSceneDeactivateAfterHitRecovery = false;
+	bool bAwaitingLocalHitRecoveryFire = false;
+	bool bLocalHitRecoveryClockActive = false;
+	bool bLocalPredictedFinalElimination = false;
+	float LocalHitRecoveryStartTimeSeconds = 0.0f;
+	bool bPredictedMultiplayerShootVisual = false;
 	bool bWorldLifeLostPulseActive = false;
 	int32 WorldLifeLostDisplayedLives = INDEX_NONE;
 	float WorldLifeLostPulseElapsedTime = 0.0f;

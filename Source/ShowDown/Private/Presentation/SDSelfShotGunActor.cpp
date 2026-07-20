@@ -1535,6 +1535,19 @@ void ASDSelfShotGunActor::FireLiveRound()
 		AudioSubsystem->NotifyGunFired();
 	}
 
+	// Multiplayer presentation is intentionally local after the server supplies
+	// target + hit/miss. React on this machine's exact gun-fire frame rather than
+	// waiting for the replicated life/result state to return.
+	if (bMultiplayerRoulettePresentationActive && GetNetMode() != NM_DedicatedServer)
+	{
+		if (AShowDownCharacter* TargetCharacter =
+			Cast<AShowDownCharacter>(ForcedShotTargetActor.Get()))
+		{
+			TargetCharacter->StartLocalHitRecoveryPresentation(
+				TargetCharacter->GetCharacterLives() <= 1);
+		}
+	}
+
 	if (bEnableHitSequence && bCurrentShotTargetsLocalPlayer)
 	{
 		StartHitSequence();
@@ -3446,6 +3459,14 @@ void ASDSelfShotGunActor::PlayMultiplayerRoulettePresentation(
 	bCurrentShotTargetsLocalPlayer = ShouldTreatSlotAsLocalPlayer(TargetSlot);
 	CurrentShotTargetSlot = TargetSlot;
 	bMultiplayerRoulettePresentationActive = true;
+	if (bHit && GetNetMode() != NM_DedicatedServer)
+	{
+		if (AShowDownCharacter* TargetCharacter = Cast<AShowDownCharacter>(TargetActor))
+		{
+			TargetCharacter->PrepareLocalHitRecoveryPresentation(
+				TargetCharacter->GetCharacterLives() <= 1);
+		}
+	}
 	UE_LOG(
 		LogTemp,
 		Log,
