@@ -20,6 +20,20 @@ void UShowDownLoginWidget::SetUseLegacyNavigation(bool bInUseLegacyNavigation)
 	bUseLegacyNavigation = bInUseLegacyNavigation;
 }
 
+void UShowDownLoginWidget::FocusIdInput()
+{
+	if (!EditableTextBox_Id)
+	{
+		return;
+	}
+
+	if (APlayerController* PlayerController = GetOwningPlayer())
+	{
+		EditableTextBox_Id->SetUserFocus(PlayerController);
+	}
+	EditableTextBox_Id->SetKeyboardFocus();
+}
+
 void UShowDownLoginWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
@@ -29,6 +43,18 @@ void UShowDownLoginWidget::NativeConstruct()
 	if (Button_Login)
 	{
 		Button_Login->OnClicked.AddUniqueDynamic(this, &UShowDownLoginWidget::HandleLoginClicked);
+	}
+	if (EditableTextBox_Id)
+	{
+		EditableTextBox_Id->OnTextCommitted.AddUniqueDynamic(
+			this,
+			&UShowDownLoginWidget::HandleCredentialTextCommitted);
+	}
+	if (EditableTextBox_Password)
+	{
+		EditableTextBox_Password->OnTextCommitted.AddUniqueDynamic(
+			this,
+			&UShowDownLoginWidget::HandleCredentialTextCommitted);
 	}
 
 	// GameInstance에 등록된 SupabaseSubsystem을 가져옵니다.
@@ -41,12 +67,7 @@ void UShowDownLoginWidget::NativeConstruct()
 		}
 	}
 
-	// 위젯이 처음 뜰 때 기본 상태 메시지를 표시합니다.
-	if (Text_Status)
-	{
-		Text_Status->SetText(FText::FromString(TEXT("Ready")));
-		Text_Status->SetColorAndOpacity(FSlateColor(FLinearColor::White));
-	}
+	HideStatusMessage();
 }
 
 void UShowDownLoginWidget::BuildFigmaLayout()
@@ -156,6 +177,18 @@ void UShowDownLoginWidget::NativeDestruct()
 	{
 		Button_Login->OnClicked.RemoveDynamic(this, &UShowDownLoginWidget::HandleLoginClicked);
 	}
+	if (EditableTextBox_Id)
+	{
+		EditableTextBox_Id->OnTextCommitted.RemoveDynamic(
+			this,
+			&UShowDownLoginWidget::HandleCredentialTextCommitted);
+	}
+	if (EditableTextBox_Password)
+	{
+		EditableTextBox_Password->OnTextCommitted.RemoveDynamic(
+			this,
+			&UShowDownLoginWidget::HandleCredentialTextCommitted);
+	}
 
 	// 위젯이 제거될 때 SupabaseSubsystem에 연결했던 이벤트를 해제합니다.
 	// 이걸 하지 않으면 위젯이 사라진 뒤에도 이벤트가 호출될 수 있습니다.
@@ -174,11 +207,6 @@ void UShowDownLoginWidget::HandleLoginClicked()
 {
 	if (bLoginRequestInFlight)
 	{
-		if (Text_Status)
-		{
-			Text_Status->SetText(FText::FromString(TEXT("Login is already in progress.")));
-			Text_Status->SetColorAndOpacity(FSlateColor(FLinearColor::Yellow));
-		}
 		return;
 	}
 
@@ -196,11 +224,7 @@ void UShowDownLoginWidget::HandleLoginClicked()
 
 	if (LoginId.TrimStartAndEnd().IsEmpty() || Password.IsEmpty())
 	{
-		if (Text_Status)
-		{
-			Text_Status->SetText(FText::FromString(TEXT("Enter your ID and password.")));
-			Text_Status->SetColorAndOpacity(FSlateColor(FLinearColor::Red));
-		}
+		ShowStatusError(TEXT("Enter your ID and password."));
 		return;
 	}
 
@@ -211,11 +235,9 @@ void UShowDownLoginWidget::HandleLoginClicked()
 		Button_Login->SetIsEnabled(false);
 	}
 
-	if (Text_Status)
-	{
-		Text_Status->SetText(FText::FromString(TEXT("Logging in...")));
-		Text_Status->SetColorAndOpacity(FSlateColor(FLinearColor::Yellow));
-	}
+	// A new valid attempt clears any previous failure. The disabled login button
+	// already communicates progress, so the status row stays reserved for errors.
+	HideStatusMessage();
 
 	// SupabaseSubsystem을 가져와서 실제 로그인 요청을 보냅니다.
 	// HTTP 요청과 토큰 처리는 SupabaseSubsystem 쪽에서 담당합니다.
@@ -234,11 +256,17 @@ void UShowDownLoginWidget::HandleLoginClicked()
 		{
 			Button_Login->SetIsEnabled(true);
 		}
-		if (Text_Status)
-		{
-			Text_Status->SetText(FText::FromString(TEXT("Supabase subsystem not found")));
-			Text_Status->SetColorAndOpacity(FSlateColor(FLinearColor::Red));
-		}
+		ShowStatusError(TEXT("Supabase subsystem not found"));
+	}
+}
+
+void UShowDownLoginWidget::HandleCredentialTextCommitted(
+	const FText& Text,
+	ETextCommit::Type CommitMethod)
+{
+	if (CommitMethod == ETextCommit::OnEnter)
+	{
+		HandleLoginClicked();
 	}
 }
 
@@ -246,31 +274,24 @@ void UShowDownLoginWidget::HandleLoginResult(bool bSuccess, const FString& Messa
 {
 	const bool bIsProgressMessage = Message == TEXT("Logging in...");
 
-	// SupabaseSubsystem에서 전달한 로그인 결과 메시지를 로그인 화면의 상태 텍스트에 표시합니다.
-	// 예: Logging in..., Login success., Login failed.
-	if (Text_Status)
+	if (bIsProgressMessage)
 	{
-		Text_Status->SetText(FText::FromString(Message));
-		Text_Status->SetColorAndOpacity(FSlateColor(
-			bSuccess ? FLinearColor::Green : (bIsProgressMessage ? FLinearColor::Yellow : FLinearColor::Red)
-		));
+		HideStatusMessage();
+		return;
 	}
 
-	// 로그인에 실패한 경우에는 메인 메뉴로 넘어가면 안 되므로 여기서 함수를 끝냅니다.
-	// 실패 메시지는 위에서 Text_Status에 이미 표시된 상태입니다.
 	if (!bSuccess)
 	{
-		if (!bIsProgressMessage)
+		ShowStatusError(Message);
+		bLoginRequestInFlight = false;
+		if (Button_Login)
 		{
-			bLoginRequestInFlight = false;
-			if (Button_Login)
-			{
-				Button_Login->SetIsEnabled(true);
-			}
+			Button_Login->SetIsEnabled(true);
 		}
 		return;
 	}
 
+	HideStatusMessage();
 	bLoginRequestInFlight = false;
 	OnLoginSucceeded.Broadcast();
 
@@ -330,4 +351,27 @@ void UShowDownLoginWidget::HandleLoginResult(bool bSuccess, const FString& Messa
 		// PlayerController에 UI Only 입력 모드를 적용합니다.
 		PlayerController->SetInputMode(InputMode);
 	}
+}
+
+void UShowDownLoginWidget::HideStatusMessage()
+{
+	if (!Text_Status)
+	{
+		return;
+	}
+
+	Text_Status->SetText(FText::GetEmpty());
+	Text_Status->SetVisibility(ESlateVisibility::Collapsed);
+}
+
+void UShowDownLoginWidget::ShowStatusError(const FString& Message)
+{
+	if (!Text_Status)
+	{
+		return;
+	}
+
+	Text_Status->SetText(FText::FromString(Message));
+	Text_Status->SetColorAndOpacity(FSlateColor(FLinearColor::Red));
+	Text_Status->SetVisibility(ESlateVisibility::HitTestInvisible);
 }

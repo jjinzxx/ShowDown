@@ -267,6 +267,7 @@ void AShowDownHubFlowManager::ShowLogin()
 
 	SetActiveWidget(LoginWidget);
 	SetUiOnlyInput(LoginWidget);
+	LoginWidget->FocusIdInput();
 	OnScreenChanged.Broadcast(EShowDownHubFlowScreen::Login);
 }
 

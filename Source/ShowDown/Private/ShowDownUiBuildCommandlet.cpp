@@ -1217,7 +1217,7 @@ void BuildLogin(UWidgetBlueprint* BP)
 	AddCanvas(R,Text(T,TEXT("Label_Password"),TEXT("Password"),17,ETextJustify::Right),155,520,95,40);
 	UEditableTextBox* Pw=T->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass(),TEXT("EditableTextBox_Password")); Pw->SetIsPassword(true); Pw->SetHintText(FText::FromString(TEXT("Password"))); ApplyFlatEditableStyle(Pw); AddCanvas(R,Pw,270,520,300,40);
 	AddCanvas(R,Button(T,TEXT("Button_Login"),TEXT("LOGIN")),270,585,300,48);
-	AddCanvas(R,Text(T,TEXT("Text_Status"),TEXT("Ready"),14,ETextJustify::Center),155,650,415,32); Save(BP);
+	AddCanvas(R,Text(T,TEXT("Text_Status"),TEXT(""),14,ETextJustify::Center),155,650,415,32); Save(BP);
 }
 
 void BuildMain(UWidgetBlueprint* BP)

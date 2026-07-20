@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "ShowDownUserWidget.h"
 #include "Templates/SubclassOf.h"
+#include "Types/SlateEnums.h"
 #include "ShowDownLoginWidget.generated.h"
 
 class UEditableTextBox;
@@ -26,6 +27,9 @@ public:
 	// true면 기존처럼 LoginWidget이 직접 MainMenu를 생성합니다.
 	// FlowManager가 화면 전환을 맡을 때는 false로 꺼서 UI와 연출 흐름을 분리합니다.
 	void SetUseLegacyNavigation(bool bInUseLegacyNavigation);
+
+	/** Moves keyboard input directly into the ID field. */
+	void FocusIdInput();
 
 protected:
 	// 위젯이 화면에 생성되고 사용할 준비가 되었을 때 호출됩니다.
@@ -69,10 +73,16 @@ private:
 	UFUNCTION()
 	void HandleLoginClicked();
 
+	UFUNCTION()
+	void HandleCredentialTextCommitted(const FText& Text, ETextCommit::Type CommitMethod);
+
 	// SupabaseSubsystem에서 로그인 결과를 알려주면 실행되는 함수입니다.
 	// 성공/실패 메시지를 받아서 Text_Status에 표시합니다.
 	UFUNCTION()
 	void HandleLoginResult(bool bSuccess, const FString& Message);
+
+	void HideStatusMessage();
+	void ShowStatusError(const FString& Message);
 	
 	// 로그인 성공 후 띄울 메인 메뉴 WBP 클래스입니다.
 	// 에디터에서 WBP_MainMenu를 지정합니다.
