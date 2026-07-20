@@ -95,6 +95,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Timing")
 	float GetShotResolveDelay() const;
 
+	/** Remaining delay from the first gun-motion frame to the trigger result. */
+	float GetGunMotionShotResolveDelay() const;
+
 	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Timing")
 	float GetPresentationFinishDelay(bool bLiveRound) const;
 
@@ -208,6 +211,8 @@ public:
 		FVector& OutSourceLocation,
 		FVector& OutAimLocation,
 		FRotator* OutRotationOffset = nullptr) const;
+
+	void RefreshRecordingUiVisibility();
 
 	virtual bool CanInteract_Implementation(AActor* Interactor) const override;
 	virtual void Interact_Implementation(AActor* Interactor) override;
@@ -681,6 +686,7 @@ private:
 	enum class EGunAnimState : uint8
 	{
 		Idle,
+		CameraLeadIn,
 		Raising,
 		Aiming,
 		Cocking,
@@ -705,6 +711,9 @@ private:
 	void FireEmptyRound();
 	void FinishSequence();
 	void StartGunUse(bool bContinueFromCurrentTransform = false);
+	void BeginGunRaiseMotion();
+	static bool ShouldDelayGunRaiseForCamera(bool bCameraActive, float BlendInTime);
+	static bool HasGunShotCameraArrived(bool bCameraActive, float ElapsedTime, float BlendInTime);
 	void StartMechanismAnimation();
 	void UpdateMechanismCocking();
 	void UpdateHammerRelease();
@@ -858,6 +867,7 @@ private:
 	EHitSequenceState HitSequenceState = EHitSequenceState::Idle;
 	float StateElapsedTime = 0.0f;
 	float ActiveRaiseTime = 0.45f;
+	float ActiveCameraLeadInTime = 0.0f;
 	float MechanismResetElapsedTime = 0.0f;
 	float HeldGunJitterElapsedTime = 0.0f;
 	float CinematicCameraElapsedTime = 0.0f;

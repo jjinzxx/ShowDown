@@ -11,6 +11,8 @@ namespace
 	const FString MaskmanSkinId(TEXT("maskman"));
 	const FString MicuSkinId(TEXT("micu"));
 	const FString MikuSkinId(TEXT("miku"));
+	const FString UltronSkinId(TEXT("ultron"));
+	const FString DreadlocksSkinId(TEXT("dreadlocks"));
 	const TCHAR* DefaultCatalogObjectPath =
 		TEXT("/Game/Data/Characters/DA_CharacterSkinCatalog.DA_CharacterSkinCatalog");
 	const TCHAR* MainMenuCapoeiraAnimationPath =
@@ -90,7 +92,19 @@ namespace
 				NSLOCTEXT("ShowDownCharacterSkins", "Miku", "Miku"),
 				EShowDownCharacterSkinRarity::Legendary,
 				TEXT("/Game/Character/miku/miku.miku"),
-				TEXT("/Game/Data/Characters/Tut_Hip_Hop_Dance.Tut_Hip_Hop_Dance"))
+				TEXT("/Game/Data/Characters/Tut_Hip_Hop_Dance.Tut_Hip_Hop_Dance")),
+			MakeBuiltInSkinDefinition(
+				UltronSkinId,
+				NSLOCTEXT("ShowDownCharacterSkins", "Ultron", "Ultron"),
+				EShowDownCharacterSkinRarity::Epic,
+				TEXT("/Game/Character/Ultron/Ultron.Ultron"),
+				TEXT("/Game/Character/Animation/Idle_default_.Idle_default_")),
+			MakeBuiltInSkinDefinition(
+				DreadlocksSkinId,
+				NSLOCTEXT("ShowDownCharacterSkins", "Dreadlocks", "Dreadlocks"),
+				EShowDownCharacterSkinRarity::Epic,
+				TEXT("/Game/Character/dreadlocks/dreadlocks.dreadlocks"),
+				TEXT("/Game/Character/Animation/Reveal_Nervously_Look_Around.Reveal_Nervously_Look_Around"))
 		};
 		return Definitions;
 	}
@@ -145,6 +159,14 @@ FString UShowDownCharacterSkinCatalog::CanonicalizeSkinId(const FString& SkinId)
 	if (CanonicalId == TEXT("character_miku"))
 	{
 		return MikuSkinId;
+	}
+	if (CanonicalId == TEXT("character_ultron"))
+	{
+		return UltronSkinId;
+	}
+	if (CanonicalId == TEXT("character_dreadlocks"))
+	{
+		return DreadlocksSkinId;
 	}
 
 	return CanonicalId;

@@ -452,6 +452,18 @@ void ASDSelfShotGunActor::Tick(float DeltaSeconds)
 
 	switch (AnimState)
 	{
+	case EGunAnimState::CameraLeadIn:
+		// The victim camera owns this beat. Keep the revolver exactly at its
+		// starting transform until SetViewTargetWithBlend reaches the shot camera.
+		SetActorTransform(RaiseStartTransform);
+		if (HasGunShotCameraArrived(
+			bSelfShotCinematicCameraActive,
+			StateElapsedTime,
+			ActiveCameraLeadInTime))
+		{
+			BeginGunRaiseMotion();
+		}
+		break;
 	case EGunAnimState::Raising:
 	{
 		const float Alpha = FMath::Clamp(StateElapsedTime / ActiveRaiseTime, 0.0f, 1.0f);
@@ -678,6 +690,12 @@ float ASDSelfShotGunActor::GetTargetShotSourcePullDistance() const
 }
 
 float ASDSelfShotGunActor::GetShotResolveDelay() const
+{
+	return FMath::Max(0.0f, CinematicCameraBlendInTime)
+		+ GetGunMotionShotResolveDelay();
+}
+
+float ASDSelfShotGunActor::GetGunMotionShotResolveDelay() const
 {
 	float ResolveDelay = FMath::Max(0.0f, RaiseTime) + FMath::Max(0.0f, AimHoldTime);
 	if (bEnableMechanismAnimation)
@@ -1099,6 +1117,12 @@ void ASDSelfShotGunActor::ApplyAmmoStatusDisplaySettings()
 	}
 	if (AmmoStatusWidgetComponent)
 	{
+		const AShowDownPlayerController* LocalPlayerController = GetWorld()
+			? Cast<AShowDownPlayerController>(GetWorld()->GetFirstPlayerController())
+			: nullptr;
+		const bool bRecordingUiHidden = LocalPlayerController
+			&& LocalPlayerController->IsLocalController()
+			&& LocalPlayerController->IsRecordingUiHidden();
 		const bool bShotPresentationActive =
 			AnimState != EGunAnimState::Idle
 			|| bMultiplayerRoulettePresentationActive
@@ -1109,7 +1133,8 @@ void ASDSelfShotGunActor::ApplyAmmoStatusDisplaySettings()
 			|| StatusPhase == EShowDownPhase::Roulette
 			|| bShotPresentationActive;
 		const bool bShouldShowAmmoStatus =
-			!bOpeningCardShowcaseStowed
+			!bRecordingUiHidden
+			&& !bOpeningCardShowcaseStowed
 			&& !bOpeningCardDropActive
 			&& (StatusPhase == EShowDownPhase::Betting
 				|| StatusPhase == EShowDownPhase::Reveal
@@ -1137,6 +1162,11 @@ void ASDSelfShotGunActor::ApplyAmmoStatusDisplaySettings()
 		AmmoStatusWidgetComponent->SetVisibility(bShouldShowAmmoStatus, true);
 		AmmoStatusWidgetComponent->SetHiddenInGame(!bShouldShowAmmoStatus, true);
 	}
+}
+
+void ASDSelfShotGunActor::RefreshRecordingUiVisibility()
+{
+	ApplyAmmoStatusDisplaySettings();
 }
 
 void ASDSelfShotGunActor::ShowAmmoStatusRaiseDelta(int32 AddedRounds)
@@ -1338,7 +1368,8 @@ void ASDSelfShotGunActor::StartGunUse(bool bContinueFromCurrentTransform)
 	MechanismResetElapsedTime = 0.0f;
 	HeldGunJitterElapsedTime = 0.0f;
 	bCurrentShotWasEmpty = false;
-	AnimState = EGunAnimState::Raising;
+	AnimState = EGunAnimState::CameraLeadIn;
+	ActiveCameraLeadInTime = 0.0f;
 	bPresentationFinishPending = true;
 	SetActorTickEnabled(true);
 
@@ -1348,16 +1379,48 @@ void ASDSelfShotGunActor::StartGunUse(bool bContinueFromCurrentTransform)
 		GunMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	}
 
-	// Forced multiplayer results are known before the first raising tick. Move
-	// the victim to the third-person shot on the same frame the gun starts,
-	// instead of waiting through the authored (BP-overridden) raise duration.
+	// Forced multiplayer results are known before the first raising tick. Start
+	// the victim camera first, then hold the revolver until that blend arrives.
 	TryStartLocalTargetShotCamera();
+	ActiveCameraLeadInTime = bSelfShotCinematicCameraActive
+		? FMath::Max(0.0f, CinematicCameraBlendInTime)
+		: 0.0f;
+	if (!ShouldDelayGunRaiseForCamera(
+		bSelfShotCinematicCameraActive,
+		ActiveCameraLeadInTime))
+	{
+		BeginGunRaiseMotion();
+	}
+}
 
+
+void ASDSelfShotGunActor::BeginGunRaiseMotion()
+{
+	AnimState = EGunAnimState::Raising;
+	StateElapsedTime = 0.0f;
+	ActiveCameraLeadInTime = 0.0f;
 	OnGunRaised.Broadcast();
 	if (UShowDownAudioSubsystem* AudioSubsystem = FindShowDownAudioSubsystem(this))
 	{
 		AudioSubsystem->NotifyGunRaised();
 	}
+}
+
+bool ASDSelfShotGunActor::ShouldDelayGunRaiseForCamera(
+	bool bCameraActive,
+	float BlendInTime)
+{
+	return bCameraActive && BlendInTime > KINDA_SMALL_NUMBER;
+}
+
+bool ASDSelfShotGunActor::HasGunShotCameraArrived(
+	bool bCameraActive,
+	float ElapsedTime,
+	float BlendInTime)
+{
+	return !bCameraActive
+		|| FMath::Max(0.0f, ElapsedTime) + KINDA_SMALL_NUMBER
+			>= FMath::Max(0.0f, BlendInTime);
 }
 
 bool ASDSelfShotGunActor::CanInteract_Implementation(AActor* Interactor) const
@@ -1717,9 +1780,7 @@ void ASDSelfShotGunActor::ActivateSelfShotCinematicCamera()
 		&& ActiveSelfShotCinematicCamera
 		&& PlayerController->BeginGunShotCameraOverride(
 			ActiveSelfShotCinematicCamera,
-			AnimState == EGunAnimState::Raising
-				? FMath::Min(FMath::Max(0.0f, CinematicCameraBlendInTime), 0.25f)
-				: CinematicCameraBlendInTime,
+			FMath::Max(0.0f, CinematicCameraBlendInTime),
 			CinematicCameraBlendExponent))
 	{
 		ShowDownCameraAspect::ApplyForced16By9(ActiveSelfShotCinematicCamera);
@@ -1906,6 +1967,7 @@ void ASDSelfShotGunActor::CancelSelfShotCinematicCamera()
 	bSelfShotCinematicCameraHoldStarted = false;
 	bSelfShotCinematicCameraBlendOutActive = false;
 	bEliminationTableOverviewActive = false;
+	ActiveCameraLeadInTime = 0.0f;
 	CinematicCameraBlendOutElapsedTime = 0.0f;
 	EliminationOverviewElapsedTime = 0.0f;
 	ActiveSelfShotCinematicCamera = nullptr;

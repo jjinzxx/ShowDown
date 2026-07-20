@@ -28,6 +28,7 @@
 #include "ShowDownEosSubsystem.h"
 #include "ShowDownShopWidget.h"
 #include "ShowDownTypes.h"
+#include "Components/SpotLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/GameInstance.h"
 #include "Engine/SkeletalMesh.h"
@@ -666,6 +667,14 @@ bool FShowDownCharacterSkinCatalogTest::RunTest(const FString& Parameters)
 		TEXT("Miku's product-style alias resolves independently from Micu"),
 		UShowDownCharacterSkinCatalog::CanonicalizeSkinId(TEXT("character_miku")),
 		FString(TEXT("miku")));
+	TestEqual(
+		TEXT("Ultron's product-style alias resolves to its runtime id"),
+		UShowDownCharacterSkinCatalog::CanonicalizeSkinId(TEXT("character_ultron")),
+		FString(TEXT("ultron")));
+	TestEqual(
+		TEXT("Dreadlocks' product-style alias resolves to its runtime id"),
+		UShowDownCharacterSkinCatalog::CanonicalizeSkinId(TEXT("character_dreadlocks")),
+		FString(TEXT("dreadlocks")));
 	TestTrue(
 		TEXT("Skin ids with path separators are rejected before replication"),
 		UShowDownCharacterSkinCatalog::CanonicalizeSkinId(TEXT("unsafe/skin")).IsEmpty());
@@ -703,15 +712,23 @@ bool FShowDownCharacterSkinCatalogTest::RunTest(const FString& Parameters)
 	{
 		TEXT("robot"),
 		TEXT("hoodman"),
+		TEXT("gangman"),
+		TEXT("maskman"),
 		TEXT("micu"),
-		TEXT("miku")
+		TEXT("miku"),
+		TEXT("ultron"),
+		TEXT("dreadlocks")
 	};
 	const TArray<EShowDownCharacterSkinRarity> BuiltInRarities =
 	{
 		EShowDownCharacterSkinRarity::Common,
 		EShowDownCharacterSkinRarity::Rare,
 		EShowDownCharacterSkinRarity::Epic,
-		EShowDownCharacterSkinRarity::Legendary
+		EShowDownCharacterSkinRarity::Rare,
+		EShowDownCharacterSkinRarity::Epic,
+		EShowDownCharacterSkinRarity::Legendary,
+		EShowDownCharacterSkinRarity::Epic,
+		EShowDownCharacterSkinRarity::Epic
 	};
 
 	TSet<FString> BuiltInShopPreviewAnimations;
@@ -778,7 +795,7 @@ bool FShowDownCharacterSkinCatalogTest::RunTest(const FString& Parameters)
 	TestEqual(
 		TEXT("Each built-in skin uses a distinct single-node preview animation"),
 		BuiltInShopPreviewAnimations.Num(),
-		4);
+		BuiltInSkinIds.Num());
 
 	UShowDownCharacterSkinCatalog* AnimationOverrideCatalog =
 		NewObject<UShowDownCharacterSkinCatalog>();
@@ -922,7 +939,9 @@ bool FShowDownCharacterSkinCatalogOrderTest::RunTest(const FString& Parameters)
 		TEXT("robot"),
 		TEXT("hoodman"),
 		TEXT("gangman"),
-		TEXT("maskman")
+		TEXT("maskman"),
+		TEXT("ultron"),
+		TEXT("dreadlocks")
 	};
 	TestEqual(
 		TEXT("Catalog order is retained, duplicates are removed, and missing built-ins are appended"),
@@ -959,7 +978,7 @@ bool FShowDownCharacterSkinCatalogOrderTest::RunTest(const FString& Parameters)
 	TestEqual(
 		TEXT("A missing editor catalog still exposes all built-in skins"),
 		BuiltInOnlyDefinitions.Num(),
-		5);
+		7);
 	return true;
 }
 
@@ -1111,6 +1130,19 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FShowDownGunShotCameraTest::RunTest(const FString& Parameters)
 {
+	const AShowDownPlayerController* DefaultController = GetDefault<AShowDownPlayerController>();
+	TestNotNull(TEXT("The default ShowDown player controller exists"), DefaultController);
+	if (DefaultController)
+	{
+		TestEqual(
+			TEXT("The recording UI toggle defaults to Z"),
+			DefaultController->RecordingUiToggleKey,
+			EKeys::Z);
+		TestFalse(
+			TEXT("Recording UI starts visible"),
+			DefaultController->IsRecordingUiHidden());
+	}
+
 	TestFalse(
 		TEXT("Normal gameplay leaves gun-shot presentation input enabled"),
 		AShowDownPlayerController::ShouldBlockGameplayInputForGunShot(false, false));
@@ -1136,6 +1168,21 @@ bool FShowDownGunShotCameraTest::RunTest(const FString& Parameters)
 	TestFalse(
 		TEXT("An observer leaves their first-person camera unchanged"),
 		ASDSelfShotGunActor::ShouldUseGunShotCamera(false));
+	TestTrue(
+		TEXT("An active camera blend delays revolver movement until arrival"),
+		ASDSelfShotGunActor::ShouldDelayGunRaiseForCamera(true, 0.25f));
+	TestFalse(
+		TEXT("A zero-duration camera cut starts revolver movement immediately"),
+		ASDSelfShotGunActor::ShouldDelayGunRaiseForCamera(true, 0.0f));
+	TestFalse(
+		TEXT("An observer without a camera transition does not delay the revolver"),
+		ASDSelfShotGunActor::ShouldDelayGunRaiseForCamera(false, 0.25f));
+	TestFalse(
+		TEXT("The revolver stays still while the camera is still travelling"),
+		ASDSelfShotGunActor::HasGunShotCameraArrived(true, 0.24f, 0.25f));
+	TestTrue(
+		TEXT("The revolver may start on the exact camera-arrival frame"),
+		ASDSelfShotGunActor::HasGunShotCameraArrived(true, 0.25f, 0.25f));
 	TestTrue(
 		TEXT("A final live hit keeps only the victim on the table overview"),
 		ASDSelfShotGunActor::ShouldUseEliminationTableOverview(true, true, 0));
@@ -1243,6 +1290,12 @@ bool FShowDownGunShotCameraTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("The recoil kick is immediate"), InteractionGun->ShotRecoilKickTime, 0.055f);
 		TestEqual(TEXT("The recoil recovery is quick and readable"), InteractionGun->ShotRecoilRecoveryTime, 0.18f);
 		TestEqual(TEXT("Sequential targets use a short direct transition"), InteractionGun->MultiplayerTargetTransitionTime, 0.24f);
+		TestTrue(
+			TEXT("The reported result delay reserves the camera arrival before gun motion"),
+			FMath::IsNearlyEqual(
+				InteractionGun->GetShotResolveDelay(),
+				InteractionGun->CinematicCameraBlendInTime
+					+ InteractionGun->GetGunMotionShotResolveDelay()));
 
 		AShowDownGameStateBase* HandoffGameState = NewObject<AShowDownGameStateBase>();
 		TestNotNull(TEXT("A direct-handoff context can be created"), HandoffGameState);
@@ -1807,6 +1860,37 @@ bool FShowDownGunVisionSequenceTimingTest::RunTest(const FString& Parameters)
 	if (!FirstTargetCharacter || !SecondTargetCharacter)
 	{
 		return false;
+	}
+	TestNotNull(
+		TEXT("The normal turn spotlight remains available"),
+		FirstTargetCharacter->RoundStatusSpotLight.Get());
+	TestNotNull(
+		TEXT("The red loser spotlight has its own component"),
+		FirstTargetCharacter->RedLoserSpotLight.Get());
+	TestNotEqual(
+		TEXT("Turn and red loser lighting are independently authored"),
+		FirstTargetCharacter->RoundStatusSpotLight.Get(),
+		FirstTargetCharacter->RedLoserSpotLight.Get());
+	if (FirstTargetCharacter->RoundStatusSpotLight && FirstTargetCharacter->RedLoserSpotLight)
+	{
+		FirstTargetCharacter->RoundStatusSpotLight->SetIntensity(1250.0f);
+		FirstTargetCharacter->RedLoserSpotLight->SetIntensity(875.0f);
+		FirstTargetCharacter->RedLoserSpotLight->SetLightColor(
+			FLinearColor(0.65f, 0.02f, 0.01f, 1.0f));
+		FirstTargetCharacter->RefreshRoundStatusSpotlight();
+		TestEqual(
+			TEXT("Refreshing visibility preserves the normal turn-light intensity"),
+			FirstTargetCharacter->RoundStatusSpotLight->Intensity,
+			1250.0f);
+		TestEqual(
+			TEXT("Refreshing visibility preserves the independently tuned red-light intensity"),
+			FirstTargetCharacter->RedLoserSpotLight->Intensity,
+			875.0f);
+		TestTrue(
+			TEXT("Refreshing visibility preserves the independently tuned red-light color"),
+			FirstTargetCharacter->RedLoserSpotLight->GetLightColor().Equals(
+				FLinearColor(0.65f, 0.02f, 0.01f, 1.0f),
+				0.01f));
 	}
 	FirstTargetCharacter->PlayerSlot = EShowDownPlayerSlot::Player1;
 	SecondTargetCharacter->PlayerSlot = EShowDownPlayerSlot::Player2;

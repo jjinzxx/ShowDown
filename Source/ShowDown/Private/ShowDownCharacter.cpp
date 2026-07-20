@@ -27,6 +27,7 @@
 #include "ShowDownCharacterSkinCatalog.h"
 #include "ShowDownGameStateBase.h"
 #include "ShowDownNameTagWidget.h"
+#include "ShowDownPlayerController.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -38,6 +39,16 @@ namespace
 	constexpr float MaximumHitResetPulseRadius = 240.0f;
 	const FVector HitResetPulseRelativeLocation(0.0f, 0.0f, 220.0f);
 	const FRotator HitResetPulseRelativeRotation(-90.0f, 0.0f, 0.0f);
+
+	bool IsRecordingUiHiddenForWorld(const UWorld* World)
+	{
+		const AShowDownPlayerController* PlayerController = World
+			? Cast<AShowDownPlayerController>(World->GetFirstPlayerController())
+			: nullptr;
+		return PlayerController
+			&& PlayerController->IsLocalController()
+			&& PlayerController->IsRecordingUiHidden();
+	}
 
 	void ConfigureHitResetPulseLight(
 		USpotLightComponent* Light,
@@ -281,6 +292,24 @@ AShowDownCharacter::AShowDownCharacter()
 	// visibility as the default-off/runtime on-off switch.
 	RoundStatusSpotLight->SetVisibility(false);
 
+	RedLoserSpotLight = CreateDefaultSubobject<USpotLightComponent>(TEXT("RedLoserSpotLight"));
+	RedLoserSpotLight->SetupAttachment(GetCapsuleComponent());
+	// Start from the old shared-light look, then let designers tune this native
+	// component without changing the normal turn spotlight.
+	RedLoserSpotLight->SetRelativeLocation(FVector(0.0f, 0.0f, 250.0f));
+	RedLoserSpotLight->SetRelativeRotation(FRotator(-90.0f, 0.0f, 0.0f));
+	RedLoserSpotLight->SetInnerConeAngle(14.0f);
+	RedLoserSpotLight->SetOuterConeAngle(28.0f);
+	RedLoserSpotLight->SetIntensityUnits(ELightUnits::Lumens);
+	RedLoserSpotLight->SetUseInverseSquaredFalloff(true);
+	RedLoserSpotLight->SetAttenuationRadius(230.0f);
+	RedLoserSpotLight->SetIntensity(2500.0f);
+	RedLoserSpotLight->SetLightColor(FLinearColor(1.0f, 0.015f, 0.015f, 1.0f));
+	RedLoserSpotLight->SetCastShadows(false);
+	RedLoserSpotLight->SetIndirectLightingIntensity(0.0f);
+	RedLoserSpotLight->SetVolumetricScatteringIntensity(0.0f);
+	RedLoserSpotLight->SetVisibility(false);
+
 	UCharacterMovementComponent* MovementComponent = GetCharacterMovement();
 	MovementComponent->bOrientRotationToMovement = true;
 	MovementComponent->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
@@ -320,10 +349,13 @@ void AShowDownCharacter::PostInitializeComponents()
 	}
 	if (RoundStatusSpotLight)
 	{
-		RoundStatusSpotLightTurnColor = RoundStatusSpotLight->GetLightColor();
-		bRoundStatusSpotLightTurnColorCached = true;
 		RoundStatusSpotLight->SetVisibility(false, true);
 		RoundStatusSpotLight->SetHiddenInGame(true, true);
+	}
+	if (RedLoserSpotLight)
+	{
+		RedLoserSpotLight->SetVisibility(false, true);
+		RedLoserSpotLight->SetHiddenInGame(true, true);
 	}
 	if (WorldLivesText)
 	{
@@ -2201,7 +2233,7 @@ void AShowDownCharacter::ApplyPresentationCollisionSettings()
 
 void AShowDownCharacter::RefreshRoundStatusSpotlight()
 {
-	if (!RoundStatusSpotLight || IsRunningDedicatedServer())
+	if (IsRunningDedicatedServer())
 	{
 		return;
 	}
@@ -2217,20 +2249,22 @@ void AShowDownCharacter::RefreshRoundStatusSpotlight()
 		&& !bInitialDealPresentationActive
 		&& bTurnPhase
 		&& IsNameTagTurnActive();
-	const bool bVisible = bCharacterSceneActive
+	const bool bPresentationVisible = bCharacterSceneActive
 		&& !bHitRecoveryVisualConcealed
-		&& !HitRecoveryPresentationState.bActive
-		&& (bShowLoser || bShowTurn);
+		&& !HitRecoveryPresentationState.bActive;
 
-	if (!bRoundStatusSpotLightTurnColorCached)
+	if (RoundStatusSpotLight)
 	{
-		RoundStatusSpotLightTurnColor = RoundStatusSpotLight->GetLightColor();
-		bRoundStatusSpotLightTurnColorCached = true;
+		const bool bTurnVisible = bPresentationVisible && bShowTurn;
+		RoundStatusSpotLight->SetVisibility(bTurnVisible, true);
+		RoundStatusSpotLight->SetHiddenInGame(!bTurnVisible, true);
 	}
-	RoundStatusSpotLight->SetLightColor(
-		bShowLoser ? RouletteTargetSpotLightColor : RoundStatusSpotLightTurnColor);
-	RoundStatusSpotLight->SetVisibility(bVisible, true);
-	RoundStatusSpotLight->SetHiddenInGame(!bVisible, true);
+	if (RedLoserSpotLight)
+	{
+		const bool bLoserVisible = bPresentationVisible && bShowLoser;
+		RedLoserSpotLight->SetVisibility(bLoserVisible, true);
+		RedLoserSpotLight->SetHiddenInGame(!bLoserVisible, true);
+	}
 }
 
 void AShowDownCharacter::RefreshNameTag()
@@ -2270,7 +2304,7 @@ void AShowDownCharacter::SyncNameTagVisibility()
 
 	BindNameTagToLocalPlayer();
 
-	const bool bVisible = ShouldShowNameTag();
+	const bool bVisible = ShouldShowNameTag() && !IsRecordingUiHiddenForWorld(GetWorld());
 	const bool bVisibleWidgetMissing = bVisible
 		&& NameTagWidgetComponent->GetUserWidgetObject() == nullptr;
 	const bool bHiddenInGameMismatch = NameTagWidgetComponent->bHiddenInGame == bVisible;
@@ -2400,7 +2434,9 @@ void AShowDownCharacter::RefreshWorldLives()
 	// Overhead presentation belongs to characters the local player can see.
 	// Rendering it for the local first-person character leaves orphaned hearts/status
 	// in the middle of the screen while the local name tag is intentionally hidden.
-	const bool bVisible = ShouldShowNameTag() && DisplayedLives > 0;
+	const bool bVisible = ShouldShowNameTag()
+		&& !IsRecordingUiHiddenForWorld(GetWorld())
+		&& DisplayedLives > 0;
 	WorldLivesText->SetVisibility(bVisible, true);
 	WorldLivesText->SetHiddenInGame(!bVisible, true);
 	// The old enlarged duplicate produced a soft/doubled silhouette. The opaque
@@ -2470,6 +2506,7 @@ void AShowDownCharacter::RefreshWorldBetStatus()
 
 	const bool bVisible =
 		ShouldShowNameTag()
+		&& !IsRecordingUiHiddenForWorld(GetWorld())
 		&& ReplicatedBetStatusPresentation.bVisible
 		&& !ReplicatedBetStatusPresentation.DisplayName.TrimStartAndEnd().IsEmpty();
 	const bool bActionVisible = bVisible && !ReplicatedBetStatusPresentation.StatusText.TrimStartAndEnd().IsEmpty();
@@ -2477,6 +2514,13 @@ void AShowDownCharacter::RefreshWorldBetStatus()
 	BetStatusValueText->SetHiddenInGame(!bVisible, true);
 	BetStatusActionText->SetVisibility(bActionVisible, true);
 	BetStatusActionText->SetHiddenInGame(!bActionVisible, true);
+}
+
+void AShowDownCharacter::RefreshRecordingUiVisibility()
+{
+	SyncNameTagVisibility();
+	RefreshWorldLives();
+	RefreshWorldBetStatus();
 }
 
 FString AShowDownCharacter::ResolveNameTagDisplayName() const

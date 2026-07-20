@@ -285,6 +285,8 @@ public:
 	UFUNCTION(BlueprintImplementableEvent, Category = "ShowDown|Character Skin")
 	void OnCharacterSkinChanged(const FString& NewSkinId);
 
+	void RefreshRecordingUiVisibility();
+
 protected:
 	UFUNCTION()
 	void OnRep_AnimState();
@@ -498,16 +500,17 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery")
 	TObjectPtr<USpotLightComponent> HitResetPulseLight;
 
-	/**
-	 * Shared turn/loser key light. Its transform and lighting properties are
-	 * authored on the component; gameplay code only toggles it on and off.
-	 */
+	/** Turn indicator light. Gameplay code only controls its visibility. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Cinematic Light")
 	TObjectPtr<USpotLightComponent> RoundStatusSpotLight;
 
-	/** Runtime override used only while this character is a roulette target. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Cinematic Light")
-	FLinearColor RouletteTargetSpotLightColor = FLinearColor(1.0f, 0.015f, 0.015f, 1.0f);
+	/**
+	 * Red roulette-target light. This is deliberately separate from the turn
+	 * light so its transform, color, intensity, range, and cone can all be
+	 * authored independently on the component.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Cinematic Light|Red Loser Spotlight")
+	TObjectPtr<USpotLightComponent> RedLoserSpotLight;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ShowDown|Hit Recovery", meta = (ClampMin = "0.0", UIMin = "0.0", UIMax = "3.0"))
 	float HitDownedHoldDuration = 1.0f;
@@ -609,8 +612,6 @@ private:
 	bool bLastNameTagVisible = false;
 	bool bLoserSpotlightActive = false;
 	bool bInitialDealPresentationActive = false;
-	bool bRoundStatusSpotLightTurnColorCached = false;
-	FLinearColor RoundStatusSpotLightTurnColor = FLinearColor::White;
 
 	FTimerHandle AnimStateResetTimerHandle;
 	UPROPERTY(Transient)

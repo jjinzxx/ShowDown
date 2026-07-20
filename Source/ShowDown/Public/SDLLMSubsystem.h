@@ -132,7 +132,7 @@ public:
 	float RequestTimeoutSeconds = 6.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|LLM")
-	FString BossSpeechStylePrompt = TEXT("Speak natural Korean banmal like a mature Korean man in his twenties across the table: casual and current, never boyish, cutesy, overeager, or slang-heavy. Stay relaxed and streetwise without forcing menace, profanity, game metaphors, or catchphrases. Respond to the player's intent, vary your phrasing, and never sound like a scripted villain.");
+	FString BossSpeechStylePrompt = TEXT("Speak in short, natural Korean banmal with the loose swagger of an underground street punk. Always understand and answer the player's latest line directly before adding attitude. For greetings, casual remarks, or neutral questions, respond casually without profanity or hostility. Use mild profanity only rarely and only when the player insults, provokes, threatens, applies strong pressure, or when a tense game result genuinely calls for it. Never insert profanity as filler, never open a reply with unrelated profanity, and never copy stock examples. Keep the confidence relaxed and streetwise rather than constantly angry. No anonymous-board slang, \"ㅋㅋ\", random memes, repetitive catchphrases, hate slurs, sexual insults, threats of real violence, or real-person references.");
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "ShowDown|LLM")
 	bool bEnableInstantBossChatReply = true;

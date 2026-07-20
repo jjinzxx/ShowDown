@@ -16,6 +16,7 @@
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/Widget.h"
 #include "CollisionQueryParams.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
@@ -29,6 +30,7 @@
 #include "PlayerPawn.h"
 #include "Presentation/SDBetActionPanelActor.h"
 #include "Presentation/SDGunVisionSequenceSubsystem.h"
+#include "Presentation/SDSelfShotGunActor.h"
 #include "SDPlayerState.h"
 #include "ShowDownCameraAspect.h"
 #include "ShowDownCharacter.h"
@@ -532,6 +534,7 @@ void AShowDownPlayerController::BeginPlay()
 void AShowDownPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	CancelGunShotCameraOverride();
+	SetRecordingUiHidden(false);
 	SetHitBlackoutUiOpacity(0.0f);
 	DisableGameplayChat();
 
@@ -964,6 +967,16 @@ bool AShowDownPlayerController::TryApplyPendingMultiplayerCharacterCamera()
 void AShowDownPlayerController::PlayerTick(float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime);
+	if (IsLocalController()
+		&& RecordingUiToggleKey.IsValid()
+		&& WasInputKeyJustPressed(RecordingUiToggleKey))
+	{
+		ToggleRecordingUi();
+	}
+	if (bRecordingUiHidden)
+	{
+		ApplyRecordingUiVisibility();
+	}
 	UpdateGunShotCameraOverride(DeltaTime);
 	if (!bGameplayHudIntroFadeStarted
 		&& bGameplayChatEnabled
@@ -1144,9 +1157,127 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 
 	UpdateCharacterPlayerCamera(DeltaTime);
 	PrimaryInteractionTraceFrame = MAX_uint64;
-	UpdateFocusedInteractable();
-	UpdateHoveredCard();
+	if (bRecordingUiHidden)
+	{
+		SetFocusedInteractable(nullptr);
+		SetHoveredCard(nullptr);
+	}
+	else
+	{
+		UpdateFocusedInteractable();
+		UpdateHoveredCard();
+	}
 	UpdateCenterCrosshairVisibility();
+}
+
+void AShowDownPlayerController::ToggleRecordingUi()
+{
+	SetRecordingUiHidden(!bRecordingUiHidden);
+}
+
+void AShowDownPlayerController::SetRecordingUiHidden(bool bShouldHide)
+{
+	if (bRecordingUiHidden == bShouldHide)
+	{
+		if (bShouldHide)
+		{
+			ApplyRecordingUiVisibility();
+		}
+		return;
+	}
+
+	bRecordingUiHidden = bShouldHide;
+	if (bRecordingUiHidden)
+	{
+		RecordingUiSavedWidgetVisibilities.Reset();
+		bRecordingUiSavedMouseCursorVisible = bShowMouseCursor;
+		bShowMouseCursor = false;
+		SetFocusedInteractable(nullptr);
+		SetHoveredCard(nullptr);
+		ClearCardSelectionHandHighlight();
+		ApplyRecordingUiVisibility();
+	}
+	else
+	{
+		for (const TPair<TWeakObjectPtr<UWidget>, ESlateVisibility>& Entry : RecordingUiSavedWidgetVisibilities)
+		{
+			if (UWidget* Widget = Entry.Key.Get())
+			{
+				Widget->SetVisibility(Entry.Value);
+			}
+		}
+		RecordingUiSavedWidgetVisibilities.Reset();
+		bShowMouseCursor = bRecordingUiSavedMouseCursorVisible;
+		if (GameplayPromptWidget.IsValid())
+		{
+			GameplayPromptWidget->SetVisibility(EVisibility::HitTestInvisible);
+		}
+		UpdateGameplayStatusHud(0.0f);
+		UpdateCenterCrosshairVisibility();
+	}
+
+	RefreshWorldRecordingUi();
+}
+
+void AShowDownPlayerController::ApplyRecordingUiVisibility()
+{
+	if (!bRecordingUiHidden)
+	{
+		return;
+	}
+
+	if (CenterCrosshairWidget.IsValid())
+	{
+		CenterCrosshairWidget->SetVisibility(EVisibility::Collapsed);
+	}
+	if (GameplayPromptWidget.IsValid())
+	{
+		GameplayPromptWidget->SetVisibility(EVisibility::Collapsed);
+	}
+	if (GameplayStatusHudWidget.IsValid())
+	{
+		GameplayStatusHudWidget->SetVisibility(EVisibility::Collapsed);
+	}
+
+	CacheAndHideRecordingWidget(ChatWidget);
+	CacheAndHideRecordingWidget(LeaveConfirmWidget);
+	CacheAndHideRecordingWidget(MultiplayerRankWidget);
+	CacheAndHideRecordingWidget(MultiplayerLoadingWidget);
+	CacheAndHideRecordingWidget(PauseMenuWidget);
+	CacheAndHideRecordingWidget(PauseSettingsWidget);
+}
+
+void AShowDownPlayerController::RefreshWorldRecordingUi()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	for (TActorIterator<AShowDownCharacter> CharacterIt(World); CharacterIt; ++CharacterIt)
+	{
+		CharacterIt->RefreshRecordingUiVisibility();
+	}
+	for (TActorIterator<ASDSelfShotGunActor> GunIt(World); GunIt; ++GunIt)
+	{
+		GunIt->RefreshRecordingUiVisibility();
+	}
+}
+
+void AShowDownPlayerController::CacheAndHideRecordingWidget(UWidget* Widget)
+{
+	if (!bRecordingUiHidden || !Widget)
+	{
+		return;
+	}
+
+	const TWeakObjectPtr<UWidget> WidgetKey(Widget);
+	if (!RecordingUiSavedWidgetVisibilities.Contains(WidgetKey))
+	{
+		RecordingUiSavedWidgetVisibilities.Add(WidgetKey, Widget->GetVisibility());
+	}
+	Widget->SetVisibility(ESlateVisibility::Collapsed);
 }
 
 void AShowDownPlayerController::InitializeFromPossessedPawn()
@@ -3170,6 +3301,7 @@ void AShowDownPlayerController::EnsureChatWidget()
 	ChatWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
 	ChatWidget->SetChatInputOpen(false);
 	ChatWidget->SetRenderOpacity(GameplayHudIntroOpacity);
+	CacheAndHideRecordingWidget(ChatWidget);
 }
 
 void AShowDownPlayerController::RemoveLocalChatWidgetsExcept(UShowDownChatWidget* WidgetToKeep)
@@ -3322,6 +3454,7 @@ void AShowDownPlayerController::UpdateCenterCrosshairVisibility()
 
 	const bool bShouldShow =
 		bShowCenterCrosshair
+		&& !bRecordingUiHidden
 		&& bHandleShowDownGameplayInput
 		&& !bChatOpen
 		&& !bShowMouseCursor
@@ -3625,7 +3758,7 @@ void AShowDownPlayerController::UpdateGameplayStatusHud(float DeltaTime)
 		}
 	};
 	UpdateGameplayStatusMessage(DeltaTime);
-	if (HasBlockingGameplayUi())
+	if (bRecordingUiHidden || HasBlockingGameplayUi())
 	{
 		ResetGameplayLivesAnimation();
 		GameplayStatusHudWidget->SetVisibility(EVisibility::Collapsed);
@@ -3840,6 +3973,20 @@ void AShowDownPlayerController::RemoveGameplayStatusHud()
 
 void AShowDownPlayerController::UpdateGameplayPrompt(float DeltaTime)
 {
+	if (bRecordingUiHidden)
+	{
+		if (GameplayPromptWidget.IsValid())
+		{
+			GameplayPromptWidget->SetVisibility(EVisibility::Collapsed);
+		}
+		ClearCardSelectionHandHighlight();
+		return;
+	}
+	if (GameplayPromptWidget.IsValid())
+	{
+		GameplayPromptWidget->SetVisibility(EVisibility::HitTestInvisible);
+	}
+
 	const AShowDownGameStateBase* ShowDownGameState = GetWorld()
 		? GetWorld()->GetGameState<AShowDownGameStateBase>()
 		: nullptr;
@@ -4161,6 +4308,8 @@ void AShowDownPlayerController::SetGameplayPromptContent(
 	Content.bHighlightSelectableCards = bHighlightSelectableCards;
 	GameplayPromptWidget = BuildGameplayPromptWidget(Content);
 	GameplayPromptWidget->SetRenderOpacity(0.0f);
+	GameplayPromptWidget->SetVisibility(
+		bRecordingUiHidden ? EVisibility::Collapsed : EVisibility::HitTestInvisible);
 	if (GEngine && GEngine->GameViewport)
 	{
 		GEngine->GameViewport->AddViewportWidgetContent(

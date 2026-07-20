@@ -1047,7 +1047,10 @@ void USDGunVisionSequenceSubsystem::HandleGunRaised(ASDSelfShotGunActor* GunActo
 	ActiveGun = GunActor;
 	SequenceState = ESequenceState::RaiseToTension;
 	SequenceElapsedTime = 0.0f;
-	ShotResolveDelay = FMath::Max(0.0f, GunActor->GetShotResolveDelay());
+	// OnGunRaised is emitted only after the camera lead-in has completed, so this
+	// local darkness ramp uses the remaining gun-motion duration rather than
+	// counting the camera blend a second time.
+	ShotResolveDelay = FMath::Max(0.0f, GunActor->GetGunMotionShotResolveDelay());
 	SequenceStageDuration = FMath::Min(RaiseToTensionDuration, ShotResolveDelay);
 
 	if (SequenceStageDuration <= KINDA_SMALL_NUMBER)

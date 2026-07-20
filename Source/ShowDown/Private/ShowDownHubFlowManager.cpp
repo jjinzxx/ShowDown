@@ -217,7 +217,6 @@ void AShowDownHubFlowManager::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	}
 
 	bPendingMultiplayerOpenAfterEosLogin = false;
-	DeactivateCharacterPreviews();
 	if (TransitionWidget)
 	{
 		TransitionWidget->RemoveFromParent();
@@ -225,6 +224,7 @@ void AShowDownHubFlowManager::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	}
 	TransitionOperation = EShowDownHubTransitionOperation::None;
 	SetActiveWidget(nullptr);
+	DeactivateCharacterPreviews();
 	LoginWidget = nullptr;
 	MainMenuWidget = nullptr;
 	ShopWidget = nullptr;
@@ -1018,13 +1018,9 @@ APlayerController* AShowDownHubFlowManager::GetPrimaryPlayerController() const
 
 void AShowDownHubFlowManager::UpdateCharacterPreviewsForWidget(UUserWidget* NextWidget)
 {
-	if (NextWidget && NextWidget == MainMenuWidget)
+	if (NextWidget && NextWidget == LoginWidget)
 	{
-		if (IsValid(ShopPreviewActor))
-		{
-			ShopPreviewActor->DeactivatePreview();
-		}
-		RefreshMainMenuCharacterPreview();
+		DeactivateCharacterPreviews();
 		return;
 	}
 
@@ -1050,7 +1046,18 @@ void AShowDownHubFlowManager::UpdateCharacterPreviewsForWidget(UUserWidget* Next
 		return;
 	}
 
-	DeactivateCharacterPreviews();
+	// The equipped main-menu character is part of the hub/game scene, not just
+	// the main-menu widget. Keep it alive through single-player startup and the
+	// multiplayer browser/lobby flow. A nullptr widget means gameplay or travel
+	// is taking over, so it must not implicitly hide the placed character either.
+	if (IsValid(ShopPreviewActor))
+	{
+		ShopPreviewActor->DeactivatePreview();
+	}
+	if (!IsValid(MainMenuPreviewActor) || !MainMenuPreviewActor->IsPreviewActive())
+	{
+		RefreshMainMenuCharacterPreview();
+	}
 }
 
 void AShowDownHubFlowManager::DeactivateCharacterPreviews()

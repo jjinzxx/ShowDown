@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Components/SlateWrapperTypes.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
 #include "ShowDownTypes.h"
@@ -26,6 +27,7 @@ class UShowDownVoiceSubsystem;
 class UShowDownPauseMenuWidget;
 class UShowDownSettingsWidget;
 class UShowDownTransitionWidget;
+class UWidget;
 
 struct FSDPrimitiveCustomDepthState
 {
@@ -196,6 +198,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ShowDown|UI")
 	void DisableGameplayChat();
 
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Recording")
+	void ToggleRecordingUi();
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Recording")
+	void SetRecordingUiHidden(bool bShouldHide);
+
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "ShowDown|Recording")
+	bool IsRecordingUiHidden() const { return bRecordingUiHidden; }
+
 	/**
 	 * Fades every viewport UI layer with the local hit-recovery blackout.
 	 * A top-level mask is used so each widget keeps its own visibility state and
@@ -332,6 +343,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Multiplayer")
 	FKey LeaveMatchKey = EKeys::Escape;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Recording")
+	FKey RecordingUiToggleKey = EKeys::Z;
 
 	UPROPERTY(EditDefaultsOnly, Category="ShowDown|Pause")
 	TSubclassOf<UShowDownPauseMenuWidget> PauseMenuWidgetClass;
@@ -473,6 +487,9 @@ private:
 	void RestoreMultiplayerGameplayInput();
 	bool HasBlockingGameplayUi() const;
 	void ApplyChatInputMode(bool bOpen);
+	void ApplyRecordingUiVisibility();
+	void RefreshWorldRecordingUi();
+	void CacheAndHideRecordingWidget(UWidget* Widget);
 	void CreateCenterCrosshairWidget();
 	void UpdateCenterCrosshairVisibility();
 	void RemoveCenterCrosshairWidget();
@@ -560,6 +577,9 @@ private:
 	UPROPERTY() UShowDownSettingsWidget* PauseSettingsWidget = nullptr;
 	bool bPauseMenuOpen = false;
 	bool bGameplayInputBeforePause = true;
+	bool bRecordingUiHidden = false;
+	bool bRecordingUiSavedMouseCursorVisible = false;
+	TMap<TWeakObjectPtr<UWidget>, ESlateVisibility> RecordingUiSavedWidgetVisibilities;
 	UFUNCTION() void ResumeFromPauseMenu();
 	UFUNCTION() void ReturnToMainMenuFromPause();
 	UFUNCTION() void OpenSettingsFromPause();
