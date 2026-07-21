@@ -1,0 +1,29 @@
+#pragma once
+#include "CoreMinimal.h"
+#include "ShowDownUserWidget.h"
+#include "ShowDownPauseMenuWidget.generated.h"
+class UButton;
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnPauseMenuAction);
+UCLASS()
+class SHOWDOWN_API UShowDownPauseMenuWidget : public UShowDownUserWidget
+{
+	GENERATED_BODY()
+public:
+	UPROPERTY(BlueprintAssignable) FOnPauseMenuAction OnResume;
+	UPROPERTY(BlueprintAssignable) FOnPauseMenuAction OnMainMenu;
+	UPROPERTY(BlueprintAssignable) FOnPauseMenuAction OnSettings;
+	UPROPERTY(BlueprintAssignable) FOnPauseMenuAction OnQuit;
+protected:
+	virtual void NativeConstruct() override;
+	virtual void NativeDestruct() override;
+	virtual FReply NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
+private:
+	UPROPERTY(meta=(BindWidget)) UButton* Button_Resume=nullptr;
+	UPROPERTY(meta=(BindWidget)) UButton* Button_MainMenu=nullptr;
+	UPROPERTY(meta=(BindWidget)) UButton* Button_Settings=nullptr;
+	UPROPERTY(meta=(BindWidget)) UButton* Button_Quit=nullptr;
+	UFUNCTION() void Resume(){OnResume.Broadcast();}
+	UFUNCTION() void MainMenu(){OnMainMenu.Broadcast();}
+	UFUNCTION() void Settings(){OnSettings.Broadcast();}
+	UFUNCTION() void Quit(){OnQuit.Broadcast();}
+};

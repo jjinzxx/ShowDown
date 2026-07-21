@@ -20,6 +20,7 @@ Intermediate/
 Saved/
 Build/
 Platforms/
+/Samples/
 
 # 플러그인 내 임시 폴더
 Plugins/**/Binaries/
@@ -58,6 +59,19 @@ out/
 *.dylib
 
 # ============================================================
+# Ouroboros & AI Runtime Config
+# ============================================================
+.env
+.env.*
+*.db
+*.sqlite3
+.ouroboros/
+
+# LLM API 키 (로컬 전용, 절대 커밋 금지). 템플릿은 추적 유지
+Source/ShowDown/Private/SDLLMSecrets.h
+!Source/ShowDown/Private/SDLLMSecrets.h.template
+
+# ============================================================
 # 화이트리스트 (제외 대상 중 포함할 항목)
 # ============================================================
 # 모바일 빌드 등에 필요한 아이콘/이미지는 유지
@@ -65,3 +79,13 @@ out/
 !Build/IOS/Resources/**/*.png
 !Build/Android/res/**/*.png
 !Build/*/PakBlacklist*.txt
+
+# Local voice runtime distributed through Git LFS
+!/Binaries/
+/Binaries/*
+!/Binaries/ThirdParty/
+/Binaries/ThirdParty/*
+!/Binaries/ThirdParty/Whisper/
+!/Binaries/ThirdParty/Whisper/**
+!/Binaries/ThirdParty/eSpeakNG/
+!/Binaries/ThirdParty/eSpeakNG/**
