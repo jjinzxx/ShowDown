@@ -1040,30 +1040,48 @@ void UShowDownVoiceSubsystem::RequestLocalTranscription(TArray<uint8>&& WavData)
 	const FString LanguageArg = TranscriptionLanguage.TrimStartAndEnd().IsEmpty()
 		? FString()
 		: FString::Printf(TEXT(" -l \"%s\""), *TranscriptionLanguage.TrimStartAndEnd());
+	const FString OutputPrefix = FPaths::Combine(
+		STTDirectory,
+		FPaths::GetBaseFilename(WavFilePath));
+	const FString OutputTextPath = OutputPrefix + TEXT(".txt");
 	const FString Args = FString::Printf(
-		TEXT("-m \"%s\" -f \"%s\"%s -nf -sns -nth 0.45 -et 2.20"),
+		TEXT("-m \"%s\" -f \"%s\"%s -nf -sns -nth 0.45 -et 2.20 -otxt -of \"%s\""),
 		*ResolvedModelPath,
 		*WavFilePath,
-		*LanguageArg);
+		*LanguageArg,
+		*OutputPrefix);
 
 	int32 ReturnCode = -1;
-	FString StdOut;
-	FString StdErr;
-	const bool bExecuted = FPlatformProcess::ExecProcess(*ResolvedExecutablePath, *Args, &ReturnCode, &StdOut, &StdErr);
+	// Capturing stdout/stderr makes UE's Windows ExecProcess configure inherited
+	// standard handles. A packaged GUI process has no valid stdin handle, causing
+	// CreateProcess to fail with ERROR_INVALID_PARAMETER (87). Have whisper.cpp
+	// write its transcript to a file and launch it without redirected handles.
+	const bool bExecuted = FPlatformProcess::ExecProcess(
+		*ResolvedExecutablePath,
+		*Args,
+		&ReturnCode,
+		nullptr,
+		nullptr);
 	bTranscriptionInFlight = false;
 
-	const FString CombinedOutput = StdOut + TEXT("\n") + StdErr;
-	const FString TranscribedText = ExtractWhisperCliText(CombinedOutput);
+	FString TranscribedText;
+	const bool bLoadedTranscript = FFileHelper::LoadFileToString(TranscribedText, *OutputTextPath);
+	TranscribedText = TranscribedText.TrimStartAndEnd();
 	const bool bHallucination = IsLikelyWhisperHallucination(TranscribedText);
-	const bool bSuccess = bExecuted && ReturnCode == 0 && !TranscribedText.IsEmpty() && !bHallucination;
+	const bool bSuccess = bExecuted
+		&& ReturnCode == 0
+		&& bLoadedTranscript
+		&& !TranscribedText.IsEmpty()
+		&& !bHallucination;
 	if (!bSuccess)
 	{
 		LastVoiceError = FString::Printf(
-			TEXT("Local STT failed or rejected hallucination. executed=%s code=%d hallucination=%s output=%s"),
+			TEXT("Local STT failed or rejected hallucination. executed=%s code=%d transcript=%s bytes=%d hallucination=%s"),
 			bExecuted ? TEXT("true") : TEXT("false"),
 			ReturnCode,
-			bHallucination ? TEXT("true") : TEXT("false"),
-			*CombinedOutput.Left(256));
+			bLoadedTranscript ? TEXT("loaded") : TEXT("missing"),
+			TranscribedText.Len(),
+			bHallucination ? TEXT("true") : TEXT("false"));
 		UE_LOG(LogTemp, Warning, TEXT("%s"), *LastVoiceError);
 		BroadcastVoiceStatus(false, TEXT("로컬 STT 실패."));
 		PendingTranscriptionCallback.ExecuteIfBound(false, FString());
@@ -1244,22 +1262,25 @@ void UShowDownVoiceSubsystem::RequestLocalSpeech(const FString& Text)
 		*TextFilePath);
 
 	int32 ReturnCode = -1;
-	FString StdOut;
-	FString StdErr;
-	const bool bExecuted = FPlatformProcess::ExecProcess(*ResolvedExecutablePath, *Args, &ReturnCode, &StdOut, &StdErr);
+	// Do not request redirected output handles in packaged GUI builds. eSpeak NG
+	// communicates success through its exit code and the generated WAV file.
+	const bool bExecuted = FPlatformProcess::ExecProcess(
+		*ResolvedExecutablePath,
+		*Args,
+		&ReturnCode,
+		nullptr,
+		nullptr);
 	bSpeechInFlight = false;
 
 	TArray<uint8> WavData;
 	const bool bLoadedWav = FFileHelper::LoadFileToArray(WavData, *WavFilePath) && WavData.Num() >= 44;
 	if (!bExecuted || ReturnCode != 0 || !bLoadedWav)
 	{
-		const FString CombinedOutput = StdOut + TEXT("\n") + StdErr;
 		LastVoiceError = FString::Printf(
-			TEXT("Local TTS failed. executed=%s code=%d wav_bytes=%d output=%s"),
+			TEXT("Local TTS failed. executed=%s code=%d wav_bytes=%d"),
 			bExecuted ? TEXT("true") : TEXT("false"),
 			ReturnCode,
-			WavData.Num(),
-			*CombinedOutput.Left(256));
+			WavData.Num());
 		UE_LOG(LogTemp, Warning, TEXT("%s"), *LastVoiceError);
 		RequestPendingSpeech();
 		return;
