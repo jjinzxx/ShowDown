@@ -6,6 +6,8 @@
 .idea/
 .vsconfig
 *.sln.DotSettings.user
+*.log
+tools/**/logs/
 
 # 특정 에셋 폴더 제외 (용량 관리)
 # Content/폴더이름
