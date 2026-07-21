@@ -1145,7 +1145,49 @@ bool FShowDownGunShotCameraTest::RunTest(const FString& Parameters)
 		TestFalse(
 			TEXT("Recording UI starts visible"),
 			DefaultController->IsRecordingUiHidden());
+		TestEqual(
+			TEXT("The cinematic recording mode toggle defaults to X"),
+			DefaultController->RecordingModeToggleKey,
+			EKeys::X);
+		TestFalse(
+			TEXT("Cinematic recording mode starts disabled"),
+			DefaultController->IsRecordingModeEnabled());
+		TestFalse(
+			TEXT("The recording free camera uses natural vertical mouse look by default"),
+			DefaultController->bInvertRecordingFreeCameraMouseY);
+		TestEqual(
+			TEXT("C lowers the free-camera movement speed"),
+			DefaultController->RecordingFreeCameraSlowerKey,
+			EKeys::C);
+		TestEqual(
+			TEXT("V raises the free-camera movement speed"),
+			DefaultController->RecordingFreeCameraFasterKey,
+			EKeys::V);
+		TestTrue(
+			TEXT("The free-camera speed adjustment has a useful range"),
+			DefaultController->RecordingFreeCameraMinimumSpeedScale < 1.0f
+				&& DefaultController->RecordingFreeCameraMaximumSpeedScale > 1.0f
+				&& DefaultController->RecordingFreeCameraSpeedStepMultiplier > 1.0f);
+		TestTrue(
+			TEXT("The free camera has smoothing enabled for movement and look"),
+			DefaultController->RecordingFreeCameraMovementResponsiveness > 0.0f
+				&& DefaultController->RecordingFreeCameraLookResponsiveness > 0.0f);
 	}
+
+	const float SixtyFpsAlpha = AShowDownPlayerController::CalculateRecordingCameraSmoothingAlpha(
+		7.5f,
+		1.0f / 60.0f);
+	const float ThirtyFpsAlpha = AShowDownPlayerController::CalculateRecordingCameraSmoothingAlpha(
+		7.5f,
+		1.0f / 30.0f);
+	const float TwoSixtyFpsSteps = 1.0f - FMath::Square(1.0f - SixtyFpsAlpha);
+	TestTrue(
+		TEXT("Recording camera smoothing is frame-rate independent"),
+		FMath::IsNearlyEqual(ThirtyFpsAlpha, TwoSixtyFpsSteps, KINDA_SMALL_NUMBER));
+	TestEqual(
+		TEXT("Zero recording camera response produces no movement"),
+		AShowDownPlayerController::CalculateRecordingCameraSmoothingAlpha(0.0f, 1.0f),
+		0.0f);
 
 	TestFalse(
 		TEXT("Normal gameplay leaves gun-shot presentation input enabled"),
@@ -2200,6 +2242,12 @@ bool FShowDownRaiseBulletLoadingTest::RunTest(const FString& Parameters)
 		TEXT("Incoming bullets start 0.18 seconds apart"),
 		FMath::IsNearlyEqual(GunActor->RaiseBulletLoadStaggerDelay, 0.18f, KINDA_SMALL_NUMBER));
 	TestTrue(
+		TEXT("A revealed seven fold uses a much faster bullet travel"),
+		GunActor->FoldRevealBulletLoadDuration < GunActor->RaiseBulletLoadDuration);
+	TestTrue(
+		TEXT("A revealed seven fold rapidly staggers all six bullets"),
+		GunActor->FoldRevealBulletLoadStaggerDelay < GunActor->RaiseBulletLoadStaggerDelay);
+	TestTrue(
 		TEXT("Incoming bullets disappear just short of the gun"),
 		GunActor->RaiseBulletVanishDistance > 0.0f);
 	const float ConfiguredSixBulletSequenceDuration =
@@ -2230,6 +2278,14 @@ bool FShowDownRaiseBulletLoadingTest::RunTest(const FString& Parameters)
 		TEXT("The raise presentation remains reliable"),
 		RaiseMulticastFunction
 			&& RaiseMulticastFunction->HasAnyFunctionFlags(FUNC_NetReliable));
+	const UFunction* FoldRevealMulticastFunction = ASDSelfShotGunActor::StaticClass()
+		->FindFunctionByName(TEXT("MulticastPlayFoldRevealBulletLoadPresentation"));
+	TestNotNull(TEXT("The fold reveal load multicast is reflected"), FoldRevealMulticastFunction);
+	TestTrue(
+		TEXT("The post-reveal fold load is a reliable network multicast"),
+		FoldRevealMulticastFunction
+			&& FoldRevealMulticastFunction->HasAnyFunctionFlags(FUNC_NetMulticast)
+			&& FoldRevealMulticastFunction->HasAnyFunctionFlags(FUNC_NetReliable));
 
 	// Reproduce the real multiplayer ordering that previously skipped the effect:
 	// the replicated 4/6 status reaches the client before the 1 -> 4 raise RPC.
@@ -2336,6 +2392,40 @@ bool FShowDownRaiseBulletLoadingTest::RunTest(const FString& Parameters)
 	TestFalse(
 		TEXT("A delayed terminal-phase RPC is not left pending"),
 		GunActor->bRaiseBulletLoadPending);
+
+	// The seven-card fold is intentionally delivered during Reveal. Even if the
+	// authoritative 6/6 status arrives first, the dedicated RPC must replay a
+	// quick full-cylinder count-up instead of leaving the answer pre-filled.
+	GunActor->StatusPhase = EShowDownPhase::Reveal;
+	GunActor->StatusLiveRounds = 6;
+	GunActor->SetBulletPresentationImmediate(6);
+	GunActor->ReceiveFoldRevealBulletLoadPresentation(6, 0, EShowDownPlayerSlot::Player1);
+	TestTrue(
+		TEXT("A revealed seven fold starts its dedicated fast load"),
+		GunActor->bRaiseBulletLoadActive && GunActor->bRaiseBulletLoadAllowedDuringReveal);
+	TestEqual(
+		TEXT("The revealed seven fold replays the full cylinder from zero"),
+		GunActor->DisplayedBulletCount,
+		0);
+	GunActor->SynchronizeBulletPresentationFromStatus();
+	TestEqual(
+		TEXT("Status-first replication cannot snap the active reveal load to six"),
+		GunActor->DisplayedBulletCount,
+		0);
+	GunActor->HandleGamePhaseChanged(EShowDownPhase::Reveal);
+	TestTrue(
+		TEXT("Remaining in reveal does not cancel the fold load"),
+		GunActor->bRaiseBulletLoadActive);
+	const float FoldRevealSequenceDuration = GunActor->GetFoldRevealBulletLoadPresentationDuration(6);
+	TestTrue(
+		TEXT("The complete fold reveal cascade finishes in well under a second"),
+		FoldRevealSequenceDuration > 0.0f && FoldRevealSequenceDuration < 1.0f);
+	GunActor->UpdateRaiseBulletLoadAnimation(GunActor->FoldRevealBulletLoadDuration);
+	TestEqual(TEXT("The first fast round settles before the cascade finishes"), GunActor->DisplayedBulletCount, 1);
+	GunActor->UpdateRaiseBulletLoadAnimation(
+		FMath::Max(0.0f, FoldRevealSequenceDuration - GunActor->FoldRevealBulletLoadDuration));
+	TestFalse(TEXT("The revealed seven fold reaches a stable final state"), GunActor->bRaiseBulletLoadActive);
+	TestEqual(TEXT("The revealed seven fold finishes at 6/6"), GunActor->DisplayedBulletCount, 6);
 
 	AShowDownGameStateBase* GameState = NewObject<AShowDownGameStateBase>();
 	TestNotNull(TEXT("Round ordering can be tested with a game state"), GameState);

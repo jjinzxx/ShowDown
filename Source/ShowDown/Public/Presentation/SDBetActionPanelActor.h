@@ -144,6 +144,7 @@ public:
 	bool CanPressButton(ESDBetActionPanelButtonKind ButtonKind) const;
 	void HandleButtonClicked(ESDBetActionPanelButtonKind ButtonKind, AActor* Interactor);
 	bool IsPanelVisibleForLocalPlayer() const;
+	void RefreshRecordingUiVisibility();
 
 protected:
 	virtual void BeginPlay() override;
@@ -220,6 +221,7 @@ private:
 	bool bHasCachedBulletPanelTransform = false;
 	bool bBulletTargetVisible = false;
 	bool bBulletVisibilityTransitionActive = false;
+	bool bRecordingUiSuppressed = false;
 };
 
 UCLASS()
@@ -244,6 +246,7 @@ public:
 		float AnimationDelay,
 		float AnimationDuration,
 		float BounceStrength);
+	void SetRecordingUiSuppressed(bool bSuppressed);
 
 	virtual bool CanInteract_Implementation(AActor* Interactor) const override;
 	virtual void Interact_Implementation(AActor* Interactor) override;
@@ -307,6 +310,7 @@ private:
 	bool bButtonEnabled = false;
 	bool bTargetVisible = false;
 	bool bPointerPressed = false;
+	bool bRecordingUiSuppressed = false;
 	bool bVisibilityTransitionActive = false;
 	float VisualAlpha = 0.0f;
 	float VisualScale = 0.0f;

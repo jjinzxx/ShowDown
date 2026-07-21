@@ -163,6 +163,13 @@ public:
 		int32 NewBet,
 		EShowDownPlayerSlot SourceSlot);
 
+	/** Replays a full, fast load only after a seven-card fold has been revealed. */
+	float PlayFoldRevealBulletLoadPresentation(
+		int32 BulletCount,
+		EShowDownPlayerSlot SourceSlot);
+
+	float GetFoldRevealBulletLoadPresentationDuration(int32 BulletCount) const;
+
 	// Clears the centre of the table while the opening deck is displayed, then
 	// drops the complete revolver actor back onto its authored table transform.
 	UFUNCTION(BlueprintCallable, Category = "Self Shot Gun|Opening Cards")
@@ -346,6 +353,13 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.0"))
 	float RaiseBulletLoadStaggerDelay = 0.18f;
+
+	/** Fast full-cylinder travel used after the hidden seven-card fold is revealed. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Fold Reveal Bullet Loading", meta = (ClampMin = "0.05"))
+	float FoldRevealBulletLoadDuration = 0.22f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Fold Reveal Bullet Loading", meta = (ClampMin = "0.0"))
+	float FoldRevealBulletLoadStaggerDelay = 0.055f;
 
 	/** Stops the temporary bullet just short of the gun before it is hidden. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Self Shot Gun|Raise Bullet Loading", meta = (ClampMin = "0.0"))
@@ -805,7 +819,9 @@ private:
 	void StartRaiseBulletLoadAnimation(
 		int32 PreviousBet,
 		int32 NewBet,
-		EShowDownPlayerSlot SourceSlot);
+		EShowDownPlayerSlot SourceSlot,
+		bool bForceReloadAllBullets = false,
+		bool bAllowDuringReveal = false);
 	void UpdateRaiseBulletLoadAnimation(float DeltaSeconds);
 	void ReceiveRaiseBulletLoadPresentation(
 		int32 PreviousBet,
@@ -818,6 +834,15 @@ private:
 	void MulticastPlayRaiseBulletLoadPresentation(
 		int32 PreviousBet,
 		int32 NewBet,
+		int32 PresentationRound,
+		EShowDownPlayerSlot SourceSlot);
+	void ReceiveFoldRevealBulletLoadPresentation(
+		int32 BulletCount,
+		int32 PresentationRound,
+		EShowDownPlayerSlot SourceSlot);
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastPlayFoldRevealBulletLoadPresentation(
+		int32 BulletCount,
 		int32 PresentationRound,
 		EShowDownPlayerSlot SourceSlot);
 	bool IsRuntimeTickRequired() const;
@@ -883,6 +908,8 @@ private:
 	float TinnitusElapsedTime = 0.0f;
 	float OpeningCardDropVelocityZ = 0.0f;
 	float RaiseBulletLoadElapsedTime = 0.0f;
+	float ActiveBulletLoadDuration = 0.95f;
+	float ActiveBulletLoadStaggerDelay = 0.18f;
 	FVector ActiveRaiseBulletSourceWorldLocation = FVector::ZeroVector;
 	FVector ShotRecoilDirection = FVector::ForwardVector;
 	int32 DisplayedBulletCount = 0;
@@ -918,6 +945,7 @@ private:
 	bool bAmmoStatusClearPending = false;
 	bool bRaiseBulletLoadActive = false;
 	bool bRaiseBulletLoadPending = false;
+	bool bRaiseBulletLoadAllowedDuringReveal = false;
 	UPROPERTY(Transient)
 	TObjectPtr<UAudioComponent> TinnitusAudioComponent;
 	TWeakObjectPtr<AShowDownGameStateBase> BoundShowDownGameState;

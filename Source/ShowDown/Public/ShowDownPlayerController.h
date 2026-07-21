@@ -207,6 +207,19 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "ShowDown|Recording")
 	bool IsRecordingUiHidden() const { return bRecordingUiHidden; }
 
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Recording")
+	void ToggleRecordingMode();
+
+	UFUNCTION(BlueprintCallable, Category = "ShowDown|Recording")
+	void SetRecordingModeEnabled(bool bEnabled);
+
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "ShowDown|Recording")
+	bool IsRecordingModeEnabled() const { return bRecordingModeEnabled; }
+
+	// Frame-rate-independent blend weight shared by recording-camera movement
+	// and rotation. Public so the cinematic response can be regression tested.
+	static float CalculateRecordingCameraSmoothingAlpha(float Responsiveness, float DeltaTime);
+
 	/**
 	 * Fades every viewport UI layer with the local hit-recovery blackout.
 	 * A top-level mask is used so each widget keeps its own visibility state and
@@ -346,6 +359,48 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Recording")
 	FKey RecordingUiToggleKey = EKeys::Z;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Recording")
+	FKey RecordingModeToggleKey = EKeys::X;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Recording|Free Camera", meta = (ClampMin = "1.0"))
+	float RecordingFreeCameraMoveSpeed = 600.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Recording|Free Camera")
+	FKey RecordingFreeCameraSlowerKey = EKeys::C;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Recording|Free Camera")
+	FKey RecordingFreeCameraFasterKey = EKeys::V;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Recording|Free Camera", meta = (ClampMin = "1.01"))
+	float RecordingFreeCameraSpeedStepMultiplier = 1.25f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Recording|Free Camera", meta = (ClampMin = "0.01"))
+	float RecordingFreeCameraMinimumSpeedScale = 0.1f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Recording|Free Camera", meta = (ClampMin = "0.01"))
+	float RecordingFreeCameraMaximumSpeedScale = 8.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ShowDown|Recording|Free Camera")
+	float RecordingFreeCameraSpeedScale = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Recording|Free Camera", meta = (ClampMin = "1.0"))
+	float RecordingFreeCameraBoostMultiplier = 4.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Recording|Free Camera", meta = (ClampMin = "0.01", ClampMax = "1.0"))
+	float RecordingFreeCameraPrecisionMultiplier = 0.22f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Recording|Free Camera", meta = (ClampMin = "0.0"))
+	float RecordingFreeCameraMovementResponsiveness = 3.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Recording|Free Camera", meta = (ClampMin = "0.001"))
+	float RecordingFreeCameraLookSensitivity = 0.12f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Recording|Free Camera", meta = (ClampMin = "0.0"))
+	float RecordingFreeCameraLookResponsiveness = 7.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShowDown|Recording|Free Camera")
+	bool bInvertRecordingFreeCameraMouseY = false;
 
 	UPROPERTY(EditDefaultsOnly, Category="ShowDown|Pause")
 	TSubclassOf<UShowDownPauseMenuWidget> PauseMenuWidgetClass;
@@ -490,6 +545,8 @@ private:
 	void ApplyRecordingUiVisibility();
 	void RefreshWorldRecordingUi();
 	void CacheAndHideRecordingWidget(UWidget* Widget);
+	void UpdateRecordingFreeCamera(float DeltaTime);
+	void RestoreInputModeAfterRecording();
 	void CreateCenterCrosshairWidget();
 	void UpdateCenterCrosshairVisibility();
 	void RemoveCenterCrosshairWidget();
@@ -580,6 +637,17 @@ private:
 	bool bRecordingUiHidden = false;
 	bool bRecordingUiSavedMouseCursorVisible = false;
 	TMap<TWeakObjectPtr<UWidget>, ESlateVisibility> RecordingUiSavedWidgetVisibilities;
+	bool bRecordingModeEnabled = false;
+	bool bRecordingModeSavedUiHidden = false;
+	bool bRecordingModeSavedMouseCursorVisible = false;
+	bool bRecordingModeSavedClickEvents = false;
+	bool bRecordingModeSavedMouseOverEvents = false;
+	FRotator RecordingFreeCameraTargetRotation = FRotator::ZeroRotator;
+	FVector RecordingFreeCameraVelocity = FVector::ZeroVector;
+	TWeakObjectPtr<AActor> RecordingFreeCameraReturnViewTarget;
+
+	UPROPERTY(Transient)
+	TObjectPtr<ACameraActor> RecordingFreeCamera = nullptr;
 	UFUNCTION() void ResumeFromPauseMenu();
 	UFUNCTION() void ReturnToMainMenuFromPause();
 	UFUNCTION() void OpenSettingsFromPause();

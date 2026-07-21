@@ -328,6 +328,10 @@ void ASDBetActionPanelActor::RefreshVisuals()
 	EnsureButtons();
 	EnsureBulletPreview();
 	RefreshSelectedRaiseTarget();
+	const AShowDownPlayerController* LocalPlayerController = Cast<AShowDownPlayerController>(
+		UGameplayStatics::GetPlayerController(this, 0));
+	bRecordingUiSuppressed = LocalPlayerController
+		&& LocalPlayerController->IsRecordingUiHidden();
 
 	LastResolvedLocalPlayerSlot = ResolveLocalPlayerSlot();
 	const bool bPanelVisible = IsPanelVisibleForLocalPlayer();
@@ -340,6 +344,7 @@ void ASDBetActionPanelActor::RefreshVisuals()
 		{
 			continue;
 		}
+		ButtonActors[ButtonIndex]->SetRecordingUiSuppressed(bRecordingUiSuppressed);
 
 		const bool bEnabled = CanPressButton(ButtonKind);
 		const int32 StaggerIndex = bPanelVisible
@@ -600,8 +605,9 @@ void ASDBetActionPanelActor::ApplyBulletAnimatedVisuals()
 		}
 
 		const float AnimatedScale = FMath::Max(0.0f, BulletVisualScales[BulletIndex]) * PulseScale;
-		const bool bDrawVisible = BulletVisualAlphas[BulletIndex] > KINDA_SMALL_NUMBER
-			|| AnimatedScale > KINDA_SMALL_NUMBER;
+		const bool bDrawVisible = !bRecordingUiSuppressed
+			&& (BulletVisualAlphas[BulletIndex] > KINDA_SMALL_NUMBER
+				|| AnimatedScale > KINDA_SMALL_NUMBER);
 		const float OutlineRadiusScale = BaseBulletScale * AnimatedScale;
 		const float FillRadiusScale = OutlineRadiusScale * 0.72f;
 		BulletMesh->SetWorldScale3D(FVector(FillRadiusScale, FillRadiusScale, FillRadiusScale * 0.11f));
@@ -710,9 +716,18 @@ EShowDownPlayerSlot ASDBetActionPanelActor::ResolveLocalPlayerSlot() const
 
 bool ASDBetActionPanelActor::IsPanelVisibleForLocalPlayer() const
 {
-	return PanelState.bVisible
+	const AShowDownPlayerController* LocalPlayerController = Cast<AShowDownPlayerController>(
+		UGameplayStatics::GetPlayerController(this, 0));
+	return (!LocalPlayerController || !LocalPlayerController->IsRecordingUiHidden())
+		&& PanelState.bVisible
 		&& PanelState.TurnSlot != EShowDownPlayerSlot::None
 		&& ResolveLocalPlayerSlot() == PanelState.TurnSlot;
+}
+
+void ASDBetActionPanelActor::RefreshRecordingUiVisibility()
+{
+	RefreshVisuals();
+	ApplyBulletAnimatedVisuals();
 }
 
 bool ASDBetActionPanelActor::CanPressButton(ESDBetActionPanelButtonKind ButtonKind) const
@@ -1225,6 +1240,12 @@ void ASDBetActionButtonActor::SetButtonState(
 	ApplyAnimatedVisuals();
 }
 
+void ASDBetActionButtonActor::SetRecordingUiSuppressed(bool bSuppressed)
+{
+	bRecordingUiSuppressed = bSuppressed;
+	ApplyAnimatedVisuals();
+}
+
 bool ASDBetActionButtonActor::CanInteract_Implementation(AActor* Interactor) const
 {
 	return bButtonEnabled
@@ -1242,9 +1263,10 @@ void ASDBetActionButtonActor::Interact_Implementation(AActor* Interactor)
 
 void ASDBetActionButtonActor::ApplyAnimatedVisuals()
 {
-	const bool bDrawVisible = bTargetVisible
-		|| VisualAlpha > KINDA_SMALL_NUMBER
-		|| VisualScale > KINDA_SMALL_NUMBER;
+	const bool bDrawVisible = !bRecordingUiSuppressed
+		&& (bTargetVisible
+			|| VisualAlpha > KINDA_SMALL_NUMBER
+			|| VisualScale > KINDA_SMALL_NUMBER);
 	SetActorHiddenInGame(!bDrawVisible);
 
 	const float Alpha = FMath::Clamp(VisualAlpha, 0.0f, 1.0f);

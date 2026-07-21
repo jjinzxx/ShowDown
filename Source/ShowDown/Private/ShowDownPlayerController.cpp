@@ -6,10 +6,13 @@
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Math/TransformCalculus2D.h"
+#include "Misc/App.h"
 #include "Misc/ConfigCacheIni.h"
 
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
+#include "Camera/PlayerCameraManager.h"
+#include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Card.h"
 #include "Components/MeshComponent.h"
@@ -533,6 +536,7 @@ void AShowDownPlayerController::BeginPlay()
 
 void AShowDownPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	SetRecordingModeEnabled(false);
 	CancelGunShotCameraOverride();
 	SetRecordingUiHidden(false);
 	SetHitBlackoutUiOpacity(0.0f);
@@ -591,6 +595,7 @@ void AShowDownPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason
 
 void AShowDownPlayerController::OnPossess(APawn* InPawn)
 {
+	SetRecordingModeEnabled(false);
 	CancelGunShotCameraOverride();
 	Super::OnPossess(InPawn);
 	InitializeFromPossessedPawn();
@@ -809,7 +814,10 @@ void AShowDownPlayerController::ClientUseMultiplayerSeatCamera_Implementation(
 		{
 			PlayerPawn->ApplyDefaultCameraAspect();
 		}
-		SetViewTarget(ControlledPawn);
+		if (!bRecordingModeEnabled)
+		{
+			SetViewTarget(ControlledPawn);
+		}
 	}
 	UpdateCenterCrosshairVisibility();
 }
@@ -968,7 +976,21 @@ void AShowDownPlayerController::PlayerTick(float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime);
 	if (IsLocalController()
+		&& RecordingModeToggleKey.IsValid()
+		&& WasInputKeyJustPressed(RecordingModeToggleKey))
+	{
+		ToggleRecordingMode();
+	}
+	if (bRecordingModeEnabled)
+	{
+		ApplyRecordingUiVisibility();
+		UpdateRecordingFreeCamera(DeltaTime);
+		UpdateGunShotCameraOverride(DeltaTime);
+		return;
+	}
+	if (IsLocalController()
 		&& RecordingUiToggleKey.IsValid()
+		&& RecordingUiToggleKey != RecordingModeToggleKey
 		&& WasInputKeyJustPressed(RecordingUiToggleKey))
 	{
 		ToggleRecordingUi();
@@ -1238,6 +1260,25 @@ void AShowDownPlayerController::ApplyRecordingUiVisibility()
 	{
 		GameplayStatusHudWidget->SetVisibility(EVisibility::Collapsed);
 	}
+	// Sweep every top-level UMG layer as well as the controller-owned widgets
+	// below. This keeps recording mode clean when another gameplay system adds a
+	// temporary result, transition, or tutorial widget after recording started.
+	TArray<UUserWidget*> TopLevelWidgets;
+	UWidgetBlueprintLibrary::GetAllWidgetsOfClass(
+		this,
+		TopLevelWidgets,
+		UUserWidget::StaticClass(),
+		true);
+	for (UUserWidget* TopLevelWidget : TopLevelWidgets)
+	{
+		if (TopLevelWidget
+			&& (!GetLocalPlayer()
+				|| !TopLevelWidget->GetOwningLocalPlayer()
+				|| TopLevelWidget->GetOwningLocalPlayer() == GetLocalPlayer()))
+		{
+			CacheAndHideRecordingWidget(TopLevelWidget);
+		}
+	}
 
 	CacheAndHideRecordingWidget(ChatWidget);
 	CacheAndHideRecordingWidget(LeaveConfirmWidget);
@@ -1263,6 +1304,10 @@ void AShowDownPlayerController::RefreshWorldRecordingUi()
 	{
 		GunIt->RefreshRecordingUiVisibility();
 	}
+	for (TActorIterator<ASDBetActionPanelActor> PanelIt(World); PanelIt; ++PanelIt)
+	{
+		PanelIt->RefreshRecordingUiVisibility();
+	}
 }
 
 void AShowDownPlayerController::CacheAndHideRecordingWidget(UWidget* Widget)
@@ -1278,6 +1323,298 @@ void AShowDownPlayerController::CacheAndHideRecordingWidget(UWidget* Widget)
 		RecordingUiSavedWidgetVisibilities.Add(WidgetKey, Widget->GetVisibility());
 	}
 	Widget->SetVisibility(ESlateVisibility::Collapsed);
+}
+
+void AShowDownPlayerController::ToggleRecordingMode()
+{
+	SetRecordingModeEnabled(!bRecordingModeEnabled);
+}
+
+float AShowDownPlayerController::CalculateRecordingCameraSmoothingAlpha(
+	float Responsiveness,
+	float DeltaTime)
+{
+	return 1.0f - FMath::Exp(-FMath::Max(0.0f, Responsiveness) * FMath::Max(0.0f, DeltaTime));
+}
+
+void AShowDownPlayerController::SetRecordingModeEnabled(bool bEnabled)
+{
+	if (bRecordingModeEnabled == bEnabled)
+	{
+		if (bEnabled)
+		{
+			SetRecordingUiHidden(true);
+		}
+		return;
+	}
+
+	if (bEnabled)
+	{
+		UWorld* World = GetWorld();
+		if (!IsLocalController() || !World)
+		{
+			return;
+		}
+
+		FVector CameraLocation = FVector::ZeroVector;
+		FRotator CameraRotation = GetControlRotation();
+		GetPlayerViewPoint(CameraLocation, CameraRotation);
+
+		FActorSpawnParameters SpawnParameters;
+		SpawnParameters.Owner = this;
+		SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		SpawnParameters.ObjectFlags |= RF_Transient;
+		ACameraActor* NewFreeCamera = World->SpawnActor<ACameraActor>(
+			ACameraActor::StaticClass(),
+			CameraLocation,
+			CameraRotation,
+			SpawnParameters);
+		if (!NewFreeCamera)
+		{
+			return;
+		}
+
+		NewFreeCamera->SetReplicates(false);
+		NewFreeCamera->SetActorEnableCollision(false);
+		if (UCameraComponent* FreeCameraComponent = NewFreeCamera->GetCameraComponent())
+		{
+			if (PlayerCameraManager)
+			{
+				const FMinimalViewInfo& CurrentView = PlayerCameraManager->GetCameraCacheView();
+				FreeCameraComponent->SetFieldOfView(CurrentView.FOV);
+				FreeCameraComponent->PostProcessSettings = CurrentView.PostProcessSettings;
+				FreeCameraComponent->SetPostProcessBlendWeight(CurrentView.PostProcessBlendWeight);
+			}
+			ShowDownCameraAspect::ApplyForced16By9(FreeCameraComponent);
+		}
+
+		RecordingFreeCamera = NewFreeCamera;
+		RecordingFreeCameraReturnViewTarget = bGunShotCameraOverrideActive
+			&& GunShotCameraReturnViewTarget.IsValid()
+			? GunShotCameraReturnViewTarget.Get()
+			: GetViewTarget();
+		RecordingFreeCameraTargetRotation = CameraRotation;
+		RecordingFreeCameraTargetRotation.Roll = 0.0f;
+		RecordingFreeCameraVelocity = FVector::ZeroVector;
+		bRecordingModeSavedUiHidden = bRecordingUiHidden;
+		bRecordingModeSavedMouseCursorVisible = bShowMouseCursor;
+		bRecordingModeSavedClickEvents = bEnableClickEvents;
+		bRecordingModeSavedMouseOverEvents = bEnableMouseOverEvents;
+		bRecordingModeEnabled = true;
+
+		CancelPressedBetActionButton();
+		SetFocusedInteractable(nullptr);
+		SetHoveredCard(nullptr);
+		ClearCardSelectionHandHighlight();
+		SetRecordingUiHidden(true);
+		bShowMouseCursor = false;
+		bEnableClickEvents = false;
+		bEnableMouseOverEvents = false;
+		FInputModeGameOnly InputMode;
+		InputMode.SetConsumeCaptureMouseDown(false);
+		SetInputMode(InputMode);
+		SetViewTarget(NewFreeCamera);
+		return;
+	}
+
+	bRecordingModeEnabled = false;
+	AActor* ReturnViewTarget = nullptr;
+	if (bGunShotCameraOverrideActive && GunShotCameraOverrideTarget.IsValid())
+	{
+		ReturnViewTarget = GunShotCameraOverrideTarget.Get();
+	}
+	else if (bEliminatedSpectatorViewActive && EliminatedSpectatorCameraTarget.IsValid())
+	{
+		ReturnViewTarget = EliminatedSpectatorCameraTarget.Get();
+	}
+	else if (RecordingFreeCameraReturnViewTarget.IsValid())
+	{
+		ReturnViewTarget = RecordingFreeCameraReturnViewTarget.Get();
+	}
+	else
+	{
+		ReturnViewTarget = GetPawn();
+	}
+
+	if (IsValid(ReturnViewTarget))
+	{
+		SetViewTarget(ReturnViewTarget);
+	}
+	if (IsValid(RecordingFreeCamera))
+	{
+		RecordingFreeCamera->Destroy();
+	}
+	RecordingFreeCamera = nullptr;
+	RecordingFreeCameraReturnViewTarget.Reset();
+	RecordingFreeCameraVelocity = FVector::ZeroVector;
+
+	SetRecordingUiHidden(bRecordingModeSavedUiHidden);
+	RestoreInputModeAfterRecording();
+	UpdateCharacterPlayerCamera(0.0f);
+}
+
+void AShowDownPlayerController::UpdateRecordingFreeCamera(float DeltaTime)
+{
+	if (!bRecordingModeEnabled)
+	{
+		return;
+	}
+	if (!IsValid(RecordingFreeCamera))
+	{
+		SetRecordingModeEnabled(false);
+		return;
+	}
+	if (GetViewTarget() != RecordingFreeCamera)
+	{
+		// Other presentation directors can advance while footage is being shot.
+		// Recording mode remains the local view authority until X is pressed again.
+		SetViewTarget(RecordingFreeCamera);
+	}
+
+	const float RealDeltaTime = static_cast<float>(FApp::GetDeltaTime());
+	const float SafeDeltaTime = FMath::Clamp(
+		DeltaTime > KINDA_SMALL_NUMBER ? DeltaTime : RealDeltaTime,
+		1.0f / 240.0f,
+		1.0f / 15.0f);
+
+	float MouseDeltaX = 0.0f;
+	float MouseDeltaY = 0.0f;
+	GetInputMouseDelta(MouseDeltaX, MouseDeltaY);
+	const float LookScale = FMath::Max(0.001f, RecordingFreeCameraLookSensitivity)
+		* UserMouseSensitivityMultiplier;
+	RecordingFreeCameraTargetRotation.Yaw = FRotator::NormalizeAxis(
+		RecordingFreeCameraTargetRotation.Yaw + MouseDeltaX * LookScale);
+	// Raw recording-camera mouse Y is already oriented for natural vertical
+	// look in this input path. Only flip it when inversion is explicitly enabled.
+	const float PitchSign = bInvertRecordingFreeCameraMouseY ? -1.0f : 1.0f;
+	RecordingFreeCameraTargetRotation.Pitch = FMath::Clamp(
+		FRotator::NormalizeAxis(RecordingFreeCameraTargetRotation.Pitch) + MouseDeltaY * LookScale * PitchSign,
+		-89.0f,
+		89.0f);
+	RecordingFreeCameraTargetRotation.Roll = 0.0f;
+
+	const float RotationAlpha = CalculateRecordingCameraSmoothingAlpha(
+		RecordingFreeCameraLookResponsiveness,
+		SafeDeltaTime);
+	const FQuat SmoothedRotation = FQuat::Slerp(
+		RecordingFreeCamera->GetActorQuat(),
+		RecordingFreeCameraTargetRotation.Quaternion(),
+		RotationAlpha).GetNormalized();
+	RecordingFreeCamera->SetActorRotation(SmoothedRotation);
+
+	auto GetDigitalAxis = [this](const FKey& PositiveKey, const FKey& NegativeKey)
+	{
+		return (IsInputKeyDown(PositiveKey) ? 1.0f : 0.0f)
+			- (IsInputKeyDown(NegativeKey) ? 1.0f : 0.0f);
+	};
+	const float ForwardInput = GetDigitalAxis(EKeys::W, EKeys::S);
+	const float RightInput = GetDigitalAxis(EKeys::D, EKeys::A);
+	const float UpInput = GetDigitalAxis(EKeys::E, EKeys::Q);
+	FVector DesiredDirection = RecordingFreeCamera->GetActorForwardVector() * ForwardInput
+		+ RecordingFreeCamera->GetActorRightVector() * RightInput
+		+ FVector::UpVector * UpInput;
+	DesiredDirection = DesiredDirection.GetClampedToMaxSize(1.0f);
+
+	const float MinimumSpeedScale = FMath::Max(0.01f, RecordingFreeCameraMinimumSpeedScale);
+	const float MaximumSpeedScale = FMath::Max(MinimumSpeedScale, RecordingFreeCameraMaximumSpeedScale);
+	const float SpeedStep = FMath::Max(1.01f, RecordingFreeCameraSpeedStepMultiplier);
+	const float PreviousSpeedScale = RecordingFreeCameraSpeedScale;
+	if (RecordingFreeCameraSlowerKey.IsValid()
+		&& WasInputKeyJustPressed(RecordingFreeCameraSlowerKey))
+	{
+		RecordingFreeCameraSpeedScale /= SpeedStep;
+	}
+	if (RecordingFreeCameraFasterKey.IsValid()
+		&& WasInputKeyJustPressed(RecordingFreeCameraFasterKey))
+	{
+		RecordingFreeCameraSpeedScale *= SpeedStep;
+	}
+	RecordingFreeCameraSpeedScale = FMath::Clamp(
+		RecordingFreeCameraSpeedScale,
+		MinimumSpeedScale,
+		MaximumSpeedScale);
+	if (!FMath::IsNearlyEqual(PreviousSpeedScale, RecordingFreeCameraSpeedScale))
+	{
+		UE_LOG(
+			LogTemp,
+			Log,
+			TEXT("Recording free-camera speed changed: %.0f uu/s (x%.2f)"),
+			RecordingFreeCameraMoveSpeed * RecordingFreeCameraSpeedScale,
+			RecordingFreeCameraSpeedScale);
+	}
+
+	float SpeedMultiplier = 1.0f;
+	if (IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift))
+	{
+		SpeedMultiplier *= FMath::Max(1.0f, RecordingFreeCameraBoostMultiplier);
+	}
+	if (IsInputKeyDown(EKeys::LeftControl) || IsInputKeyDown(EKeys::RightControl))
+	{
+		SpeedMultiplier *= FMath::Clamp(RecordingFreeCameraPrecisionMultiplier, 0.01f, 1.0f);
+	}
+	const FVector TargetVelocity = DesiredDirection
+		* FMath::Max(1.0f, RecordingFreeCameraMoveSpeed)
+		* RecordingFreeCameraSpeedScale
+		* SpeedMultiplier;
+	const float MovementAlpha = CalculateRecordingCameraSmoothingAlpha(
+		RecordingFreeCameraMovementResponsiveness,
+		SafeDeltaTime);
+	RecordingFreeCameraVelocity = FMath::Lerp(
+		RecordingFreeCameraVelocity,
+		TargetVelocity,
+		MovementAlpha);
+	RecordingFreeCamera->SetActorLocation(
+		RecordingFreeCamera->GetActorLocation() + RecordingFreeCameraVelocity * SafeDeltaTime);
+}
+
+void AShowDownPlayerController::RestoreInputModeAfterRecording()
+{
+	auto IsVisible = [](const UWidget* Widget)
+	{
+		return Widget
+			&& Widget->GetVisibility() != ESlateVisibility::Collapsed
+			&& Widget->GetVisibility() != ESlateVisibility::Hidden;
+	};
+
+	if (IsVisible(PauseSettingsWidget))
+	{
+		FInputModeUIOnly InputMode;
+		InputMode.SetWidgetToFocus(PauseSettingsWidget->TakeWidget());
+		SetInputMode(InputMode);
+	}
+	else if (IsVisible(PauseMenuWidget))
+	{
+		FInputModeUIOnly InputMode;
+		InputMode.SetWidgetToFocus(PauseMenuWidget->TakeWidget());
+		SetInputMode(InputMode);
+	}
+	else if (IsVisible(MultiplayerRankWidget))
+	{
+		FInputModeUIOnly InputMode;
+		InputMode.SetWidgetToFocus(MultiplayerRankWidget->TakeWidget());
+		SetInputMode(InputMode);
+	}
+	else if (IsVisible(LeaveConfirmWidget))
+	{
+		FInputModeGameAndUI InputMode;
+		InputMode.SetWidgetToFocus(LeaveConfirmWidget->TakeWidget());
+		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+		SetInputMode(InputMode);
+	}
+	else if (bChatOpen && ChatWidget)
+	{
+		ApplyChatInputMode(true);
+	}
+	else
+	{
+		FInputModeGameOnly InputMode;
+		InputMode.SetConsumeCaptureMouseDown(false);
+		SetInputMode(InputMode);
+	}
+
+	bShowMouseCursor = bRecordingModeSavedMouseCursorVisible;
+	bEnableClickEvents = bRecordingModeSavedClickEvents;
+	bEnableMouseOverEvents = bRecordingModeSavedMouseOverEvents;
 }
 
 void AShowDownPlayerController::InitializeFromPossessedPawn()
@@ -2431,18 +2768,21 @@ bool AShowDownPlayerController::BeginGunShotCameraOverride(
 	// before the server cue can otherwise keep consuming keyboard/mouse input over
 	// the cinematic. Close those transient gameplay UIs before the camera owns
 	// input; the active override below also prevents reopening them.
-	if (bChatOpen)
+	if (!bRecordingModeEnabled)
 	{
-		CloseChat();
-	}
-	if (bPauseMenuOpen)
-	{
-		ResumeFromPauseMenu();
-	}
-	if (LeaveConfirmWidget
-		&& LeaveConfirmWidget->GetVisibility() == ESlateVisibility::Visible)
-	{
-		CancelLeaveMultiplayerMatch();
+		if (bChatOpen)
+		{
+			CloseChat();
+		}
+		if (bPauseMenuOpen)
+		{
+			ResumeFromPauseMenu();
+		}
+		if (LeaveConfirmWidget
+			&& LeaveConfirmWidget->GetVisibility() == ESlateVisibility::Visible)
+		{
+			CancelLeaveMultiplayerMatch();
+		}
 	}
 	CancelPressedBetActionButton();
 	SetFocusedInteractable(nullptr);
@@ -2461,11 +2801,14 @@ bool AShowDownPlayerController::BeginGunShotCameraOverride(
 	bGunShotCameraBlendingOut = false;
 	GunShotCameraBlendOutTimeRemaining = 0.0f;
 	UpdateCenterCrosshairVisibility();
-	SetViewTargetWithBlend(
-		Camera,
-		FMath::Max(0.0f, BlendInTime),
-		VTBlend_EaseInOut,
-		FMath::Max(1.0f, BlendExponent));
+	if (!bRecordingModeEnabled)
+	{
+		SetViewTargetWithBlend(
+			Camera,
+			FMath::Max(0.0f, BlendInTime),
+			VTBlend_EaseInOut,
+			FMath::Max(1.0f, BlendExponent));
+	}
 	return true;
 }
 
@@ -2521,6 +2864,15 @@ void AShowDownPlayerController::ReleaseGunShotCameraOverrideForElimination(ACame
 		|| !IsValid(Camera)
 		|| GunShotCameraOverrideTarget.Get() != Camera)
 	{
+		return;
+	}
+	if (bRecordingModeEnabled)
+	{
+		// The free camera intentionally owns the live view, but this elimination
+		// still has to become the view that recording mode restores to.
+		EliminatedSpectatorCameraTarget = Camera;
+		bEliminatedSpectatorViewActive = true;
+		ClearGunShotCameraOverrideState();
 		return;
 	}
 
@@ -2822,7 +3174,7 @@ AShowDownCharacter* AShowDownPlayerController::FindLocalCharacterForPlayerCamera
 
 void AShowDownPlayerController::UpdateCharacterPlayerCamera(float DeltaTime)
 {
-	if (bGunShotCameraOverrideActive)
+	if (bRecordingModeEnabled || bGunShotCameraOverrideActive)
 	{
 		return;
 	}

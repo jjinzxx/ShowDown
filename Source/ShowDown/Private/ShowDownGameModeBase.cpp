@@ -5971,30 +5971,71 @@ void AShowDownGameModeBase::BeginSingleFoldReveal(EShowDownSide FoldedSide, int3
 void AShowDownGameModeBase::ContinueFoldAfterReveal(EShowDownSide FoldedSide, int32 LoadCount)
 {
 	bHasPendingFoldReveal = false;
-	BroadcastTableCinematicCue(
-		ESDTableCinematicCue::LoserSpotlight,
-		ShowDownTableCinematics::SingleSideToMask(FoldedSide));
-	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+	const FShowDownParticipantState& FoldedState = FoldedSide == EShowDownSide::Player
+		? PlayerState
+		: CollectorState;
+	const int32 FoldedRank = FoldedState.ForeheadCard ? FoldedState.ForeheadCard->Rank : 0;
+	const FShowDownStageRule* StageRule = GetCurrentStageRule();
+	const bool bSevenFoldLoadsSix = StageRule ? StageRule->bSevenFoldLoadsSix : true;
+	const bool bPlaySevenFoldLoad = bSevenFoldLoadsSix && FoldedRank == 7 && LoadCount == 6;
+	float FoldLoadPresentationSeconds = 0.0f;
+	if (bPlaySevenFoldLoad)
 	{
-		ShowDownGameState->EventEnd(EShowDownPhase::Reveal);
+		if (ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
+		{
+			FoldLoadPresentationSeconds = GunActor->PlayFoldRevealBulletLoadPresentation(
+				LoadCount,
+				FoldedSide == EShowDownSide::Player
+					? EShowDownPlayerSlot::Player1
+					: EShowDownPlayerSlot::Player2);
+		}
 	}
 
-	// 폴드로 끝난 라운드도 보스 반응 채팅을 남긴다.
-	BroadcastBossResultReaction(
-		FoldedSide == EShowDownSide::Player ? EShowDownRoundResult::CollectorWin : EShowDownRoundResult::PlayerWin);
+	// Publish the resolved roulette count only after the card has visibly settled.
+	// The gun RPC starts first so status replication cannot snap its fast cascade.
+	MarkSingleBetBulletRouletteTarget(FoldedSide, LoadCount);
+	RefreshBetBulletPresentation();
 
-	ScheduleSingleRoundCinematicAction(
-		RoundCinematicLoserSpotlightHoldSeconds,
-		[this, FoldedSide, LoadCount]()
+	auto BeginLoserSpotlight = [this, FoldedSide, LoadCount]()
+	{
+		BroadcastTableCinematicCue(
+			ESDTableCinematicCue::LoserSpotlight,
+			ShowDownTableCinematics::SingleSideToMask(FoldedSide));
+		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 		{
-			ApplyRouletteResult(FoldedSide, LoadCount, [this, FoldedSide]()
+			ShowDownGameState->EventEnd(EShowDownPhase::Reveal);
+		}
+
+		// 폴드로 끝난 라운드도 보스 반응 채팅을 남긴다.
+		BroadcastBossResultReaction(
+			FoldedSide == EShowDownSide::Player
+				? EShowDownRoundResult::CollectorWin
+				: EShowDownRoundResult::PlayerWin);
+
+		ScheduleSingleRoundCinematicAction(
+			RoundCinematicLoserSpotlightHoldSeconds,
+			[this, FoldedSide, LoadCount]()
 			{
-				AppendRecentRoundSummary(
-					FoldedSide == EShowDownSide::Player ? EShowDownRoundResult::CollectorWin : EShowDownRoundResult::PlayerWin,
-					FString::Printf(TEXT("%s folded"), *GetSideText(FoldedSide)));
-				EndRound();
+				ApplyRouletteResult(FoldedSide, LoadCount, [this, FoldedSide]()
+				{
+					AppendRecentRoundSummary(
+						FoldedSide == EShowDownSide::Player ? EShowDownRoundResult::CollectorWin : EShowDownRoundResult::PlayerWin,
+						FString::Printf(TEXT("%s folded"), *GetSideText(FoldedSide)));
+					EndRound();
+				});
 			});
-		});
+	};
+
+	if (FoldLoadPresentationSeconds > KINDA_SMALL_NUMBER)
+	{
+		ScheduleSingleRoundCinematicAction(
+			FoldLoadPresentationSeconds,
+			MoveTemp(BeginLoserSpotlight));
+	}
+	else
+	{
+		BeginLoserSpotlight();
+	}
 }
 
 ASDBetActionPanelActor* AShowDownGameModeBase::EnsureBetActionPanelActor()
@@ -6093,9 +6134,12 @@ void AShowDownGameModeBase::RefreshBetBulletPresentation()
 			LaneState.bFolded = MultiplayerFoldedPlayers.Contains(Player);
 			if (LaneState.bFolded)
 			{
-				// A seven-card fold replaces the regular committed bet with the
-				// stage rule's full-cylinder load for the rest of this round.
-				LaneState.BulletCount = ResolveMultiplayerFoldLoadCount(Player);
+				// The resolved fold load is cached only after the hidden card has
+				// visibly settled. Until then, keep showing the public committed bet.
+				if (const int32* RevealedFoldLoad = MultiplayerFoldLoadCounts.Find(Player->ShowDownSlot))
+				{
+					LaneState.BulletCount = FMath::Clamp(*RevealedFoldLoad, 0, 6);
+				}
 			}
 			const EShowDownPhase CurrentPhase = GetShowDownGameState()
 				? GetShowDownGameState()->CurrentPhase
@@ -8887,7 +8931,6 @@ void AShowDownGameModeBase::BeginMultiplayerFoldReveal(
 		return;
 	}
 
-	PrepareMultiplayerFoldCylinder(FoldLoadCount);
 	const int32 FoldedRank = FoldedPlayer->ForeheadCard ? FoldedPlayer->ForeheadCard->Rank : 0;
 	if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 	{
@@ -8895,9 +8938,8 @@ void AShowDownGameModeBase::BeginMultiplayerFoldReveal(
 		ShowDownGameState->BroadcastTableCinematicCue(
 			ESDTableCinematicCue::RevealStarted,
 			0);
-		ShowDownGameState->SetNameTagPlayerLoadedBulletCount(FoldedSlot, FoldLoadCount);
 		ShowDownGameState->SetNameTagRoundStatus(
-			FoldLoadCount,
+			TableBet,
 			EShowDownSide::Player,
 			EShowDownPlayerSlot::None);
 		if (FoldedRank > 0)
@@ -8929,41 +8971,96 @@ void AShowDownGameModeBase::BeginMultiplayerFoldReveal(
 				return;
 			}
 
-			if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+			const int32 RevealedFoldedRank = ResolvedFoldedPlayer->ForeheadCard
+				? ResolvedFoldedPlayer->ForeheadCard->Rank
+				: 0;
+			const FShowDownStageRule* StageRule = GetCurrentStageRule();
+			const bool bSevenFoldLoadsSix = StageRule ? StageRule->bSevenFoldLoadsSix : true;
+			const bool bPlaySevenFoldLoad = bSevenFoldLoadsSix
+				&& RevealedFoldedRank == 7
+				&& FoldLoadCount == 6;
+			float FoldLoadPresentationSeconds = 0.0f;
+			if (bPlaySevenFoldLoad)
 			{
-				const TArray<ASDPlayerState*> FoldLoser = { ResolvedFoldedPlayer };
-				ShowDownGameState->BroadcastTableCinematicCue(
-					ESDTableCinematicCue::LoserSpotlight,
-					BuildPlayerSlotMask(FoldLoser));
+				if (ASDSelfShotGunActor* GunActor = FindSelfShotGunActor())
+				{
+					FoldLoadPresentationSeconds = GunActor->PlayFoldRevealBulletLoadPresentation(
+						FoldLoadCount,
+						FoldedSlot);
+				}
 			}
 
-			const TWeakObjectPtr<ASDPlayerState> WeakResolvedFoldedPlayer(ResolvedFoldedPlayer);
-			ScheduleMultiplayerRoundAction(
-				RoundCinematicLoserSpotlightHoldSeconds,
-				[this, WeakResolvedFoldedPlayer, FoldedSlot, TableBet, FoldLoadCount]()
-				{
-					ASDPlayerState* HeldFoldedPlayer = WeakResolvedFoldedPlayer.Get();
-					if (!HeldFoldedPlayer || !MultiplayerPlayers.Contains(HeldFoldedPlayer))
-					{
-						CompleteMultiplayerFoldResolution(nullptr, FoldedSlot, TableBet);
-						return;
-					}
+			// Only now is the hidden seven-card override copied into replicated UI
+			// and cylinder state. Starting the RPC first protects its 0 -> 6 count-up
+			// from either status-first or RPC-first network delivery.
+			MultiplayerFoldLoadCounts.Add(FoldedSlot, FoldLoadCount);
+			PrepareMultiplayerFoldCylinder(FoldLoadCount);
+			if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+			{
+				ShowDownGameState->SetNameTagPlayerLoadedBulletCount(FoldedSlot, FoldLoadCount);
+				ShowDownGameState->SetNameTagRoundStatus(
+					FoldLoadCount,
+					EShowDownSide::Player,
+					EShowDownPlayerSlot::None);
+			}
+			RefreshBetBulletPresentation();
 
-					const float RouletteDuration = ApplyMultiplayerRoulette(
-						HeldFoldedPlayer,
-						FoldLoadCount,
-						0.0f,
-						false);
-					ScheduleMultiplayerRoundAction(
-						RouletteDuration,
-						[this, WeakResolvedFoldedPlayer, FoldedSlot, TableBet]()
+			const TWeakObjectPtr<ASDPlayerState> WeakResolvedFoldedPlayer(ResolvedFoldedPlayer);
+			auto BeginLoserSpotlight = [this, WeakResolvedFoldedPlayer, FoldedSlot, TableBet, FoldLoadCount]()
+			{
+				ASDPlayerState* SpotlightFoldedPlayer = WeakResolvedFoldedPlayer.Get();
+				if (!SpotlightFoldedPlayer || !MultiplayerPlayers.Contains(SpotlightFoldedPlayer))
+				{
+					CompleteMultiplayerFoldResolution(nullptr, FoldedSlot, TableBet);
+					return;
+				}
+
+				if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
+				{
+					const TArray<ASDPlayerState*> FoldLoser = { SpotlightFoldedPlayer };
+					ShowDownGameState->BroadcastTableCinematicCue(
+						ESDTableCinematicCue::LoserSpotlight,
+						BuildPlayerSlotMask(FoldLoser));
+				}
+
+				ScheduleMultiplayerRoundAction(
+					RoundCinematicLoserSpotlightHoldSeconds,
+					[this, WeakResolvedFoldedPlayer, FoldedSlot, TableBet, FoldLoadCount]()
+					{
+						ASDPlayerState* HeldFoldedPlayer = WeakResolvedFoldedPlayer.Get();
+						if (!HeldFoldedPlayer || !MultiplayerPlayers.Contains(HeldFoldedPlayer))
 						{
-							CompleteMultiplayerFoldResolution(
-								WeakResolvedFoldedPlayer.Get(),
-								FoldedSlot,
-								TableBet);
-						});
-				});
+							CompleteMultiplayerFoldResolution(nullptr, FoldedSlot, TableBet);
+							return;
+						}
+
+						const float RouletteDuration = ApplyMultiplayerRoulette(
+							HeldFoldedPlayer,
+							FoldLoadCount,
+							0.0f,
+							false);
+						ScheduleMultiplayerRoundAction(
+							RouletteDuration,
+							[this, WeakResolvedFoldedPlayer, FoldedSlot, TableBet]()
+							{
+								CompleteMultiplayerFoldResolution(
+									WeakResolvedFoldedPlayer.Get(),
+									FoldedSlot,
+									TableBet);
+							});
+					});
+			};
+
+			if (FoldLoadPresentationSeconds > KINDA_SMALL_NUMBER)
+			{
+				ScheduleMultiplayerRoundAction(
+					FoldLoadPresentationSeconds,
+					MoveTemp(BeginLoserSpotlight));
+			}
+			else
+			{
+				BeginLoserSpotlight();
+			}
 		});
 }
 
@@ -9218,16 +9315,11 @@ void AShowDownGameModeBase::HandleMultiplayerBetAction(
 			bWasAutomatic);
 		RecordMultiplayerBetBulletAction(SubmittingPlayer, EShowDownBetAction::Fold);
 		const int32 FoldLoadCount = ResolveMultiplayerFoldLoadCount(SubmittingPlayer);
-		MultiplayerFoldLoadCounts.Add(ActingSlot, FoldLoadCount);
-		// A raise previews the table's highest bet, but a fold fires with the
-		// folded player's committed load. Replace the central cylinder state as
-		// soon as the fold is accepted instead of leaving the raise value visible
-		// until the later reveal callback.
-		PrepareMultiplayerFoldCylinder(FoldLoadCount);
+		// Keep the hidden-card override private until the reveal presentation has
+		// completed. The resolved count is carried by the server-only continuation.
 
 		if (AShowDownGameStateBase* ShowDownGameState = GetShowDownGameState())
 		{
-			ShowDownGameState->SetNameTagPlayerLoadedBulletCount(ActingSlot, FoldLoadCount);
 			ShowDownGameState->SetNameTagRoundStatus(
 				CurrentBet,
 				EShowDownSide::Player,
@@ -9740,42 +9832,12 @@ void AShowDownGameModeBase::RefreshCentralGunStatus()
 		int32 DisplayLiveRounds = bMultiplayerMatchStarted
 			? MultiplayerLiveRoundCount
 			: FMath::Clamp(FMath::Max(PlayerState.CurrentBet, CollectorState.CurrentBet), 0, 6);
-		if (!bMultiplayerMatchStarted)
+		if (!bMultiplayerMatchStarted
+			&& bHasBetBulletRouletteTarget
+			&& !bBetBulletRouletteTargetIsMultiplayer)
 		{
-			if (bHasBetBulletRouletteTarget && !bBetBulletRouletteTargetIsMultiplayer)
-			{
-				DisplayLiveRounds = FMath::Clamp(SingleRouletteLiveRoundCount, 0, 6);
-			}
-			else
-			{
-				const EShowDownSide Sides[] = { EShowDownSide::Player, EShowDownSide::Collector };
-				for (const EShowDownSide Side : Sides)
-				{
-					const EShowDownBetAction* LastAction = SingleLastBetActions.Find(Side);
-					if (!LastAction || *LastAction != EShowDownBetAction::Fold)
-					{
-						continue;
-					}
-
-					const FShowDownParticipantState& FoldedState = Side == EShowDownSide::Player
-						? PlayerState
-						: CollectorState;
-					const int32 FoldedCardRank = FoldedState.ForeheadCard
-						? FoldedState.ForeheadCard->Rank
-						: 0;
-					const FShowDownStageRule* StageRule = GetCurrentStageRule();
-					const bool bLoadSixForSeven = StageRule ? StageRule->bSevenFoldLoadsSix : true;
-					DisplayLiveRounds = RoundResolver
-						? RoundResolver->GetFoldLoadCount(
-							FoldedCardRank,
-							FoldedState.CurrentBet,
-							bLoadSixForSeven)
-						: (bLoadSixForSeven && FoldedCardRank == 7
-							? 6
-							: FMath::Clamp(FoldedState.CurrentBet, 0, 6));
-					break;
-				}
-			}
+			// A fold override becomes public only after the card reveal completes.
+			DisplayLiveRounds = FMath::Clamp(SingleRouletteLiveRoundCount, 0, 6);
 		}
 		const int32 DisplayRemainingChambers = bMultiplayerMatchStarted
 			? MultiplayerRemainingChamberCount

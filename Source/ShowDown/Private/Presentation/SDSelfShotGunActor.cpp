@@ -964,6 +964,20 @@ float ASDSelfShotGunActor::GetRaiseBulletLoadPresentationDuration(
 		RaiseBulletLoadStaggerDelay);
 }
 
+float ASDSelfShotGunActor::GetFoldRevealBulletLoadPresentationDuration(int32 BulletCount) const
+{
+	const int32 ClampedBulletCount = FMath::Clamp(BulletCount, 0, RevolverBulletSlotCount);
+	if (!bEnableRaiseBulletLoadAnimation || ClampedBulletCount <= 0)
+	{
+		return 0.0f;
+	}
+
+	return CalculateRaiseBulletLoadSequenceDuration(
+		ClampedBulletCount,
+		FoldRevealBulletLoadDuration,
+		FoldRevealBulletLoadStaggerDelay);
+}
+
 void ASDSelfShotGunActor::SetTableStatus(
 	int32 LiveRounds,
 	int32 RemainingChambers,
@@ -1017,6 +1031,37 @@ float ASDSelfShotGunActor::PlayRaiseBulletLoadPresentation(
 	return GetRaiseBulletLoadPresentationDuration(ClampedPreviousBet, ClampedNewBet);
 }
 
+float ASDSelfShotGunActor::PlayFoldRevealBulletLoadPresentation(
+	int32 BulletCount,
+	EShowDownPlayerSlot SourceSlot)
+{
+	if (!HasAuthority())
+	{
+		return 0.0f;
+	}
+
+	const int32 ClampedBulletCount = FMath::Clamp(BulletCount, 0, RevolverBulletSlotCount);
+	if (ClampedBulletCount <= 0)
+	{
+		return 0.0f;
+	}
+
+	const AShowDownGameStateBase* ShowDownGameState = BoundShowDownGameState.Get();
+	if (!ShowDownGameState)
+	{
+		const UWorld* World = GetWorld();
+		ShowDownGameState = World ? World->GetGameState<AShowDownGameStateBase>() : nullptr;
+	}
+	const int32 PresentationRound = ShowDownGameState
+		? FMath::Max(0, ShowDownGameState->CurrentRound)
+		: 0;
+	MulticastPlayFoldRevealBulletLoadPresentation(
+		ClampedBulletCount,
+		PresentationRound,
+		SourceSlot);
+	return GetFoldRevealBulletLoadPresentationDuration(ClampedBulletCount);
+}
+
 void ASDSelfShotGunActor::MulticastPlayRaiseBulletLoadPresentation_Implementation(
 	int32 PreviousBet,
 	int32 NewBet,
@@ -1029,6 +1074,19 @@ void ASDSelfShotGunActor::MulticastPlayRaiseBulletLoadPresentation_Implementatio
 	}
 
 	ReceiveRaiseBulletLoadPresentation(PreviousBet, NewBet, PresentationRound, SourceSlot);
+}
+
+void ASDSelfShotGunActor::MulticastPlayFoldRevealBulletLoadPresentation_Implementation(
+	int32 BulletCount,
+	int32 PresentationRound,
+	EShowDownPlayerSlot SourceSlot)
+{
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	ReceiveFoldRevealBulletLoadPresentation(BulletCount, PresentationRound, SourceSlot);
 }
 
 void ASDSelfShotGunActor::OnRep_TableStatus()
@@ -1059,7 +1117,10 @@ void ASDSelfShotGunActor::HandleGamePhaseChanged(EShowDownPhase NewPhase)
 			bAmmoStatusEmphasisLatched = false;
 		}
 	}
-	if (NewPhase != EShowDownPhase::Betting && bRaiseBulletLoadActive)
+	const bool bBulletLoadCanContinue = bRaiseBulletLoadAllowedDuringReveal
+		? NewPhase == EShowDownPhase::Reveal
+		: NewPhase == EShowDownPhase::Betting;
+	if (bRaiseBulletLoadActive && !bBulletLoadCanContinue)
 	{
 		CompleteAmmoStatusRaiseDelta();
 		SetBulletPresentationImmediate(StatusLiveRounds);
@@ -2586,10 +2647,12 @@ void ASDSelfShotGunActor::SynchronizeBulletPresentationFromStatus()
 {
 	CacheBulletRestRelativeTransforms();
 	const int32 TargetBulletCount = FMath::Clamp(StatusLiveRounds, 0, RevolverBulletSlotCount);
-	if (bRaiseBulletLoadActive && StatusPhase == EShowDownPhase::Betting)
+	if (bRaiseBulletLoadActive
+		&& (StatusPhase == EShowDownPhase::Betting
+			|| (bRaiseBulletLoadAllowedDuringReveal && StatusPhase == EShowDownPhase::Reveal)))
 	{
-		// A raise RPC is reliable while status replication is state based. During
-		// betting, an older coalesced count must not cancel a newer cascade.
+		// Presentation RPCs are reliable while status replication is state based.
+		// A coalesced target count must not snap an active betting or reveal load.
 		return;
 	}
 
@@ -2635,6 +2698,9 @@ void ASDSelfShotGunActor::SetBulletPresentationImmediate(int32 BulletCount)
 	RaiseBulletLoadTargetCount = ClampedBulletCount;
 	RaiseBulletLoadElapsedTime = 0.0f;
 	bRaiseBulletLoadActive = false;
+	bRaiseBulletLoadAllowedDuringReveal = false;
+	ActiveBulletLoadDuration = RaiseBulletLoadDuration;
+	ActiveBulletLoadStaggerDelay = RaiseBulletLoadStaggerDelay;
 	ActiveRaiseBulletSourceSlot = EShowDownPlayerSlot::None;
 }
 
@@ -2791,6 +2857,47 @@ void ASDSelfShotGunActor::ReceiveRaiseBulletLoadPresentation(
 	StartRaiseBulletLoadAnimation(ClampedPreviousBet, ClampedNewBet, SourceSlot);
 }
 
+void ASDSelfShotGunActor::ReceiveFoldRevealBulletLoadPresentation(
+	int32 BulletCount,
+	int32 PresentationRound,
+	EShowDownPlayerSlot SourceSlot)
+{
+	const int32 ClampedBulletCount = FMath::Clamp(BulletCount, 0, RevolverBulletSlotCount);
+	if (ClampedBulletCount <= 0)
+	{
+		return;
+	}
+
+	const AShowDownGameStateBase* ShowDownGameState = BoundShowDownGameState.Get();
+	if (!ShowDownGameState)
+	{
+		const UWorld* World = GetWorld();
+		ShowDownGameState = World ? World->GetGameState<AShowDownGameStateBase>() : nullptr;
+	}
+	const int32 LocalRound = ShowDownGameState
+		? FMath::Max(0, ShowDownGameState->CurrentRound)
+		: 0;
+	const EShowDownPhase LocalPhase = ShowDownGameState
+		? ShowDownGameState->CurrentPhase
+		: StatusPhase;
+	const int32 SafePresentationRound = FMath::Max(0, PresentationRound);
+	if ((SafePresentationRound > 0 && LocalRound > SafePresentationRound)
+		|| LocalPhase == EShowDownPhase::Roulette
+		|| LocalPhase == EShowDownPhase::RoundEnd
+		|| LocalPhase == EShowDownPhase::GameOver)
+	{
+		SetBulletPresentationImmediate(StatusLiveRounds);
+		RefreshRuntimeTickState();
+		return;
+	}
+
+	// The game-state channel can still report Betting for a frame after the card
+	// has visibly settled. This dedicated RPC is emitted only by that reveal
+	// completion callback, so it is safe to begin in either Betting or Reveal.
+	ClearPendingRaiseBulletLoadPresentation();
+	StartRaiseBulletLoadAnimation(0, ClampedBulletCount, SourceSlot, true, true);
+}
+
 void ASDSelfShotGunActor::TryStartPendingRaiseBulletLoadPresentation()
 {
 	if (!bRaiseBulletLoadPending)
@@ -2853,7 +2960,9 @@ void ASDSelfShotGunActor::ClearPendingRaiseBulletLoadPresentation()
 void ASDSelfShotGunActor::StartRaiseBulletLoadAnimation(
 	int32 PreviousBet,
 	int32 NewBet,
-	EShowDownPlayerSlot SourceSlot)
+	EShowDownPlayerSlot SourceSlot,
+	bool bForceReloadAllBullets,
+	bool bAllowDuringReveal)
 {
 	const int32 ClampedPreviousBet = FMath::Clamp(PreviousBet, 0, RevolverBulletSlotCount);
 	const int32 ClampedNewBet = FMath::Clamp(NewBet, 0, RevolverBulletSlotCount);
@@ -2875,7 +2984,7 @@ void ASDSelfShotGunActor::StartRaiseBulletLoadAnimation(
 	const int32 StartCount = ResolveRaiseBulletLoadStartCount(
 		ClampedPreviousBet,
 		ClampedNewBet,
-		bReloadAllBulletsOnRaise);
+		bForceReloadAllBullets || bReloadAllBulletsOnRaise);
 	SetBulletPresentationImmediate(StartCount);
 	RaiseBulletLoadPreviousCount = ClampedPreviousBet;
 	RaiseBulletLoadStartCount = StartCount;
@@ -2883,6 +2992,13 @@ void ASDSelfShotGunActor::StartRaiseBulletLoadAnimation(
 	RaiseBulletLoadElapsedTime = 0.0f;
 	ActiveRaiseBulletSourceSlot = SourceSlot;
 	ActiveRaiseBulletSourceWorldLocation = ResolveRaiseBulletSourceWorldLocation(SourceSlot, StartCount);
+	bRaiseBulletLoadAllowedDuringReveal = bAllowDuringReveal;
+	ActiveBulletLoadDuration = bAllowDuringReveal
+		? FoldRevealBulletLoadDuration
+		: RaiseBulletLoadDuration;
+	ActiveBulletLoadStaggerDelay = bAllowDuringReveal
+		? FoldRevealBulletLoadStaggerDelay
+		: RaiseBulletLoadStaggerDelay;
 	bRaiseBulletLoadActive = true;
 	UpdateRaiseBulletLoadAnimation(0.0f);
 	ApplyAmmoStatusDisplaySettings();
@@ -2899,8 +3015,8 @@ void ASDSelfShotGunActor::UpdateRaiseBulletLoadAnimation(float DeltaSeconds)
 	}
 
 	RaiseBulletLoadElapsedTime += FMath::Max(0.0f, DeltaSeconds);
-	const float BulletDuration = FMath::Max(0.05f, RaiseBulletLoadDuration);
-	const float StaggerDelay = FMath::Max(0.0f, RaiseBulletLoadStaggerDelay);
+	const float BulletDuration = FMath::Max(0.05f, ActiveBulletLoadDuration);
+	const float StaggerDelay = FMath::Max(0.0f, ActiveBulletLoadStaggerDelay);
 	const int32 StartCount = FMath::Clamp(
 		RaiseBulletLoadStartCount,
 		0,
